@@ -1,0 +1,98 @@
+# =============================================================================
+# Iltero Actions - Release Automation
+# =============================================================================
+# When a new GitHub Release is published (e.g. v1.2.3), this workflow:
+#   1. Validates the tag follows semantic versioning
+#   2. Runs the full CI suite to ensure quality
+#   3. Updates the moving major version tag (e.g. v1) so customers on @v1
+#      automatically get the latest compatible release
+#
+# Usage:
+#   Customers reference the major tag for automatic updates:
+#     uses: ilterohq/iltero-actions@v1
+#
+#   Or pin to an exact version for stability:
+#     uses: ilterohq/iltero-actions@v1.2.3
+# =============================================================================
+
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  # ===========================================================================
+  # Validate: Ensure the release tag is a valid semver
+  # ===========================================================================
+  validate-tag:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      major: ${{ steps.parse.outputs.major }}
+
+    steps:
+      - name: Parse and validate semver tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          # Must match vMAJOR.MINOR.PATCH (optional pre-release/build metadata)
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Tag '$TAG' does not follow semantic versioning (expected vX.Y.Z)"
+            exit 1
+          fi
+
+          MAJOR="${BASH_REMATCH[1]}"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          echo "major=v${MAJOR}" >> "$GITHUB_OUTPUT"
+          echo "Parsed tag: $TAG → major=v${MAJOR}"
+
+      - name: Reject pre-release major tag updates
+        if: github.event.release.prerelease
+        run: |
+          echo "::notice::Pre-release detected — major version tag will NOT be updated"
+
+  # ===========================================================================
+  # CI: Run the full quality suite against the tagged commit
+  # ===========================================================================
+  ci:
+    name: CI
+    needs: validate-tag
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
+
+  # ===========================================================================
+  # Update Major Tag: Move vN to point at this release
+  # ===========================================================================
+  update-major-tag:
+    name: Update Major Version Tag
+    needs: [validate-tag, ci]
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update major version tag
+        env:
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          MAJOR: ${{ needs.validate-tag.outputs.major }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          echo "Moving tag $MAJOR → $VERSION"
+          git tag -fa "$MAJOR" -m "Release $VERSION"
+          git push origin "$MAJOR" --force

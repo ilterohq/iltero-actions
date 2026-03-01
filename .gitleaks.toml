@@ -1,0 +1,30 @@
+# =============================================================================
+# Gitleaks configuration for iltero-actions
+# =============================================================================
+# Excludes example files and documentation that may contain placeholder secrets
+# =============================================================================
+
+title = "iltero-actions gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allowlist for iltero-actions"
+
+# Paths to ignore
+paths = [
+    '''implementation-docs/''',
+    '''implementation_docs/''',
+]
+
+# Regex patterns to ignore (placeholder values)
+regexes = [
+    '''example\.com''',
+    '''your-.*-here''',
+    '''<.*>''',
+    '''\$\{\{.*\}\}''',
+]
+
+# Known false positives
+commits = []

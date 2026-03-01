@@ -1,0 +1,60 @@
+# =============================================================================
+# Basic Iltero Workflow
+# =============================================================================
+# This is the simplest possible workflow using iltero-actions.
+# It will:
+#   - Auto-detect environment from the branch (via git_ref mapping in config.yml)
+#   - Auto-detect which stacks changed
+#   - Run compliance scans and plan evaluations
+#
+# Requirements:
+#   - ILTERO_API_URL in repository variables
+#   - ILTERO_STACK_ID in repository variables (Dashboard → Stack → Settings)
+#   - ILTERO_ORG_ID in repository variables (Dashboard → Organization → Settings)
+#   - PipelinePrincipal configured in Iltero for this repository
+#   - AWS OIDC role (or access keys as fallback)
+#   - Each stack must have a config.yml with git_ref mappings
+# =============================================================================
+
+name: Iltero Infrastructure
+
+on:
+  push:
+    branches: [main, staging, develop]
+    paths:
+      - 'infra/stacks/**'
+  pull_request:
+    paths:
+      - 'infra/stacks/**'
+
+# Least privilege permissions
+permissions:
+  contents: read
+  id-token: write  # Required for OIDC
+
+jobs:
+  iltero:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for stack detection from changed files
+          persist-credentials: false  # Security: Don't persist git credentials
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run Iltero Pipeline
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: infra/stacks
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}

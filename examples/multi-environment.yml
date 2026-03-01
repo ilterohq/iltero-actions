@@ -1,0 +1,79 @@
+# =============================================================================
+# Multi-Environment Iltero Workflow
+# =============================================================================
+# This workflow demonstrates multi-environment support with automatic
+# environment detection from branch names via git_ref mapping.
+#
+# Branch → Environment Mapping (defined in config.yml):
+#   - develop → development
+#   - staging → staging
+#   - main → production
+#
+# The action automatically detects which environment to use based on
+# the current branch by reading environments.*.git_ref.name from config.yml.
+# =============================================================================
+
+name: Iltero Multi-Environment
+
+on:
+  push:
+    branches:
+      - main        # → production
+      - staging     # → staging
+      - develop     # → development
+    paths:
+      - 'infra/stacks/**'
+  pull_request:
+    paths:
+      - 'infra/stacks/**'
+
+# Least privilege permissions
+permissions:
+  contents: read
+  id-token: write  # Required for OIDC
+
+jobs:
+  iltero:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      status: ${{ steps.pipeline.outputs.overall_status }}
+      environment: ${{ steps.pipeline.outputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run Iltero Pipeline
+        id: pipeline
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: infra/stacks
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+          # No environment input needed - auto-detected from branch!
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+  # Optional: Notify on completion
+  notify:
+    needs: iltero
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send notification
+        run: |
+          if [[ "${{ needs.iltero.outputs.status }}" == "success" ]]; then
+            echo "✅ Pipeline passed for ${{ needs.iltero.outputs.environment }}"
+          else
+            echo "❌ Pipeline failed: ${{ needs.iltero.outputs.status }}"
+          fi

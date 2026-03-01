@@ -1,0 +1,142 @@
+# =============================================================================
+# ilterohq/iltero-actions/setup
+# =============================================================================
+# Install Iltero CLI and compliance scanning tools.
+#
+# This action installs:
+#   - Iltero CLI for compliance scan orchestration
+#   - Checkov for static infrastructure code analysis (optional)
+#   - OPA for policy evaluation on Terraform plans (optional)
+#   - Infrastructure toolchain: Terraform, yq, jq (optional)
+#
+# Usage:
+#   - uses: ilterohq/iltero-actions/setup@v1
+#     with:
+#       install-checkov: 'true'
+#       install-opa: 'true'
+# =============================================================================
+
+name: Setup Iltero
+description: Install Iltero CLI and compliance scanning tools (Checkov, OPA)
+author: Iltero
+
+branding:
+  icon: download
+  color: blue
+
+inputs:
+  version:
+    description: Iltero CLI version to install
+    required: false
+    default: 'latest'
+
+  python-version:
+    description: Python version to use
+    required: false
+    default: '3.11'
+
+  install-checkov:
+    description: Install Checkov for static analysis
+    required: false
+    default: 'true'
+
+  install-opa:
+    description: Install OPA for policy evaluation
+    required: false
+    default: 'true'
+
+  opa-version:
+    description: OPA version to install
+    required: false
+    default: '0.60.0'
+
+  install-toolchain:
+    description: Also install infrastructure toolchain (Terraform, yq, jq)
+    required: false
+    default: 'true'
+
+  terraform-version:
+    description: Terraform version (only used if install-toolchain is true)
+    required: false
+    default: '1.5.7'
+
+outputs:
+  cli-version:
+    description: Installed Iltero CLI version
+    value: ${{ steps.verify.outputs.cli-version }}
+
+  checkov-version:
+    description: Installed Checkov version
+    value: ${{ steps.verify.outputs.checkov-version }}
+
+  opa-version:
+    description: Installed OPA version
+    value: ${{ steps.verify.outputs.opa-version }}
+
+  terraform-version:
+    description: Installed Terraform version
+    value: ${{ steps.verify.outputs.terraform-version }}
+
+runs:
+  using: composite
+  steps:
+    # -------------------------------------------------------------------------
+    # Setup Toolchain (Terraform, yq, jq) via internal action
+    # -------------------------------------------------------------------------
+    - name: Setup Toolchain
+      if: inputs.install-toolchain == 'true'
+      uses: ./actions/setup-toolchain
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        install_yq: 'true'
+        install_jq: 'true'
+
+    # -------------------------------------------------------------------------
+    # Setup CLI and Scanning Tools via internal action
+    # -------------------------------------------------------------------------
+    - name: Setup Iltero CLI
+      uses: ./actions/setup-iltero-cli
+      with:
+        version: ${{ inputs.version }}
+        python-version: ${{ inputs.python-version }}
+        install-checkov: ${{ inputs.install-checkov }}
+        install-opa: ${{ inputs.install-opa }}
+        opa-version: ${{ inputs.opa-version }}
+        install-toolchain: 'false'
+
+    # -------------------------------------------------------------------------
+    # Verify All Installations
+    # -------------------------------------------------------------------------
+    - name: Verify Installation
+      id: verify
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        echo "✅ Installation Summary:"
+
+        # Iltero CLI
+        CLI_VERSION=$(iltero --version 2>/dev/null || echo "not installed")
+        echo "   Iltero CLI: $CLI_VERSION"
+        echo "cli-version=$CLI_VERSION" >> $GITHUB_OUTPUT
+
+        # Checkov
+        if [ "${{ inputs.install-checkov }}" = "true" ]; then
+          CHECKOV_VERSION=$(checkov --version 2>/dev/null || echo "not installed")
+          echo "   Checkov: $CHECKOV_VERSION"
+          echo "checkov-version=$CHECKOV_VERSION" >> $GITHUB_OUTPUT
+        fi
+
+        # OPA
+        if [ "${{ inputs.install-opa }}" = "true" ]; then
+          OPA_VERSION=$(opa version 2>/dev/null | head -1 || echo "not installed")
+          echo "   OPA: $OPA_VERSION"
+          echo "opa-version=$OPA_VERSION" >> $GITHUB_OUTPUT
+        fi
+
+        # Terraform
+        if [ "${{ inputs.install-toolchain }}" = "true" ]; then
+          TF_VERSION=$(terraform version -json 2>/dev/null | jq -r '.terraform_version' || echo "not installed")
+          echo "   Terraform: $TF_VERSION"
+          echo "terraform-version=$TF_VERSION" >> $GITHUB_OUTPUT
+        fi

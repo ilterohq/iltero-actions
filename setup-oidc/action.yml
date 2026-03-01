@@ -1,0 +1,130 @@
+# =============================================================================
+# ilterohq/iltero-actions/setup-oidc
+# =============================================================================
+# Exchange GitHub Actions OIDC token for short-lived Iltero API tokens.
+#
+# Adds long-lived ILTERO_TOKEN secrets with ephemeral 10-minute tokens.
+# Requires a PipelinePrincipal configured in Iltero for this repository.
+#
+# Prerequisites:
+#   - CLI must be installed (use ilterohq/iltero-actions/setup first)
+#   - Workflow must have `permissions: { id-token: write }`
+#   - PipelinePrincipal must exist for this repository in Iltero
+#
+# Usage:
+#   - uses: ilterohq/iltero-actions/setup@v1
+#   - uses: ilterohq/iltero-actions/setup-oidc@v1
+#     with:
+#       stack-id: ${{ vars.ILTERO_STACK_ID }}
+#       org-id: ${{ vars.ILTERO_ORG_ID }}
+# =============================================================================
+
+name: Setup Iltero OIDC
+description: Exchange GitHub Actions OIDC token for short-lived Iltero API tokens
+author: Iltero
+
+branding:
+  icon: key
+  color: blue
+
+inputs:
+  stack-id:
+    description: |
+      Iltero Stack ID to request tokens for.
+    required: true
+
+  org-id:
+    description: |
+      Iltero Organization ID.
+      Get this from Iltero Dashboard -> Organization -> Settings.
+    required: true
+
+  api-url:
+    description: |
+      Iltero API URL. If not provided, uses ILTERO_API_URL env var.
+    required: false
+    default: ''
+
+  registry-host:
+    description: |
+      Hostname of Iltero's Terraform module registry.
+      Used to configure Terraform credentials after token exchange.
+      Default: 'registry.iltero.io'
+    required: false
+    default: 'registry.iltero.io'
+
+  configure-registry:
+    description: |
+      If true, configure Terraform registry credentials (.netrc) after exchange.
+    required: false
+    default: 'true'
+
+outputs:
+  api-token:
+    description: Iltero API token (also set as ILTERO_TOKEN env var)
+    value: ${{ steps.exchange.outputs.api_token }}
+
+  registry-token:
+    description: Iltero registry token (also set as ILTERO_REGISTRY_TOKEN env var)
+    value: ${{ steps.exchange.outputs.registry_token }}
+
+  expires-at:
+    description: Token expiration timestamp (ISO 8601)
+    value: ${{ steps.exchange.outputs.expires_at }}
+
+runs:
+  using: composite
+  steps:
+    # -------------------------------------------------------------------------
+    # Verify CLI is installed
+    # -------------------------------------------------------------------------
+    - name: Verify CLI Available
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v iltero &>/dev/null; then
+          echo "::error::Iltero CLI not found. Run ilterohq/iltero-actions/setup first."
+          exit 1
+        fi
+
+    # -------------------------------------------------------------------------
+    # Exchange OIDC token via CLI
+    # -------------------------------------------------------------------------
+    - name: Exchange OIDC Token
+      id: exchange
+      shell: bash
+      env:
+        INPUT_API_URL: ${{ inputs.api-url }}
+        ILTERO_STACK_ID: ${{ inputs.stack-id }}
+        ILTERO_ORG_ID: ${{ inputs.org-id }}
+      run: |
+        set -euo pipefail
+
+        # Build CLI arguments
+        ARGS=(
+          --stack-id "$ILTERO_STACK_ID"
+          --org-id "$ILTERO_ORG_ID"
+          --format github-actions
+        )
+
+        # Add API URL if provided via input or env var
+        if [[ -n "${INPUT_API_URL:-}" ]]; then
+          ARGS+=(--api-url "$INPUT_API_URL")
+        elif [[ -n "${ILTERO_API_URL:-}" ]]; then
+          ARGS+=(--api-url "$ILTERO_API_URL")
+        fi
+
+        # Run OIDC exchange via CLI
+        # Provider and OIDC token are auto-detected/acquired by the CLI
+        # --format github-actions writes to $GITHUB_ENV and $GITHUB_OUTPUT
+        iltero auth oidc "${ARGS[@]}"
+
+    # -------------------------------------------------------------------------
+    # Configure Terraform registry credentials (optional)
+    # -------------------------------------------------------------------------
+    - name: Configure Registry
+      if: inputs.configure-registry == 'true'
+      uses: ./configure-registry
+      with:
+        registry-host: ${{ inputs.registry-host }}
+        token: ${{ steps.exchange.outputs.registry_token }}

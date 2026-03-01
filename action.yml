@@ -1,0 +1,314 @@
+# =============================================================================
+# ilterohq/iltero-actions
+# =============================================================================
+# High-level orchestrator for complete infrastructure compliance pipelines.
+#
+# This is the recommended action for most users. It handles:
+#   - Automatic environment detection from branch
+#   - Automatic stack detection from changed files
+#   - Sequential unit processing with dependency ordering
+#   - Compliance scanning (Checkov) and plan evaluation (OPA)
+#   - Result submission to Iltero
+#
+# Usage:
+#   - uses: ilterohq/iltero-actions@v1
+#     with:
+#       stacks_path: infra/stacks
+#     env:
+#       ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+#       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
+#       ILTERO_REGISTRY_TOKEN: ${{ secrets.ILTERO_REGISTRY_TOKEN }}
+#
+# OIDC Usage (no secrets required):
+#   - uses: ilterohq/iltero-actions@v1
+#     with:
+#       stacks_path: infra/stacks
+#       oidc: 'true'
+#       stack_id: ${{ vars.ILTERO_STACK_ID }}
+#       org_id: ${{ vars.ILTERO_ORG_ID }}
+#     env:
+#       ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+#
+# For granular control, use individual actions:
+#   - ilterohq/iltero-actions/setup@v1
+#   - ilterohq/iltero-actions/configure-registry@v1
+#   - ilterohq/iltero-actions/scan@v1
+#   - ilterohq/iltero-actions/evaluate@v1
+# =============================================================================
+
+name: Iltero Pipeline
+description: Configuration-driven compliance scanning and deployment for Terraform
+author: Iltero
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  stacks_path:
+    description: |
+      Path to stacks directory (greenfield stacks).
+      If not provided, the action checks for .iltero/config.yml (brownfield).
+      Example: 'infra/stacks'
+    required: false
+    default: ''
+
+  config_path:
+    description: |
+      Path to brownfield config file relative to repository root.
+      Used when stacks_path is not set. Default: '.iltero/config.yml'
+    required: false
+    default: '.iltero/config.yml'
+
+  environment:
+    description: |
+      Override environment detection. If not provided, the environment is
+      automatically detected from the current branch by matching against
+      git_ref.name in each environment's config.yml.
+      Example: 'production', 'staging', 'development'
+    required: false
+    default: ''
+
+  stack:
+    description: |
+      Specific stack to process. If not provided, stacks are automatically
+      detected from changed files in the commit/PR.
+      Example: 'my-infrastructure'
+    required: false
+    default: ''
+
+  dry_run:
+    description: |
+      If true, only run compliance scans without deployment.
+      Useful for PR validation.
+    required: false
+    default: 'false'
+
+  skip_compliance:
+    description: |
+      If true, skip compliance scanning (useful for emergency deployments).
+      Note: This should be used sparingly and may be blocked by policy.
+    required: false
+    default: 'false'
+
+  deploy_only:
+    description: |
+      If true, skip compliance scanning and only run deployments.
+      Requires run_id from a previous compliance job.
+      Use this in deployment jobs that run after approval.
+    required: false
+    default: 'false'
+
+  run_id:
+    description: |
+      Existing Iltero run ID to chain to (from compliance job).
+      Required when deploy_only is true.
+    required: false
+    default: ''
+
+  verify_authorization:
+    description: |
+      If true, verify deployment authorization via Iltero backend.
+      When enabled, deploys will fail if the run hasn't been approved.
+    required: false
+    default: 'true'
+
+  debug:
+    description: |
+      Enable debug output for troubleshooting.
+    required: false
+    default: 'false'
+
+  registry_host:
+    description: |
+      Hostname of Iltero's private Terraform module registry.
+      Used with ILTERO_REGISTRY_TOKEN to configure git credentials.
+      Default: 'registry.iltero.io'
+    required: false
+    default: 'registry.iltero.io'
+
+  oidc:
+    description: |
+      Enable OIDC authentication. When true, exchanges GitHub Actions OIDC
+      token for short-lived Iltero tokens instead of using secrets.ILTERO_TOKEN.
+      Requires stack_id and org_id inputs.
+    required: false
+    default: 'false'
+
+  stack_id:
+    description: |
+      Iltero Stack ID (required when oidc is true).
+    required: false
+    default: ''
+
+  org_id:
+    description: |
+      Iltero Organization ID (required when oidc is true).
+    required: false
+    default: ''
+
+outputs:
+  stacks_processed:
+    description: JSON array of stacks that were processed
+    value: ${{ steps.pipeline.outputs.stacks_processed }}
+
+  overall_status:
+    description: |
+      Overall pipeline status.
+      Values: success, compliance_failed, evaluation_failed, authorization_failed, deploy_failed, skipped
+    value: ${{ steps.pipeline.outputs.overall_status }}
+
+  compliance_passed:
+    description: Whether all compliance scans passed (true/false)
+    value: ${{ steps.pipeline.outputs.compliance_passed }}
+
+  evaluation_passed:
+    description: Whether all plan evaluations passed (true/false)
+    value: ${{ steps.pipeline.outputs.evaluation_passed }}
+
+  authorization_passed:
+    description: Whether deployment authorization passed (true/false, only in deploy mode)
+    value: ${{ steps.pipeline.outputs.authorization_passed }}
+
+  environment:
+    description: The environment that was detected or used
+    value: ${{ steps.pipeline.outputs.environment }}
+
+  run_id:
+    description: Iltero run ID for workflow chaining
+    value: ${{ steps.pipeline.outputs.run_id }}
+
+  require_approval:
+    description: |
+      Whether deployment requires manual approval (from config.yml).
+      If true, you must use a separate deployment job with GitHub
+      environment protection for actual deployments.
+    value: ${{ steps.pipeline.outputs.require_approval }}
+
+  approval_id:
+    description: |
+      Iltero approval ID (when require_approval is true).
+      Use this to track or query approval status:
+        iltero stack approvals show <approval_id>
+    value: ${{ steps.pipeline.outputs.approval_id }}
+
+  deployment_ready:
+    description: |
+      Whether the pipeline passed and deployment can proceed.
+      Use this to conditionally run deployment jobs.
+    value: ${{ steps.pipeline.outputs.deployment_ready }}
+
+  unit_results:
+    description: |
+      JSON array of per-unit scan/evaluation/deploy results.
+      Each entry has: unit, scan, evaluation, deploy objects with
+      passed/skipped/violations fields. Use for custom reporting.
+    value: ${{ steps.pipeline.outputs.unit_results }}
+
+runs:
+  using: composite
+  steps:
+    # -------------------------------------------------------------------------
+    # Step 1: Setup Tools
+    # -------------------------------------------------------------------------
+    - name: Setup Iltero
+      id: setup
+      uses: ./setup
+      with:
+        install-checkov: 'true'
+        install-opa: 'true'
+        install-toolchain: 'true'
+
+    # -------------------------------------------------------------------------
+    # Step 1.5: OIDC Authentication (if enabled)
+    # -------------------------------------------------------------------------
+    - name: OIDC Authentication
+      if: inputs.oidc == 'true'
+      uses: ./setup-oidc
+      with:
+        stack-id: ${{ inputs.stack_id }}
+        org-id: ${{ inputs.org_id }}
+        registry-host: ${{ inputs.registry_host }}
+
+    # -------------------------------------------------------------------------
+    # Step 2: Configure Registry (if token provided)
+    # -------------------------------------------------------------------------
+    - name: Configure Registry
+      uses: ./configure-registry
+      with:
+        registry-host: ${{ inputs.registry_host }}
+
+    # -------------------------------------------------------------------------
+    # Step 3: Validate Inputs
+    # -------------------------------------------------------------------------
+    - name: Validate Inputs
+      id: validate
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        STACKS_PATH="${{ inputs.stacks_path }}"
+        CONFIG_PATH="${{ inputs.config_path }}"
+
+        # Detect pipeline mode
+        if [[ -n "$STACKS_PATH" ]] && [[ -d "$STACKS_PATH" ]]; then
+          PIPELINE_MODE="greenfield"
+          echo "pipeline_mode=greenfield" >> $GITHUB_OUTPUT
+          echo "config_path=" >> $GITHUB_OUTPUT
+          echo "✅ Inputs validated (greenfield)"
+          echo "   Stacks path: $STACKS_PATH"
+        elif [[ -f "$CONFIG_PATH" ]]; then
+          PIPELINE_MODE="brownfield"
+          echo "pipeline_mode=brownfield" >> $GITHUB_OUTPUT
+          echo "config_path=$CONFIG_PATH" >> $GITHUB_OUTPUT
+          echo "✅ Inputs validated (brownfield)"
+          echo "   Config path: $CONFIG_PATH"
+        else
+          echo "::error::Neither stacks directory ($STACKS_PATH) nor brownfield config ($CONFIG_PATH) found"
+          exit 1
+        fi
+
+    # -------------------------------------------------------------------------
+    # Step 4: Run Pipeline
+    # -------------------------------------------------------------------------
+    - name: Run Iltero Pipeline
+      id: pipeline
+      shell: bash
+      env:
+        STACKS_PATH: ${{ inputs.stacks_path }}
+        PIPELINE_MODE: ${{ steps.validate.outputs.pipeline_mode }}
+        CONFIG_PATH: ${{ steps.validate.outputs.config_path }}
+        ENVIRONMENT_OVERRIDE: ${{ inputs.environment }}
+        MANUAL_STACK: ${{ inputs.stack }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        SKIP_COMPLIANCE: ${{ inputs.skip_compliance }}
+        DEPLOY_ONLY: ${{ inputs.deploy_only }}
+        RUN_ID: ${{ inputs.run_id }}
+        VERIFY_AUTHORIZATION: ${{ inputs.verify_authorization }}
+        DEBUG: ${{ inputs.debug }}
+        REGISTRY_HOST: ${{ inputs.registry_host }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        GITHUB_REF: ${{ github.ref }}
+        GITHUB_BASE_REF: ${{ github.base_ref }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        # Run the main pipeline script
+        "${{ github.action_path }}/scripts/run-pipeline.sh"
+
+    # -------------------------------------------------------------------------
+    # Step 5: Generate Summary
+    # -------------------------------------------------------------------------
+    - name: Generate Summary
+      if: always()
+      shell: bash
+      env:
+        OVERALL_STATUS: ${{ steps.pipeline.outputs.overall_status }}
+        STACKS_PROCESSED: ${{ steps.pipeline.outputs.stacks_processed }}
+        COMPLIANCE_PASSED: ${{ steps.pipeline.outputs.compliance_passed }}
+        EVALUATION_PASSED: ${{ steps.pipeline.outputs.evaluation_passed }}
+        ENVIRONMENT: ${{ steps.pipeline.outputs.environment }}
+        UNIT_RESULTS: ${{ steps.pipeline.outputs.unit_results }}
+      run: |
+        "${{ github.action_path }}/scripts/generate-summary.sh"

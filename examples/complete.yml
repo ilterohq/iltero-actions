@@ -1,0 +1,178 @@
+# =============================================================================
+# Complete Iltero Workflow with All Features
+# =============================================================================
+# This workflow demonstrates ALL features of iltero-actions including:
+#   - Automatic environment detection
+#   - Automatic stack detection from changed files
+#   - Manual override support
+#   - Scheduled compliance scans
+#   - PR comments and status checks
+#   - Deployment notifications
+# =============================================================================
+
+name: Iltero Complete Pipeline
+
+on:
+  # Automatic on push to protected branches
+  push:
+    branches: [main, staging, develop]
+    paths:
+      - 'infra/stacks/**'
+      - 'infra/modules/**'
+
+  # PR validation
+  pull_request:
+    paths:
+      - 'infra/stacks/**'
+      - 'infra/modules/**'
+
+  # Scheduled compliance scans are configured per-stack via Iltero dashboard
+  # The schedule is stored in config.yml (environments.<env>.compliance.schedule)
+  # and triggered by Iltero's scheduler service - not GitHub Actions cron
+
+  # Manual trigger with full control
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: 'Stack to process'
+        required: false
+        type: string
+      environment:
+        description: 'Target environment'
+        required: false
+        type: choice
+        options: ['', 'development', 'staging', 'production']
+      dry_run:
+        description: 'Skip deployment'
+        type: boolean
+        default: false
+      skip_compliance:
+        description: 'Skip compliance (emergency only)'
+        type: boolean
+        default: false
+
+# Concurrency: cancel in-progress runs for same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege permissions - override per job as needed
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  # Main Pipeline
+  # =========================================================================
+  pipeline:
+    name: Infrastructure Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC
+    outputs:
+      status: ${{ steps.iltero.outputs.overall_status }}
+      environment: ${{ steps.iltero.outputs.environment }}
+      compliance_passed: ${{ steps.iltero.outputs.compliance_passed }}
+      evaluation_passed: ${{ steps.iltero.outputs.evaluation_passed }}
+      stacks: ${{ steps.iltero.outputs.stacks_processed }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run Iltero Pipeline
+        id: iltero
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: infra/stacks
+          stack: ${{ inputs.stack }}
+          environment: ${{ inputs.environment }}
+          dry_run: ${{ inputs.dry_run || github.event_name == 'pull_request' }}
+          skip_compliance: ${{ inputs.skip_compliance }}
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+  # =========================================================================
+  # PR Comment (only for pull requests)
+  # =========================================================================
+  pr-comment:
+    name: Update PR
+    needs: pipeline
+    if: github.event_name == 'pull_request' && always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ needs.pipeline.outputs.status }}';
+            const env = '${{ needs.pipeline.outputs.environment }}';
+            const compliance = '${{ needs.pipeline.outputs.compliance_passed }}' === 'true';
+            const evaluation = '${{ needs.pipeline.outputs.evaluation_passed }}' === 'true';
+
+            const emoji = status === 'success' ? '✅' : '❌';
+            const body = `## ${emoji} Iltero Infrastructure Pipeline
+
+            | Check | Status |
+            |-------|--------|
+            | **Environment** | \`${env}\` |
+            | **Compliance** | ${compliance ? '✅ Passed' : '❌ Failed'} |
+            | **Plan Evaluation** | ${evaluation ? '✅ Passed' : '❌ Failed'} |
+            | **Overall** | ${status} |
+
+            > This is a dry-run. Deployment will occur on merge to the target branch.
+            `;
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+
+  # =========================================================================
+  # Slack Notification (optional)
+  # =========================================================================
+  notify:
+    name: Notify
+    needs: pipeline
+    if: always() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack notification
+        if: vars.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ needs.pipeline.outputs.status == 'success' && '✅' || '❌' }} Iltero Pipeline ${{ needs.pipeline.outputs.status }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Environment:* `${{ needs.pipeline.outputs.environment }}`\n*Branch:* `${{ github.ref_name }}`\n*Commit:* `${{ github.sha }}`"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ vars.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

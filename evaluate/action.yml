@@ -1,0 +1,218 @@
+# =============================================================================
+# ilterohq/iltero-actions/evaluate
+# =============================================================================
+# Evaluate Terraform plan against compliance policies using OPA.
+#
+# This action runs `terraform plan`, converts it to JSON, and evaluates it
+# against Iltero's policy bundles using OPA.
+#
+# Units must be self-contained with all terraform files:
+#   - main.tf, providers.tf, versions.tf, backend.tf
+#   - config/{env}.tfvars (optional)
+#   - config/backend/{env}.hcl (optional)
+#
+# Requires: ilterohq/iltero-actions/setup@v1 to be run first.
+#
+# Usage:
+#   - uses: ilterohq/iltero-actions/evaluate@v1
+#     with:
+#       path: infra/stacks/my-stack/units/network
+#       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
+#       unit: network-baseline
+#       environment: production
+#     env:
+#       ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+#       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
+# =============================================================================
+
+name: Iltero Plan Evaluation
+description: Evaluate Terraform plan against compliance policies
+author: Iltero
+
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  path:
+    description: |
+      Path to the self-contained Terraform unit.
+      Example: 'infra/stacks/my-stack/units/network'
+    required: true
+
+  stack-id:
+    description: |
+      Iltero stack UUID. Get this from your stack's config.yml or the dashboard.
+    required: true
+
+  unit:
+    description: |
+      Name of the infrastructure unit being evaluated.
+      For brownfield stacks, defaults to 'default'.
+    required: false
+    default: 'default'
+
+  environment:
+    description: |
+      Target environment (e.g., 'production', 'staging', 'development').
+    required: true
+
+  fail-on:
+    description: |
+      Severity level that causes the evaluation to fail.
+      Values: 'low', 'medium', 'high', 'critical'
+    required: false
+    default: 'high'
+
+  run-id:
+    description: |
+      Chain to an existing Iltero run ID (for linking compliance → evaluation).
+    required: false
+    default: ''
+
+  plan-file:
+    description: |
+      Path to existing plan JSON file. If provided, skips terraform plan step.
+      Use this if you've already run `terraform plan` in a previous step.
+    required: false
+    default: ''
+
+outputs:
+  passed:
+    description: Whether the evaluation passed (true/false)
+    value: ${{ steps.evaluate.outputs.passed }}
+
+  run-id:
+    description: Iltero run ID for chaining subsequent operations
+    value: ${{ steps.evaluate.outputs.run-id }}
+
+  violations:
+    description: Number of policy violations found
+    value: ${{ steps.evaluate.outputs.violations }}
+
+  plan-file:
+    description: Path to the generated plan JSON file
+    value: ${{ steps.evaluate.outputs.plan-file }}
+
+runs:
+  using: composite
+  steps:
+    # -------------------------------------------------------------------------
+    # Run Terraform Plan and Evaluate (using shared library)
+    # -------------------------------------------------------------------------
+    - name: Evaluate Terraform Plan
+      id: evaluate
+      shell: bash
+      env:
+        EVAL_PATH: ${{ inputs.path }}
+        STACK_ID: ${{ inputs.stack-id }}
+        UNIT_NAME: ${{ inputs.unit }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        CHAIN_RUN_ID: ${{ inputs.run-id }}
+        EXISTING_PLAN: ${{ inputs.plan-file }}
+      run: |
+        set -euo pipefail
+
+        # Source shared library
+        ACTION_DIR="${GITHUB_ACTION_PATH:-$(dirname "$0")/..}"
+        source "${ACTION_DIR}/../scripts/lib/iltero-core/index.sh"
+
+        # Validate structure (brownfield uses relaxed validation)
+        if [[ "${PIPELINE_MODE:-}" == "brownfield" ]] || [[ -f ".iltero/config.yml" && "$UNIT_NAME" == "default" ]]; then
+          validate_brownfield_structure "$EVAL_PATH"
+        else
+          validate_unit_structure "$EVAL_PATH"
+        fi
+
+        # Run plan evaluation
+        set +e
+        run_plan_evaluation "$EVAL_PATH" "$STACK_ID" "$UNIT_NAME" "$ENVIRONMENT" "$FAIL_ON" "$CHAIN_RUN_ID" "$EXISTING_PLAN"
+        EXIT_CODE=$?
+        set -e
+
+        # Set outputs using helper
+        set_eval_outputs
+        echo "plan-file=${PLAN_JSON_FILE:-}" >> $GITHUB_OUTPUT
+        echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+    # -------------------------------------------------------------------------
+    # Comment on PR
+    # -------------------------------------------------------------------------
+    - name: Comment on PR
+      if: github.event_name == 'pull_request' && always()
+      uses: actions/github-script@v7
+      env:
+        UNIT_NAME: ${{ inputs.unit }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        VIOLATIONS: ${{ steps.evaluate.outputs.violations }}
+        PASSED: ${{ steps.evaluate.outputs.passed }}
+        RUN_ID: ${{ steps.evaluate.outputs.run-id }}
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const unitName = process.env.UNIT_NAME;
+          const environment = process.env.ENVIRONMENT;
+          const violations = process.env.VIOLATIONS || '0';
+          const passed = process.env.PASSED === 'true';
+          const runId = process.env.RUN_ID || '';
+
+          const status = passed ? '✅ Evaluation Passed' : '❌ Policy Violations Detected';
+          const statusIcon = passed ? '🟢' : '🔴';
+
+          let comment = `## ${statusIcon} Terraform Plan Evaluation: \`${unitName}\`\n\n`;
+          comment += `**Environment:** ${environment}\n`;
+          comment += `**Status:** ${status}\n\n`;
+          comment += `### Policy Evaluation Summary\n\n`;
+          comment += `| Metric | Value |\n`;
+          comment += `|--------|-------|\n`;
+          comment += `| Violations | ${violations} |\n`;
+          comment += `| Passed | ${passed ? 'Yes' : 'No'} |\n`;
+          if (runId) {
+            comment += `| Iltero Run ID | \`${runId}\` |\n`;
+          }
+          if (!passed) {
+            comment += `\n### ⚠️ Action Required\n\n`;
+            comment += `This plan has policy violations that must be addressed before deployment.\n`;
+            comment += `Review the violations in the workflow run.\n`;
+          }
+          comment += `\n---\n`;
+          comment += `<sub>🛡️ Powered by [Iltero](https://iltero.io)</sub>`;
+
+          // Check for existing Iltero comment to update
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existingComment = comments.find(c =>
+            c.body.includes(`Terraform Plan Evaluation: \`${unitName}\``) &&
+            c.body.includes('Powered by [Iltero]')
+          );
+
+          if (existingComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existingComment.id,
+              body: comment
+            });
+            console.log(`Updated existing comment for ${unitName}`);
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+            console.log(`Created new comment for ${unitName}`);
+          }
+
+    # -------------------------------------------------------------------------
+    # Final Exit
+    # -------------------------------------------------------------------------
+    - name: Exit with scan result
+      if: always()
+      shell: bash
+      run: exit ${{ steps.evaluate.outputs.exit_code || 0 }}

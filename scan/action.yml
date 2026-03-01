@@ -1,0 +1,212 @@
+# =============================================================================
+# ilterohq/iltero-actions/scan
+# =============================================================================
+# Run compliance scanning on Terraform infrastructure code.
+#
+# This action runs static analysis using Checkov and submits results to Iltero.
+# It can scan individual units or auto-detect from config.yml.
+#
+# Requires: ilterohq/iltero-actions/setup@v1 to be run first.
+#
+# Usage:
+#   - uses: ilterohq/iltero-actions/scan@v1
+#     with:
+#       path: infra/stacks/my-stack/units/network
+#       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
+#       unit: network-baseline
+#       environment: production
+#     env:
+#       ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+#       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
+# =============================================================================
+
+name: Iltero Compliance Scan
+description: Run compliance scanning on Terraform infrastructure code
+author: Iltero
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  path:
+    description: |
+      Path to the Terraform code to scan.
+      Example: 'infra/stacks/my-stack/units/network'
+    required: true
+
+  stack-id:
+    description: |
+      Iltero stack UUID. Get this from your stack's config.yml or the dashboard.
+    required: true
+
+  unit:
+    description: |
+      Name of the infrastructure unit being scanned.
+      For brownfield stacks, defaults to 'default'.
+    required: false
+    default: 'default'
+
+  environment:
+    description: |
+      Target environment (e.g., 'production', 'staging', 'development').
+    required: true
+
+  fail-on:
+    description: |
+      Severity level that causes the scan to fail.
+      Values: 'low', 'medium', 'high', 'critical'
+    required: false
+    default: 'high'
+
+  output-format:
+    description: |
+      Output format for scan results.
+      Values: 'json', 'text', 'sarif'
+    required: false
+    default: 'json'
+
+  run-id:
+    description: |
+      Chain to an existing Iltero run ID (for linking compliance → evaluation).
+    required: false
+    default: ''
+
+outputs:
+  passed:
+    description: Whether the scan passed (true/false)
+    value: ${{ steps.scan.outputs.passed }}
+
+  run-id:
+    description: Iltero run ID for chaining subsequent scans
+    value: ${{ steps.scan.outputs.run-id }}
+
+  violations:
+    description: Number of violations found
+    value: ${{ steps.scan.outputs.violations }}
+
+  results-file:
+    description: Path to the JSON results file
+    value: ${{ steps.scan.outputs.results-file }}
+
+runs:
+  using: composite
+  steps:
+    # -------------------------------------------------------------------------
+    # Run Compliance Scan (using shared library)
+    # -------------------------------------------------------------------------
+    - name: Run Compliance Scan
+      id: scan
+      shell: bash
+      env:
+        SCAN_PATH: ${{ inputs.path }}
+        STACK_ID: ${{ inputs.stack-id }}
+        UNIT_NAME: ${{ inputs.unit }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        CHAIN_RUN_ID: ${{ inputs.run-id }}
+      run: |
+        set -euo pipefail
+
+        # Source shared library
+        ACTION_DIR="${GITHUB_ACTION_PATH:-$(dirname "$0")/..}"
+        source "${ACTION_DIR}/../scripts/lib/iltero-core/index.sh"
+
+        # Validate structure (brownfield uses relaxed validation)
+        if [[ "${PIPELINE_MODE:-}" == "brownfield" ]] || [[ -f ".iltero/config.yml" && "$UNIT_NAME" == "default" ]]; then
+          validate_brownfield_structure "$SCAN_PATH"
+        else
+          validate_unit_structure "$SCAN_PATH"
+        fi
+
+        # Run compliance scan
+        set +e
+        run_compliance_scan "$SCAN_PATH" "$STACK_ID" "$UNIT_NAME" "$ENVIRONMENT" "$FAIL_ON" "$CHAIN_RUN_ID"
+        EXIT_CODE=$?
+        set -e
+
+        # Set outputs using helper
+        set_scan_outputs
+        echo "results-file=/tmp/compliance-${UNIT_NAME}-*.json" >> $GITHUB_OUTPUT
+        echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+    # -------------------------------------------------------------------------
+    # Comment on PR
+    # -------------------------------------------------------------------------
+    - name: Comment on PR
+      if: github.event_name == 'pull_request' && always()
+      uses: actions/github-script@v7
+      env:
+        UNIT_NAME: ${{ inputs.unit }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        VIOLATIONS: ${{ steps.scan.outputs.violations }}
+        PASSED: ${{ steps.scan.outputs.passed }}
+        RUN_ID: ${{ steps.scan.outputs.run-id }}
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const unitName = process.env.UNIT_NAME;
+          const environment = process.env.ENVIRONMENT;
+          const violations = process.env.VIOLATIONS || '0';
+          const passed = process.env.PASSED === 'true';
+          const runId = process.env.RUN_ID || '';
+
+          const status = passed ? '✅ Scan Passed' : '❌ Violations Detected';
+          const statusIcon = passed ? '🟢' : '🔴';
+
+          let comment = `## ${statusIcon} Compliance Scan: \`${unitName}\`\n\n`;
+          comment += `**Environment:** ${environment}\n`;
+          comment += `**Status:** ${status}\n\n`;
+          comment += `### Static Analysis Summary\n\n`;
+          comment += `| Metric | Value |\n`;
+          comment += `|--------|-------|\n`;
+          comment += `| Violations | ${violations} |\n`;
+          comment += `| Passed | ${passed ? 'Yes' : 'No'} |\n`;
+          if (runId) {
+            comment += `| Iltero Run ID | \`${runId}\` |\n`;
+          }
+          if (!passed) {
+            comment += `\n### ⚠️ Action Required\n\n`;
+            comment += `This code has compliance violations that should be reviewed.\n`;
+            comment += `Check the workflow run for details.\n`;
+          }
+          comment += `\n---\n`;
+          comment += `<sub>🛡️ Powered by [Iltero](https://iltero.io)</sub>`;
+
+          // Check for existing Iltero comment to update
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existingComment = comments.find(c =>
+            c.body.includes(`Compliance Scan: \`${unitName}\``) &&
+            c.body.includes('Powered by [Iltero]')
+          );
+
+          if (existingComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existingComment.id,
+              body: comment
+            });
+            console.log(`Updated existing comment for ${unitName}`);
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+            console.log(`Created new comment for ${unitName}`);
+          }
+
+    # -------------------------------------------------------------------------
+    # Final Exit
+    # -------------------------------------------------------------------------
+    - name: Exit with scan result
+      if: always()
+      shell: bash
+      run: exit ${{ steps.scan.outputs.exit_code || 0 }}
