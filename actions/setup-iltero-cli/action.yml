@@ -82,7 +82,7 @@ runs:
     # Setup Python
     # -------------------------------------------------------------------------
     - name: Setup Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       with:
         python-version: ${{ inputs.python-version }}
 
@@ -91,13 +91,15 @@ runs:
     # -------------------------------------------------------------------------
     - name: Install Iltero CLI
       shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
 
-        if [ "${{ inputs.version }}" = "latest" ]; then
+        if [ "$INPUT_VERSION" = "latest" ]; then
           pip install --quiet --upgrade iltero-cli 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
         else
-          pip install --quiet iltero-cli==${{ inputs.version }} 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
+          pip install --quiet "iltero-cli==${INPUT_VERSION}" 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
         fi
 
         echo "✅ Iltero CLI installed"
@@ -122,10 +124,12 @@ runs:
     - name: Install OPA
       if: inputs.install-opa == 'true'
       shell: bash
+      env:
+        INPUT_OPA_VERSION: ${{ inputs.opa-version }}
       run: |
         set -euo pipefail
 
-        OPA_VERSION="${{ inputs.opa-version }}"
+        OPA_VERSION="$INPUT_OPA_VERSION"
         ARCH=$(uname -m)
         OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
@@ -166,7 +170,7 @@ runs:
         # - Local dev still uses real keyring for secure credential storage
         # =================================================================
         if [ "${CI:-false}" = "true" ]; then
-          echo "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring" >> $GITHUB_ENV
+          echo "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring" >> "$GITHUB_ENV"
           echo "ℹ️  CI detected: Using null keyring backend (credentials via env vars)"
         fi
 
@@ -178,12 +182,20 @@ runs:
           echo "::add-mask::$ILTERO_REGISTRY_TOKEN"
         fi
 
-        # Set environment variables for subsequent steps
+        # Set environment variables for subsequent steps (heredoc-safe)
         if [ -n "$ILTERO_API_URL" ]; then
-          echo "ILTERO_API_URL=$ILTERO_API_URL" >> $GITHUB_ENV
+          {
+            echo "ILTERO_API_URL<<GHEOF"
+            echo "$ILTERO_API_URL"
+            echo "GHEOF"
+          } >> "$GITHUB_ENV"
         fi
         if [ -n "$ILTERO_TOKEN" ]; then
-          echo "ILTERO_TOKEN=$ILTERO_TOKEN" >> $GITHUB_ENV
+          {
+            echo "ILTERO_TOKEN<<GHEOF"
+            echo "$ILTERO_TOKEN"
+            echo "GHEOF"
+          } >> "$GITHUB_ENV"
         fi
 
     # -------------------------------------------------------------------------
@@ -192,6 +204,9 @@ runs:
     - name: Verify Installation
       id: verify
       shell: bash
+      env:
+        INPUT_INSTALL_CHECKOV: ${{ inputs.install-checkov }}
+        INPUT_INSTALL_OPA: ${{ inputs.install-opa }}
       run: |
         set -euo pipefail
 
@@ -199,20 +214,20 @@ runs:
 
         # Verify Iltero CLI
         CLI_VERSION=$(iltero --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
-        echo "version=$CLI_VERSION" >> $GITHUB_OUTPUT
+        echo "version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
         echo "✅ Iltero CLI: $CLI_VERSION"
 
         # Verify Checkov
-        if [ "${{ inputs.install-checkov }}" = "true" ]; then
+        if [ "$INPUT_INSTALL_CHECKOV" = "true" ]; then
           CHECKOV_VERSION=$(checkov --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
-          echo "checkov-version=$CHECKOV_VERSION" >> $GITHUB_OUTPUT
+          echo "checkov-version=$CHECKOV_VERSION" >> "$GITHUB_OUTPUT"
           echo "✅ Checkov: $CHECKOV_VERSION"
         fi
 
         # Verify OPA
-        if [ "${{ inputs.install-opa }}" = "true" ]; then
+        if [ "$INPUT_INSTALL_OPA" = "true" ]; then
           OPA_VERSION=$(opa version 2>/dev/null | grep -oE 'Version: [0-9]+\.[0-9]+\.[0-9]+' | cut -d' ' -f2 || echo "unknown")
-          echo "opa-version=$OPA_VERSION" >> $GITHUB_OUTPUT
+          echo "opa-version=$OPA_VERSION" >> "$GITHUB_OUTPUT"
           echo "✅ OPA: $OPA_VERSION"
         fi
 

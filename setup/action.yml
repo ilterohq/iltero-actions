@@ -110,6 +110,10 @@ runs:
     - name: Verify Installation
       id: verify
       shell: bash
+      env:
+        INPUT_INSTALL_CHECKOV: ${{ inputs.install-checkov }}
+        INPUT_INSTALL_OPA: ${{ inputs.install-opa }}
+        INPUT_INSTALL_TOOLCHAIN: ${{ inputs.install-toolchain }}
       run: |
         set -euo pipefail
 
@@ -118,25 +122,25 @@ runs:
         # Iltero CLI
         CLI_VERSION=$(iltero --version 2>/dev/null || echo "not installed")
         echo "   Iltero CLI: $CLI_VERSION"
-        echo "cli-version=$CLI_VERSION" >> $GITHUB_OUTPUT
+        echo "cli-version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
 
         # Checkov
-        if [ "${{ inputs.install-checkov }}" = "true" ]; then
+        if [ "$INPUT_INSTALL_CHECKOV" = "true" ]; then
           CHECKOV_VERSION=$(checkov --version 2>/dev/null || echo "not installed")
           echo "   Checkov: $CHECKOV_VERSION"
-          echo "checkov-version=$CHECKOV_VERSION" >> $GITHUB_OUTPUT
+          echo "checkov-version=$CHECKOV_VERSION" >> "$GITHUB_OUTPUT"
         fi
 
         # OPA
-        if [ "${{ inputs.install-opa }}" = "true" ]; then
+        if [ "$INPUT_INSTALL_OPA" = "true" ]; then
           OPA_VERSION=$(opa version 2>/dev/null | head -1 || echo "not installed")
           echo "   OPA: $OPA_VERSION"
-          echo "opa-version=$OPA_VERSION" >> $GITHUB_OUTPUT
+          echo "opa-version=$OPA_VERSION" >> "$GITHUB_OUTPUT"
         fi
 
         # Terraform
-        if [ "${{ inputs.install-toolchain }}" = "true" ]; then
+        if [ "$INPUT_INSTALL_TOOLCHAIN" = "true" ]; then
           TF_VERSION=$(terraform version -json 2>/dev/null | jq -r '.terraform_version' || echo "not installed")
           echo "   Terraform: $TF_VERSION"
-          echo "terraform-version=$TF_VERSION" >> $GITHUB_OUTPUT
+          echo "terraform-version=$TF_VERSION" >> "$GITHUB_OUTPUT"
         fi

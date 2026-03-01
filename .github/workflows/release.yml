@@ -21,8 +21,8 @@ on:
   release:
     types: [published]
 
-permissions:
-  contents: write
+# Least privilege — each job declares only what it needs
+permissions: {}
 
 jobs:
   # ===========================================================================
@@ -32,6 +32,8 @@ jobs:
     name: Validate Tag
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.parse.outputs.version }}
       major: ${{ steps.parse.outputs.major }}
@@ -78,10 +80,12 @@ jobs:
     if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
