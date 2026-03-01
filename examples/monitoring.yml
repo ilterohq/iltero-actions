@@ -1,0 +1,86 @@
+# =============================================================================
+# Infrastructure Monitoring Workflow
+# =============================================================================
+# This workflow uses the monitor action to detect drift, run runtime
+# compliance scans, and optionally create GitHub issues when drift is found.
+#
+# Features:
+#   - Scheduled runs via cron (configure to match config.yml drift schedule)
+#   - Manual trigger for on-demand checks
+#   - Matrix strategy for monitoring multiple units
+#   - OIDC authentication for Iltero and AWS
+#   - Automatic GitHub issue creation on drift
+#
+# Requirements:
+#   - ilterohq/iltero-actions/setup must run before the monitor action
+#   - ILTERO_API_URL in repository variables
+#   - ILTERO_STACK_ID in repository variables
+#   - ILTERO_ORG_ID in repository variables
+#   - PipelinePrincipal configured in Iltero for this repository
+#   - AWS OIDC role for Terraform state access
+# =============================================================================
+
+name: Infrastructure Monitoring
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'  # Every 4 hours (match config.yml drift schedule)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write  # Required for OIDC
+  issues: write    # Required for creating drift alert issues
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - unit: network-baseline
+            path: infra/stacks/my-stack/units/network-baseline
+          - unit: security-baseline
+            path: infra/stacks/my-stack/units/security-baseline
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Setup Iltero CLI (required before monitor action)
+      - name: Setup Iltero
+        uses: ilterohq/iltero-actions/setup@v1
+
+      # OIDC authentication for Iltero API
+      - name: Iltero OIDC Authentication
+        uses: ilterohq/iltero-actions/setup-oidc@v1
+        with:
+          stack-id: ${{ vars.ILTERO_STACK_ID }}
+          org-id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+      # AWS credentials for Terraform state access
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # Run monitoring checks
+      - name: Monitor ${{ matrix.unit }}
+        uses: ilterohq/iltero-actions/monitor@v1
+        with:
+          path: ${{ matrix.path }}
+          stack-id: ${{ vars.ILTERO_STACK_ID }}
+          stack-name: my-stack
+          unit: ${{ matrix.unit }}
+          environment: production
+          check-drift: 'true'
+          run-compliance: 'true'
+          create-issue-on-drift: 'true'
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}

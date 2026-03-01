@@ -1,0 +1,221 @@
+# =============================================================================
+# Iltero Workflow with Deployment Approvals
+# =============================================================================
+# This workflow demonstrates how to handle deployments that require approval.
+#
+# When config.yml has `deployment.require_approval: true`, the iltero-actions
+# pipeline will:
+#   1. Run compliance checks and plan evaluation
+#   2. Iltero backend creates an approval automatically when it receives the
+#      plan-phase webhook. The approval_id is returned in the evaluation response
+#      and captured by the script.
+#   3. Output approval_id and run_id for downstream jobs
+#
+# You must then:
+#   1. Use a separate deployment job with GitHub environment protection
+#   2. Configure the environment in repo Settings → Environments
+#   3. Add required reviewers to the environment
+#
+# How GitHub Environment Protection Works:
+#   - Define environments in Settings → Environments (e.g., "production")
+#   - Add required reviewers who must approve before deployment
+#   - The deployment job will pause and wait for approval
+#   - After approval, the deploy job records the external approval and verifies authorization
+#
+# CLI Commands for managing approvals:
+#   iltero stack approvals list              # List pending approvals
+#   iltero stack approvals show <id>         # View approval details
+#   iltero stack approvals run <run_id>      # Get approval for a run
+#   iltero stack approvals approve <id>      # Approve via CLI
+#   iltero stack approvals reject <id>       # Reject via CLI
+#   iltero stack approvals compliance <run>  # View compliance analysis
+#
+# =============================================================================
+
+name: Iltero with Approval Gates
+
+on:
+  push:
+    branches: [main, staging, develop]
+    paths:
+      - 'infra/stacks/**'
+  pull_request:
+    paths:
+      - 'infra/stacks/**'
+
+# Prevent concurrent deployments
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege permissions - override per job as needed
+permissions:
+  contents: read
+
+jobs:
+  # ===========================================================================
+  # Job 1: Compliance & Evaluation (runs for all branches)
+  # ===========================================================================
+  compliance:
+    name: Compliance Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC
+    outputs:
+      environment: ${{ steps.pipeline.outputs.environment }}
+      require_approval: ${{ steps.pipeline.outputs.require_approval }}
+      approval_id: ${{ steps.pipeline.outputs.approval_id }}
+      deployment_ready: ${{ steps.pipeline.outputs.deployment_ready }}
+      run_id: ${{ steps.pipeline.outputs.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Configure AWS credentials (required for terraform plan)
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # Run compliance pipeline (does NOT deploy)
+      - uses: ilterohq/iltero-actions@v1
+        id: pipeline
+        with:
+          stacks_path: infra/stacks
+          dry_run: 'true'  # Compliance only, no deployment
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+  # ===========================================================================
+  # Job 2: Deploy to Development (auto-deploy, no approval)
+  # ===========================================================================
+  deploy-development:
+    name: Deploy to Development
+    needs: compliance
+    if: |
+      needs.compliance.outputs.deployment_ready == 'true' &&
+      needs.compliance.outputs.environment == 'development' &&
+      needs.compliance.outputs.require_approval != 'true' &&
+      github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+    # No environment protection - auto-deploys
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy
+        run: |
+          echo "🚀 Deploying to development..."
+          # terraform apply would go here
+
+  # ===========================================================================
+  # Job 3: Deploy to Staging (auto-deploy, no approval)
+  # ===========================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    needs: compliance
+    if: |
+      needs.compliance.outputs.deployment_ready == 'true' &&
+      needs.compliance.outputs.environment == 'staging' &&
+      needs.compliance.outputs.require_approval != 'true' &&
+      github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+    # No environment protection - auto-deploys
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy
+        run: |
+          echo "🚀 Deploying to staging..."
+          # terraform apply would go here
+
+  # ===========================================================================
+  # Job 4: Deploy to Production (REQUIRES APPROVAL)
+  # ===========================================================================
+  # This job uses GitHub environment protection for approval gates.
+  #
+  # SETUP REQUIRED:
+  #   1. Go to repo Settings → Environments
+  #   2. Create environment named "production"
+  #   3. Enable "Required reviewers"
+  #   4. Add team members who can approve deployments
+  #   5. Optionally enable "Wait timer" for additional delay
+  #   6. Optionally restrict to specific branches (main only)
+  #
+  # When this job runs:
+  #   - GitHub will pause and request approval
+  #   - Required reviewers will be notified
+  #   - Job proceeds only after approval
+  # ===========================================================================
+  deploy-production:
+    name: Deploy to Production
+    needs: compliance
+    if: |
+      needs.compliance.outputs.deployment_ready == 'true' &&
+      needs.compliance.outputs.environment == 'production' &&
+      github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+
+    # 🔐 THIS IS THE KEY: GitHub Environment Protection
+    # The job will pause here waiting for approval from reviewers
+    # configured in Settings → Environments → production
+    environment:
+      name: production
+      url: https://production.example.com
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy to Production
+        run: |
+          echo "🚀 Deploying to production..."
+          echo "This only runs after manual approval!"
+          # terraform apply would go here
+
+      - name: Notify
+        if: success()
+        run: |
+          echo "✅ Production deployment complete"
+          # Add Slack/Teams notification here

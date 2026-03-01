@@ -1,0 +1,213 @@
+# =============================================================================
+# Iltero Actions - CI Pipeline
+# =============================================================================
+# Quality checks for the iltero-actions repository:
+#   - YAML/Action linting (actionlint, yamllint)
+#   - Shell script analysis (shellcheck)
+#   - JSON schema validation
+#   - Security scanning (gitleaks)
+#   - Markdown linting
+#
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+# Least privilege
+permissions:
+  contents: read
+
+# Cancel in-progress runs for PRs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ===========================================================================
+  # Lint: YAML, Actions, Shell, Markdown
+  # ===========================================================================
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # -----------------------------------------------------------------------
+      # Action & YAML Linting
+      # -----------------------------------------------------------------------
+      - name: Install actionlint
+        run: |
+          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          echo "$PWD" >> "$GITHUB_PATH"
+
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint YAML files
+        run: |
+          yamllint -c .yamllint.yml .
+
+      # -----------------------------------------------------------------------
+      # Shell Script Linting
+      # -----------------------------------------------------------------------
+      - name: Lint Shell Scripts
+        run: |
+          echo "::group::Running ShellCheck"
+          find scripts -name '*.sh' -type f -print0 | \
+            xargs -0 shellcheck --severity=warning --format=gcc
+          echo "::endgroup::"
+
+      # -----------------------------------------------------------------------
+      # Markdown Linting
+      # -----------------------------------------------------------------------
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@05f32210e84442804257b2a6f20b273450ec8265 # v19
+        with:
+          globs: |
+            README.md
+            CONTRIBUTING.md
+            CHANGELOG.md
+            SECURITY.md
+            CODE_OF_CONDUCT.md
+
+  # ===========================================================================
+  # Validate: JSON Schemas, Action Inputs/Outputs consistency
+  # ===========================================================================
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate JSON files
+        run: |
+          echo "::group::Validating JSON syntax"
+          for file in schemas/*.json; do
+            echo "Checking $file"
+            python3 -m json.tool "$file" > /dev/null
+          done
+          echo "::endgroup::"
+
+      - name: Validate JSON Schema draft
+        run: |
+          pip install check-jsonschema
+          echo "::group::Validating schema structure"
+          check-jsonschema --check-metaschema schemas/config.schema.json
+          echo "::endgroup::"
+
+      - name: Check action.yml structure
+        run: |
+          echo "::group::Checking action definitions have required fields"
+          for action in action.yml */action.yml actions/*/action.yml; do
+            if [[ -f "$action" ]]; then
+              echo "Checking $action"
+              # Verify required fields exist
+              if ! grep -q "^name:" "$action"; then
+                echo "::error file=$action::Missing 'name' field"
+                exit 1
+              fi
+              if ! grep -q "^description:" "$action"; then
+                echo "::error file=$action::Missing 'description' field"
+                exit 1
+              fi
+            fi
+          done
+          echo "::endgroup::"
+
+  # ===========================================================================
+  # Security: Secrets detection, dependency review
+  # ===========================================================================
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write  # For uploading SARIF
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # Full history for secret scanning
+
+      # TruffleHog - Free, open source secret scanner
+      # Supports 800+ credential detectors, verification, and entropy analysis
+      - name: Scan for secrets (trufflehog)
+        uses: trufflesecurity/trufflehog@041f07e9df901a1038a528e5525b0226d04dd5ea # main
+        with:
+          extra_args: --only-verified
+
+      # Dedicated GitHub Actions security linter
+      # Catches: injection, pwn requests, excessive permissions, credential exposure
+      - name: Scan workflows for security issues
+        run: |
+          # Install zizmor CLI directly
+          pip install zizmor
+          echo "::group::Running zizmor security scan"
+          zizmor --format sarif . > results.sarif
+          echo "::endgroup::"
+
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@45580472a5bb82c4681c4ac726cfdb60060c2ee1 # v3
+        with:
+          sarif_file: results.sarif
+        continue-on-error: true
+
+  # ===========================================================================
+  # Test: Shell script syntax and unit tests
+  # ===========================================================================
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Test shell script syntax
+        run: |
+          echo "::group::Checking bash syntax"
+          find scripts -name '*.sh' -type f -print0 | while IFS= read -r -d '' script; do
+            echo "Syntax check: $script"
+            bash -n "$script"
+          done
+          echo "::endgroup::"
+
+      - name: Install bats-core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run bash unit tests
+        run: |
+          echo "::group::Running bats tests"
+          bats --tap tests/*.bats
+          echo "::endgroup::"

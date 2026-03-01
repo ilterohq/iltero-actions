@@ -1,0 +1,92 @@
+# =============================================================================
+# Manual Trigger Iltero Workflow
+# =============================================================================
+# This workflow demonstrates manual triggering with explicit stack and
+# environment selection via workflow_dispatch inputs.
+#
+# Use Cases:
+#   - Deploy a specific stack to a specific environment
+#   - Re-run failed deployments
+#   - Emergency deployments with compliance bypass
+# =============================================================================
+
+name: Iltero Manual Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: 'Stack to process (leave empty to auto-detect from changes)'
+        required: false
+        type: string
+        default: ''
+      environment:
+        description: 'Target environment (leave empty for auto-detect from branch)'
+        required: false
+        type: choice
+        options:
+          - ''  # Auto-detect
+          - development
+          - staging
+          - production
+        default: ''
+      dry_run:
+        description: 'Dry run (compliance only, no deployment)'
+        required: false
+        type: boolean
+        default: true
+      skip_compliance:
+        description: 'Skip compliance checks (emergency deployments only)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  iltero:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+    # Use GitHub Environments for additional protection
+    environment: ${{ inputs.environment || 'development' }}
+    steps:
+      # SECURITY: Validate inputs before processing
+      - name: Validate Inputs
+        run: |
+          STACK="${{ inputs.stack }}"
+          if [[ -n "$STACK" ]] && ! [[ "$STACK" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "::error::Invalid stack name. Only alphanumeric, hyphens, underscores allowed."
+            exit 1
+          fi
+          if [[ "${{ inputs.skip_compliance }}" == "true" ]]; then
+            echo "::warning::Compliance checks will be skipped. This should only be used in emergencies."
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run Iltero Pipeline
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: infra/stacks
+          stack: ${{ inputs.stack }}
+          environment: ${{ inputs.environment }}
+          dry_run: ${{ inputs.dry_run }}
+          skip_compliance: ${{ inputs.skip_compliance }}
+          debug: 'true'  # Enable debug for manual runs
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}

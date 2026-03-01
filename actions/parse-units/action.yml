@@ -1,0 +1,171 @@
+# =============================================================================
+# Parse Infrastructure Units - Internal Action
+# =============================================================================
+# Purpose: Parse infrastructure units from stack config.yml with dependency-based
+#          deployment ordering using topological sort.
+#
+# This is an internal action bundled with iltero-actions. It:
+#   - Extracts infrastructure units from config.yml
+#   - Performs topological sort based on depends_on
+#   - Outputs units in deployment order
+#   - Generates GitHub Actions matrix for parallel processing
+# =============================================================================
+
+name: Parse Infrastructure Units
+description: Parse infrastructure units from stack config.yml with dependency-based deployment ordering
+
+inputs:
+  config_path:
+    required: true
+    description: Path to stack config.yml
+
+outputs:
+  units_matrix:
+    description: Matrix for parallel processing of units
+    value: ${{ steps.parse.outputs.units_matrix }}
+  deployment_order:
+    description: Units in deployment order based on depends_on (topologically sorted)
+    value: ${{ steps.parse.outputs.deployment_order }}
+  units_json:
+    description: Full infrastructure units as JSON array
+    value: ${{ steps.parse.outputs.units_json }}
+  stack_id:
+    description: Stack ID from config
+    value: ${{ steps.parse.outputs.stack_id }}
+  stack_name:
+    description: Stack name from config
+    value: ${{ steps.parse.outputs.stack_name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Parse and Validate Infrastructure Units
+      id: parse
+      shell: bash
+      env:
+        INPUT_CONFIG_PATH: ${{ inputs.config_path }}
+      run: |
+        set -euo pipefail
+
+        CONFIG_FILE="$INPUT_CONFIG_PATH"
+
+        # =====================================================================
+        # Validate config file exists
+        # =====================================================================
+        if [[ ! -f "$CONFIG_FILE" ]]; then
+          echo "::error::Config file not found: $CONFIG_FILE"
+          exit 1
+        fi
+
+        echo "Parsing config: $CONFIG_FILE"
+
+        # =====================================================================
+        # Extract stack metadata
+        # =====================================================================
+        STACK_ID=$(yq eval '.stack.id // ""' "$CONFIG_FILE")
+        STACK_NAME=$(yq eval '.stack.name // ""' "$CONFIG_FILE")
+
+        if [[ -z "$STACK_ID" ]]; then
+          echo "::error::stack.id is required in config.yml"
+          exit 1
+        fi
+
+        echo "stack_id=$STACK_ID" >> $GITHUB_OUTPUT
+        echo "stack_name=$STACK_NAME" >> $GITHUB_OUTPUT
+        echo "  Stack ID: $STACK_ID"
+        echo "  Stack Name: $STACK_NAME"
+
+        # =====================================================================
+        # Extract enabled infrastructure units
+        # =====================================================================
+        UNITS=$(yq eval '.infrastructure_units[] | select(.enabled != false)' "$CONFIG_FILE" -o json | jq -s '.')
+
+        if [[ -z "$UNITS" ]] || [[ "$UNITS" == "[]" ]] || [[ "$UNITS" == "null" ]]; then
+          echo "::warning::No infrastructure units found in config"
+          echo "units_matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+          echo "deployment_order=[]" >> $GITHUB_OUTPUT
+          echo "units_json=[]" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        UNIT_COUNT=$(echo "$UNITS" | jq 'length')
+        echo "  Found $UNIT_COUNT infrastructure units"
+
+        # =====================================================================
+        # Topological sort based on depends_on
+        # =====================================================================
+        DEPLOYMENT_ORDER=$(echo "$UNITS" | python3 -c "
+        import json
+        import sys
+
+        units = json.load(sys.stdin)
+        graph = {u['name']: u.get('depends_on', []) for u in units}
+
+        visited = set()
+        stack = set()
+        result = []
+
+        def visit(node):
+            if node in stack:
+                print(f'ERROR: Circular dependency detected involving {node}', file=sys.stderr)
+                sys.exit(1)
+            if node in visited:
+                return
+            stack.add(node)
+            for dep in graph.get(node, []):
+                if dep not in graph:
+                    print(f'WARNING: Unknown dependency {dep} for {node}, skipping', file=sys.stderr)
+                    continue
+                visit(dep)
+            stack.remove(node)
+            visited.add(node)
+            result.append(node)
+
+        for name in graph:
+            visit(name)
+
+        print(json.dumps(result))
+        ")
+
+        if [[ $? -ne 0 ]]; then
+          echo "::error::Dependency validation failed"
+          exit 1
+        fi
+
+        echo "  Deployment order: $DEPLOYMENT_ORDER"
+
+        # =====================================================================
+        # Create matrix for GitHub Actions parallel processing
+        # =====================================================================
+        MATRIX=$(echo "$UNITS" | jq -c '{
+          include: [.[] | {
+            name: .name,
+            path: .path,
+            depends_on: (.depends_on // []) | join(","),
+            order: .order,
+            enabled: (.enabled // true)
+          }]
+        }')
+
+        # =====================================================================
+        # Full units JSON for detailed processing
+        # =====================================================================
+        UNITS_JSON=$(echo "$UNITS" | jq -c '.')
+
+        # Validate we have units
+        MATRIX_COUNT=$(echo "$MATRIX" | jq '.include | length')
+        if [[ "$MATRIX_COUNT" -eq 0 ]]; then
+          echo "::error::No infrastructure units found after processing"
+          exit 1
+        fi
+
+        # =====================================================================
+        # Set outputs
+        # =====================================================================
+        echo "units_matrix=$MATRIX" >> $GITHUB_OUTPUT
+        echo "deployment_order=$DEPLOYMENT_ORDER" >> $GITHUB_OUTPUT
+        echo "units_json=$UNITS_JSON" >> $GITHUB_OUTPUT
+
+        echo ""
+        echo "✅ Parsed $MATRIX_COUNT infrastructure units"
+        echo "  Matrix: $MATRIX"

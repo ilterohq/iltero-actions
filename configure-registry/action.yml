@@ -1,0 +1,76 @@
+# =============================================================================
+# ilterohq/iltero-actions/configure-registry
+# =============================================================================
+# Configure authentication for Iltero's private Terraform module registry.
+#
+# This action configures git credentials for Terraform to access private
+# modules from registry.iltero.io during `terraform init`.
+#
+# Uses Terraform best practices:
+#   - .netrc file for HTTP authentication
+#   - Git URL rewriting for git::https:// module sources
+#
+# Usage:
+#   - uses: ilterohq/iltero-actions/configure-registry@v1
+#     env:
+#       ILTERO_REGISTRY_TOKEN: ${{ secrets.ILTERO_REGISTRY_TOKEN }}
+# =============================================================================
+
+name: Configure Iltero Registry
+description: Configure authentication for Iltero's private Terraform module registry
+author: Iltero
+
+branding:
+  icon: lock
+  color: blue
+
+inputs:
+  registry-host:
+    description: |
+      Hostname of the private Terraform module registry.
+      Default: 'registry.iltero.io'
+    required: false
+    default: 'registry.iltero.io'
+
+  token:
+    description: |
+      Registry access token. If not provided, uses ILTERO_REGISTRY_TOKEN env var.
+      Get this from Iltero Dashboard → Settings → Registry Tokens.
+    required: false
+    default: ''
+
+outputs:
+  configured:
+    description: Whether registry authentication was configured (true/false)
+    value: ${{ steps.configure.outputs.configured }}
+
+runs:
+  using: composite
+  steps:
+    - name: Configure Registry Authentication
+      id: configure
+      shell: bash
+      env:
+        INPUT_TOKEN: ${{ inputs.token }}
+        REGISTRY_HOST: ${{ inputs.registry-host }}
+      run: |
+        set -euo pipefail
+
+        # Source shared library
+        ACTION_DIR="${GITHUB_ACTION_PATH:-$(dirname "$0")/..}"
+        source "${ACTION_DIR}/../scripts/lib/iltero-core/index.sh"
+
+        # Use input token if provided, otherwise use env var
+        TOKEN="${INPUT_TOKEN:-${ILTERO_REGISTRY_TOKEN:-}}"
+
+        # Configure registry using shared function
+        if configure_registry "$TOKEN" "$REGISTRY_HOST"; then
+          if [[ -n "$TOKEN" ]]; then
+            echo "configured=true" >> $GITHUB_OUTPUT
+          else
+            echo "configured=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "configured=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi

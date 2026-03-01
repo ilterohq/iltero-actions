@@ -1,0 +1,90 @@
+# Iltero Actions - Brownfield Stack Configuration
+#
+# This configuration is for "attached" (brownfield) stacks — existing Terraform
+# projects that you want to add Iltero compliance scanning to without
+# restructuring into the greenfield stacks/units layout.
+#
+# Key differences from greenfield config (config.example.yml):
+#   - stack.type: "attached" (required)
+#   - stack.terraform_working_directory: path to existing Terraform root
+#   - No infrastructure_units section
+#   - compliance.enforcement_mode defaults to "permissive" for gradual adoption
+#   - compliance.policy_sets to select which policies apply
+#
+# Location: .iltero/config.yml (default) or custom path via config_path input
+
+version: 1.0.0
+
+# =============================================================================
+# Stack Identification
+# =============================================================================
+stack:
+  # Required: Unique stack identifier (UUID from Iltero)
+  id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+  # Required: Human-readable stack name
+  name: my-existing-project
+
+  # Required for brownfield: Must be "attached"
+  type: attached
+
+  # Required for brownfield: Path to existing Terraform working directory
+  # relative to the repository root
+  terraform_working_directory: terraform
+
+  # Optional: URL-friendly identifier
+  slug: my-existing-project
+
+  # Optional: Description
+  description: Existing Terraform project with Iltero compliance scanning
+
+# =============================================================================
+# Terraform Configuration
+# =============================================================================
+# NOTE: Brownfield stacks do NOT use bundle.template_bundle_id.
+# Policy resolution uses environment-level compliance.policy_sets instead.
+terraform:
+  version: 1.5.7
+  backend:
+    type: s3
+
+# =============================================================================
+# Environment Configurations
+# =============================================================================
+environments:
+  development:
+    git_ref:
+      type: branch
+      name: develop
+
+    compliance:
+      enabled: true
+      scan_types: [static]
+      # Permissive mode: violations are reported but do not block deployment
+      enforcement_mode: permissive
+      # Policy sets to evaluate against (subset of full bundle)
+      policy_sets: [aws-security-baseline]
+
+    security:
+      severity_threshold: medium
+
+    deployment:
+      require_approval: false
+
+  production:
+    git_ref:
+      type: branch
+      name: main
+
+    compliance:
+      enabled: true
+      scan_types: [static, evaluation]
+      # Switch to enforcing once baseline violations are resolved
+      enforcement_mode: permissive
+      policy_sets: [aws-security-baseline, aws-encryption]
+
+    security:
+      severity_threshold: high
+
+    deployment:
+      require_approval: true

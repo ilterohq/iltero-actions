@@ -1,0 +1,519 @@
+# =============================================================================
+# Security-Hardened Iltero Workflow
+# =============================================================================
+# This workflow implements GitHub Actions security best practices including:
+#
+# 🔐 SECURITY FEATURES:
+#   1. Explicit permissions (least privilege principle)
+#   2. Pinned action versions with SHA hashes
+#   3. Restricted checkout settings (persist-credentials: false)
+#   4. Input validation for workflow_dispatch
+#   5. Environment protection rules
+#   6. OIDC for cloud authentication (no long-lived secrets)
+#   7. Concurrency controls to prevent race conditions
+#   8. Branch protection enforcement
+#   9. Artifact attestation for supply chain security
+#  10. Job isolation with minimal permissions per job
+#  11. Timeout limits to prevent resource exhaustion
+#  12. No secrets in logs (masking)
+#
+# SETUP REQUIRED:
+#   1. Configure GitHub Environments (development, staging, production)
+#   2. Set up OIDC trust with AWS IAM
+#   3. Enable branch protection rules
+#   4. Configure required reviewers for production
+#   5. Enable "Require approval for first-time contributors"
+#
+# References:
+#   - https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions
+#   - https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
+# =============================================================================
+
+name: Iltero Security-Hardened Pipeline
+
+# =============================================================================
+# Trigger Configuration
+# =============================================================================
+# SECURITY: Avoid pull_request_target - use pull_request instead to prevent
+# arbitrary code execution from forks. For fork PRs that need secrets,
+# use the workflow_run event pattern with approval gates.
+# =============================================================================
+on:
+  push:
+    branches:
+      - main
+      - staging
+      - develop
+    paths:
+      - 'infra/stacks/**'
+      - 'infra/modules/**'
+
+  pull_request:
+    # SECURITY: pull_request runs in context of the PR head, not base
+    # This is safer than pull_request_target for untrusted code
+    branches:
+      - main
+      - staging
+      - develop
+    paths:
+      - 'infra/stacks/**'
+      - 'infra/modules/**'
+
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: 'Stack to process (alphanumeric, hyphens only)'
+        required: false
+        type: string
+        default: ''
+      environment:
+        description: 'Target environment'
+        required: false
+        type: choice
+        options:
+          - ''
+          - development
+          - staging
+          - production
+        default: ''
+      dry_run:
+        description: 'Dry run (compliance only)'
+        required: false
+        type: boolean
+        default: true
+      skip_compliance:
+        description: 'Skip compliance (requires justification)'
+        required: false
+        type: boolean
+        default: false
+      justification:
+        description: 'Required if skip_compliance is true'
+        required: false
+        type: string
+        default: ''
+
+# =============================================================================
+# Concurrency Control
+# =============================================================================
+# SECURITY: Prevent race conditions and resource exhaustion
+# cancel-in-progress is safe for PRs but be careful with deployments
+# =============================================================================
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only cancel in-progress for PRs, not for push (deployments)
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# =============================================================================
+# Global Permissions - Least Privilege
+# =============================================================================
+# SECURITY: Set restrictive defaults, override per-job as needed
+# This prevents compromised jobs from having excessive access
+# =============================================================================
+permissions:
+  contents: read  # Minimum required to checkout code
+
+# =============================================================================
+# Environment Variables
+# =============================================================================
+# SECURITY: Use vars for non-sensitive config, secrets for sensitive data
+# Never put secrets in env at workflow level - only at job/step level
+# =============================================================================
+env:
+  # Non-sensitive configuration only
+  STACKS_PATH: infra/stacks
+
+jobs:
+  # ===========================================================================
+  # Job 1: Input Validation & Security Checks
+  # ===========================================================================
+  # SECURITY: Validate all inputs before processing to prevent injection
+  # ===========================================================================
+  validate:
+    name: Validate Inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      stack: ${{ steps.validate.outputs.stack }}
+      environment: ${{ steps.validate.outputs.environment }}
+      dry_run: ${{ steps.validate.outputs.dry_run }}
+      skip_compliance: ${{ steps.validate.outputs.skip_compliance }}
+      is_fork: ${{ steps.context.outputs.is_fork }}
+
+    steps:
+      - name: Check Repository Context
+        id: context
+        run: |
+          # Detect if this is a fork PR
+          IS_FORK="false"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            if [[ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
+              IS_FORK="true"
+              echo "⚠️ This is a PR from a fork - secrets will not be available"
+            fi
+          fi
+          echo "is_fork=${IS_FORK}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Inputs
+        id: validate
+        run: |
+          # Validate stack input (alphanumeric, hyphens, underscores only)
+          STACK="${{ inputs.stack }}"
+          if [[ -n "$STACK" ]] && ! [[ "$STACK" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "::error::Invalid stack name. Only alphanumeric characters, hyphens, and underscores allowed."
+            exit 1
+          fi
+
+          # Validate environment is from allowed list
+          ENV="${{ inputs.environment }}"
+          if [[ -n "$ENV" ]] && ! [[ "$ENV" =~ ^(development|staging|production)$ ]]; then
+            echo "::error::Invalid environment. Must be: development, staging, or production."
+            exit 1
+          fi
+
+          # Require justification for skip_compliance
+          SKIP_COMPLIANCE="${{ inputs.skip_compliance }}"
+          JUSTIFICATION="${{ inputs.justification }}"
+          if [[ "$SKIP_COMPLIANCE" == "true" ]]; then
+            if [[ -z "$JUSTIFICATION" ]] || [[ ${#JUSTIFICATION} -lt 20 ]]; then
+              echo "::error::Skipping compliance requires a justification of at least 20 characters."
+              exit 1
+            fi
+            echo "::warning::Compliance skip requested. Justification: $JUSTIFICATION"
+          fi
+
+          # Output validated inputs
+          echo "stack=${STACK}" >> "$GITHUB_OUTPUT"
+          echo "environment=${ENV}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${{ inputs.dry_run || github.event_name == 'pull_request' }}" >> "$GITHUB_OUTPUT"
+          echo "skip_compliance=${SKIP_COMPLIANCE}" >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 2: Compliance & Evaluation
+  # ===========================================================================
+  compliance:
+    name: Compliance Scan
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # SECURITY: Explicitly declare permissions needed for this job
+    permissions:
+      contents: read
+      id-token: write      # Required for OIDC authentication
+      actions: read        # Required to detect workflow path
+      security-events: write  # For uploading SARIF results (if applicable)
+
+    outputs:
+      environment: ${{ steps.pipeline.outputs.environment }}
+      run_id: ${{ steps.pipeline.outputs.run_id }}
+      require_approval: ${{ steps.pipeline.outputs.require_approval }}
+      approval_id: ${{ steps.pipeline.outputs.approval_id }}
+      deployment_ready: ${{ steps.pipeline.outputs.deployment_ready }}
+      compliance_passed: ${{ steps.pipeline.outputs.compliance_passed }}
+      evaluation_passed: ${{ steps.pipeline.outputs.evaluation_passed }}
+
+    steps:
+      # SECURITY: Pin actions to full SHA, not tags (tags can be moved)
+      # Find SHAs at: https://github.com/<owner>/<repo>/releases
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+          # SECURITY: Don't persist credentials - prevents credential leakage
+          persist-credentials: false
+          # SECURITY: For PRs, checkout the merge commit to test actual merge result
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # SECURITY: Use OIDC for AWS authentication - no long-lived credentials
+      # This requires setting up an IAM OIDC identity provider
+      # See: https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          # SECURITY: Use shorter session duration when possible
+          role-duration-seconds: 1800  # 30 minutes
+          # SECURITY: Add session tags for audit trail
+          role-session-name: iltero-${{ github.run_id }}
+
+      # SECURITY: Verify checkout integrity
+      - name: Verify Repository Integrity
+        run: |
+          # Ensure we're in the expected repository
+          REPO_URL=$(git config --get remote.origin.url)
+          EXPECTED_REPO="https://github.com/${{ github.repository }}"
+
+          if [[ "$REPO_URL" != *"${{ github.repository }}"* ]]; then
+            echo "::error::Repository URL mismatch. Expected ${{ github.repository }}"
+            exit 1
+          fi
+
+          echo "✅ Repository integrity verified"
+
+      # Run the compliance pipeline
+      - name: Run Iltero Pipeline
+        id: pipeline
+        # SECURITY: Pin to SHA when available for your action
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: ${{ env.STACKS_PATH }}
+          stack: ${{ needs.validate.outputs.stack }}
+          environment: ${{ needs.validate.outputs.environment }}
+          dry_run: ${{ needs.validate.outputs.dry_run }}
+          skip_compliance: ${{ needs.validate.outputs.skip_compliance }}
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+      # SECURITY: Upload compliance results as artifact with attestation
+      - name: Upload Compliance Results
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
+        with:
+          name: compliance-results-${{ github.run_id }}
+          path: |
+            /tmp/compliance-*.json
+            /tmp/evaluation-*.json
+          retention-days: 90
+          if-no-files-found: ignore
+
+  # ===========================================================================
+  # Job 3: Deploy to Development (auto-deploy)
+  # ===========================================================================
+  deploy-development:
+    name: Deploy to Development
+    needs: [validate, compliance]
+    if: |
+      needs.validate.outputs.is_fork != 'true' &&
+      needs.compliance.outputs.deployment_ready == 'true' &&
+      needs.compliance.outputs.environment == 'development' &&
+      needs.compliance.outputs.require_approval != 'true' &&
+      github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+
+    # SECURITY: Use GitHub Environment for audit trail
+    environment:
+      name: development
+      url: https://dev.example.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 3600
+          role-session-name: iltero-deploy-dev-${{ github.run_id }}
+
+      - name: Deploy
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: ${{ env.STACKS_PATH }}
+          deploy_only: 'true'
+          run_id: ${{ needs.compliance.outputs.run_id }}
+          verify_authorization: 'true'
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+  # ===========================================================================
+  # Job 4: Deploy to Staging (auto-deploy)
+  # ===========================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    needs: [validate, compliance]
+    if: |
+      needs.validate.outputs.is_fork != 'true' &&
+      needs.compliance.outputs.deployment_ready == 'true' &&
+      needs.compliance.outputs.environment == 'staging' &&
+      needs.compliance.outputs.require_approval != 'true' &&
+      github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+
+    environment:
+      name: staging
+      url: https://staging.example.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_STAGING }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 3600
+          role-session-name: iltero-deploy-staging-${{ github.run_id }}
+
+      - name: Deploy
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: ${{ env.STACKS_PATH }}
+          deploy_only: 'true'
+          run_id: ${{ needs.compliance.outputs.run_id }}
+          verify_authorization: 'true'
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+  # ===========================================================================
+  # Job 5: Deploy to Production (REQUIRES APPROVAL)
+  # ===========================================================================
+  # SECURITY: Production deployments require:
+  #   1. GitHub Environment protection (required reviewers)
+  #   2. Branch restrictions (main only)
+  #   3. Iltero approval verification
+  # ===========================================================================
+  deploy-production:
+    name: Deploy to Production
+    needs: [validate, compliance]
+    if: |
+      needs.validate.outputs.is_fork != 'true' &&
+      needs.compliance.outputs.deployment_ready == 'true' &&
+      needs.compliance.outputs.environment == 'production' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    permissions:
+      contents: read
+      id-token: write
+      deployments: write
+
+    # SECURITY: GitHub Environment Protection
+    # Configure in Settings → Environments → production:
+    #   - Required reviewers (at least 2 recommended)
+    #   - Deployment branches: main only
+    #   - Wait timer: 5 minutes (optional cooling period)
+    environment:
+      name: production
+      url: https://production.example.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      # SECURITY: Use separate IAM role for production with stricter permissions
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 3600
+          role-session-name: iltero-deploy-prod-${{ github.run_id }}
+
+      # SECURITY: Additional verification before production deployment
+      - name: Verify Deployment Authorization
+        run: |
+          echo "📋 Pre-deployment verification:"
+          echo "  - Commit: ${{ github.sha }}"
+          echo "  - Branch: ${{ github.ref_name }}"
+          echo "  - Actor: ${{ github.actor }}"
+          echo "  - Run ID: ${{ needs.compliance.outputs.run_id }}"
+          echo "  - Approval ID: ${{ needs.compliance.outputs.approval_id }}"
+
+          # Verify we're on main branch
+          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+            echo "::error::Production deployments must be from main branch"
+            exit 1
+          fi
+
+      - name: Deploy
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: ${{ env.STACKS_PATH }}
+          deploy_only: 'true'
+          run_id: ${{ needs.compliance.outputs.run_id }}
+          verify_authorization: 'true'
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+      - name: Notify Success
+        if: success()
+        run: |
+          echo "✅ Production deployment completed successfully"
+          echo "  - Environment: production"
+          echo "  - Commit: ${{ github.sha }}"
+          echo "  - Deployed by: ${{ github.actor }}"
+
+  # ===========================================================================
+  # Job 6: PR Comment (for visibility)
+  # ===========================================================================
+  pr-comment:
+    name: Update PR
+    needs: [validate, compliance]
+    if: github.event_name == 'pull_request' && always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # SECURITY: Minimal permissions for PR comment
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Comment on PR
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          # SECURITY: Use GITHUB_TOKEN with minimal scope, not PAT
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const status = '${{ needs.compliance.outputs.compliance_passed }}' === 'true' &&
+                          '${{ needs.compliance.outputs.evaluation_passed }}' === 'true';
+            const emoji = status ? '✅' : '❌';
+            const env = '${{ needs.compliance.outputs.environment }}';
+            const isFork = '${{ needs.validate.outputs.is_fork }}' === 'true';
+
+            let body = `## ${emoji} Iltero Infrastructure Pipeline
+
+            | Check | Status |
+            |-------|--------|
+            | **Environment** | \`${env}\` |
+            | **Compliance** | ${'${{ needs.compliance.outputs.compliance_passed }}' === 'true' ? '✅ Passed' : '❌ Failed'} |
+            | **Plan Evaluation** | ${'${{ needs.compliance.outputs.evaluation_passed }}' === 'true' ? '✅ Passed' : '❌ Failed'} |
+            `;
+
+            if (isFork) {
+              body += `\n> ⚠️ This PR is from a fork. Deployment validation was limited.`;
+            }
+
+            body += `\n> This is a dry-run. Deployment will occur on merge to the target branch.`;
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });

@@ -1,0 +1,75 @@
+# =============================================================================
+# Brownfield Iltero Workflow
+# =============================================================================
+# This workflow demonstrates Iltero with an existing (brownfield) Terraform
+# project. Unlike greenfield stacks that live under a `stacks_path` directory,
+# brownfield stacks attach to an existing Terraform working directory.
+#
+# How brownfield auto-detection works:
+#   1. When `stacks_path` is NOT provided, the action looks for a brownfield
+#      config file at `.iltero/config.yml` (or the path set via `config_path`).
+#   2. The config uses `stack.type: "attached"` and specifies the Terraform
+#      working directory via `stack.terraform_working_directory`.
+#   3. No `infrastructure_units` are needed — the working directory IS the unit.
+#   4. Compliance enforcement defaults to "permissive" for gradual adoption.
+#
+# Override the config location:
+#   with:
+#     config_path: 'custom/path/config.yml'
+#
+# See also:
+#   - examples/config.brownfield.example.yml  — brownfield config reference
+#   - schemas/config.schema.json              — full JSON schema
+#
+# Requirements:
+#   - ILTERO_API_URL in repository variables
+#   - ILTERO_STACK_ID in repository variables
+#   - ILTERO_ORG_ID in repository variables
+#   - PipelinePrincipal configured in Iltero for this repository
+#   - .iltero/config.yml in the repository root (or custom config_path)
+#   - AWS OIDC role for cloud credentials
+# =============================================================================
+
+name: Iltero Brownfield
+
+on:
+  push:
+    branches: [main, staging, develop]
+    paths:
+      - '**/*.tf'
+      - '.iltero/**'
+  pull_request:
+    paths:
+      - '**/*.tf'
+      - '.iltero/**'
+
+permissions:
+  contents: read
+  id-token: write  # Required for OIDC
+
+jobs:
+  iltero:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # No stacks_path — triggers brownfield auto-detection from .iltero/config.yml
+      - name: Run Iltero Pipeline
+        uses: ilterohq/iltero-actions@v1
+        with:
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}

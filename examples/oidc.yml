@@ -1,0 +1,146 @@
+# =============================================================================
+# OIDC Authentication Workflow
+# =============================================================================
+# This workflow uses OIDC tokens instead of long-lived secrets for Iltero
+# authentication. GitHub Actions exchanges its OIDC token for short-lived
+# Iltero API and registry tokens automatically.
+#
+# Benefits:
+#   - No ILTERO_TOKEN or ILTERO_REGISTRY_TOKEN secrets needed
+#   - Tokens are ephemeral (10-minute lifetime)
+#   - Auditable: each token is tied to a specific workflow run
+#
+# Requirements:
+#   - ILTERO_API_URL in repository variables
+#   - ILTERO_STACK_ID in repository variables
+#   - ILTERO_ORG_ID in repository variables
+#   - PipelinePrincipal configured in Iltero for this repository
+#   - `permissions: { id-token: write }` in the workflow
+#   - AWS credentials (OIDC role or access keys)
+# =============================================================================
+
+name: Iltero Infrastructure (OIDC)
+
+on:
+  push:
+    branches: [main, staging, develop]
+    paths:
+      - 'infra/stacks/**'
+  pull_request:
+    paths:
+      - 'infra/stacks/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+  id-token: write  # Required for OIDC
+
+jobs:
+  # ===========================================================================
+  # Option A: Root Action with OIDC
+  # ===========================================================================
+  # The simplest approach — pass oidc: 'true' to the root action.
+  # OIDC exchange, registry configuration, and pipeline execution are all
+  # handled automatically.
+  # ===========================================================================
+  compliance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      compliance_passed: ${{ steps.pipeline.outputs.compliance_passed }}
+      environment: ${{ steps.pipeline.outputs.environment }}
+      run_id: ${{ steps.pipeline.outputs.run_id }}
+      require_approval: ${{ steps.pipeline.outputs.require_approval }}
+      deployment_ready: ${{ steps.pipeline.outputs.deployment_ready }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Run Iltero Pipeline
+        id: pipeline
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: infra/stacks
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+  # ===========================================================================
+  # Deploy (also uses OIDC — each job gets its own short-lived token)
+  # ===========================================================================
+  deploy:
+    needs: compliance
+    if: |
+      needs.compliance.outputs.deployment_ready == 'true' &&
+      github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ needs.compliance.outputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy
+        uses: ilterohq/iltero-actions@v1
+        with:
+          stacks_path: infra/stacks
+          deploy_only: 'true'
+          run_id: ${{ needs.compliance.outputs.run_id }}
+          oidc: 'true'
+          stack_id: ${{ vars.ILTERO_STACK_ID }}
+          org_id: ${{ vars.ILTERO_ORG_ID }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+
+# =============================================================================
+# Option B: Granular Actions with setup-oidc
+# =============================================================================
+# For more control, use setup + setup-oidc as separate steps.
+# Uncomment the job below to use this approach instead.
+# =============================================================================
+#
+#   compliance-granular:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
+#         with:
+#           fetch-depth: 0
+#
+#       - uses: ilterohq/iltero-actions/setup@v1
+#
+#       - uses: ilterohq/iltero-actions/setup-oidc@v1
+#         with:
+#           stack-id: ${{ vars.ILTERO_STACK_ID }}
+#           org-id: ${{ vars.ILTERO_ORG_ID }}
+#
+#       - uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+#           aws-region: ${{ vars.AWS_REGION }}
+#
+#       - uses: ilterohq/iltero-actions/scan@v1
+#         with:
+#           stacks_path: infra/stacks
