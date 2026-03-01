@@ -42,10 +42,12 @@ runs:
     - name: Parse and Validate Infrastructure Units
       id: parse
       shell: bash
+      env:
+        INPUT_CONFIG_PATH: ${{ inputs.config_path }}
       run: |
         set -euo pipefail
 
-        CONFIG_FILE="${{ inputs.config_path }}"
+        CONFIG_FILE="$INPUT_CONFIG_PATH"
 
         # =====================================================================
         # Validate config file exists

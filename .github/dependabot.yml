@@ -4,6 +4,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default: 3
     labels:
       - "dependencies"
     commit-message:

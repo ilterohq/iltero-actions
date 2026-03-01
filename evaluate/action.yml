@@ -215,4 +215,6 @@ runs:
     - name: Exit with scan result
       if: always()
       shell: bash
-      run: exit ${{ steps.evaluate.outputs.exit_code || 0 }}
+      env:
+        EXIT_CODE: ${{ steps.evaluate.outputs.exit_code || 0 }}
+      run: exit "$EXIT_CODE"

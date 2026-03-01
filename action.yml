@@ -244,11 +244,14 @@ runs:
     - name: Validate Inputs
       id: validate
       shell: bash
+      env:
+        INPUT_STACKS_PATH: ${{ inputs.stacks_path }}
+        INPUT_CONFIG_PATH: ${{ inputs.config_path }}
       run: |
         set -euo pipefail
 
-        STACKS_PATH="${{ inputs.stacks_path }}"
-        CONFIG_PATH="${{ inputs.config_path }}"
+        STACKS_PATH="$INPUT_STACKS_PATH"
+        CONFIG_PATH="$INPUT_CONFIG_PATH"
 
         # Detect pipeline mode
         if [[ -n "$STACKS_PATH" ]] && [[ -d "$STACKS_PATH" ]]; then

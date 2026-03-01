@@ -88,14 +88,18 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Update major version tag
         env:
           VERSION: ${{ needs.validate-tag.outputs.version }}
           MAJOR: ${{ needs.validate-tag.outputs.major }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPOSITORY}.git"
 
           echo "Moving tag $MAJOR → $VERSION"
           git tag -fa "$MAJOR" -m "Release $VERSION"
