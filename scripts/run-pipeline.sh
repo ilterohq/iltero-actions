@@ -223,6 +223,7 @@ process_unit() {
     local scan_types="$7"
     local depends_on="$8"  # JSON array of dependencies
     local frameworks="${9:-}"  # Comma-separated compliance
+    local config_path="${10:-}"  # Path for --config-path flag
 
     local full_path="${STACKS_PATH}/${stack}/${unit_path}"
 
@@ -264,12 +265,15 @@ process_unit() {
     if [[ "$MODE" == "scan" ]] || [[ "$MODE" == "full" ]]; then
         if [[ "$SKIP_COMPLIANCE" != "true" ]] && echo "$scan_types" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
             set +e
-            run_compliance_scan "$full_path" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks"
+            run_compliance_scan "$full_path" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
             local scan_exit=$?
             set -e
 
             # Update global run ID for chaining
             if [[ -n "$SCAN_RUN_ID" ]]; then
+                if [[ -n "$GLOBAL_RUN_ID" ]] && [[ "$SCAN_RUN_ID" != "$GLOBAL_RUN_ID" ]]; then
+                    log_warning "Run ID mismatch after scan: expected=$GLOBAL_RUN_ID, got=$SCAN_RUN_ID"
+                fi
                 log_info "Setting global run ID from static scan: $SCAN_RUN_ID"
                 GLOBAL_RUN_ID="$SCAN_RUN_ID"
             fi
@@ -310,6 +314,9 @@ process_unit() {
 
             # Update global run ID and approval ID
             if [[ -n "$EVAL_RUN_ID" ]]; then
+                if [[ -n "$GLOBAL_RUN_ID" ]] && [[ "$EVAL_RUN_ID" != "$GLOBAL_RUN_ID" ]]; then
+                    log_warning "Run ID mismatch after evaluation: expected=$GLOBAL_RUN_ID, got=$EVAL_RUN_ID"
+                fi
                 log_info "Setting global run ID from evaluation: $EVAL_RUN_ID"
                 GLOBAL_RUN_ID="$EVAL_RUN_ID"
             fi
@@ -537,7 +544,8 @@ process_stack() {
             "$severity_threshold" \
             "$scan_types" \
             "$depends_on" \
-            "$frameworks_csv"
+            "$frameworks_csv" \
+            "$config_file"
     done
 
     PROCESSED_STACKS+=("$stack")
@@ -566,6 +574,7 @@ process_brownfield_unit() {
     local severity_threshold="$5"
     local scan_types="$6"
     local frameworks="${7:-}"
+    local config_path="${8:-}"
 
     # Unit name is the stack name (single "unit")
     local unit_name="$stack_name"
@@ -588,11 +597,14 @@ process_brownfield_unit() {
     if [[ "$MODE" == "scan" ]] || [[ "$MODE" == "full" ]]; then
         if [[ "$SKIP_COMPLIANCE" != "true" ]] && echo "$scan_types" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
             set +e
-            run_compliance_scan "$tf_dir" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks"
+            run_compliance_scan "$tf_dir" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
             local scan_exit=$?
             set -e
 
             if [[ -n "$SCAN_RUN_ID" ]]; then
+                if [[ -n "$GLOBAL_RUN_ID" ]] && [[ "$SCAN_RUN_ID" != "$GLOBAL_RUN_ID" ]]; then
+                    log_warning "Run ID mismatch after scan: expected=$GLOBAL_RUN_ID, got=$SCAN_RUN_ID"
+                fi
                 GLOBAL_RUN_ID="$SCAN_RUN_ID"
             fi
             if [[ -n "${SCAN_ID:-}" ]]; then
@@ -627,6 +639,9 @@ process_brownfield_unit() {
             set -e
 
             if [[ -n "$EVAL_RUN_ID" ]]; then
+                if [[ -n "$GLOBAL_RUN_ID" ]] && [[ "$EVAL_RUN_ID" != "$GLOBAL_RUN_ID" ]]; then
+                    log_warning "Run ID mismatch after evaluation: expected=$GLOBAL_RUN_ID, got=$EVAL_RUN_ID"
+                fi
                 GLOBAL_RUN_ID="$EVAL_RUN_ID"
             fi
             if [[ -n "${EVAL_SCAN_ID:-}" ]]; then
@@ -768,7 +783,8 @@ process_brownfield_stack() {
         "$environment" \
         "$severity_threshold" \
         "$scan_types" \
-        "$frameworks_csv"
+        "$frameworks_csv" \
+        "$config_file"
 
     PROCESSED_STACKS+=("${stack_slug:-$stack_name}")
 

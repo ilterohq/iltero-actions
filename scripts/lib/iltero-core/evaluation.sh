@@ -20,8 +20,8 @@
 #   EXIT_ERROR (2)      - Evaluation failed (Terraform error, API error, etc.)
 #
 # Exports after run_plan_evaluation():
-#   EVAL_RUN_ID, EVAL_SCAN_ID, EVAL_PASSED, EVAL_VIOLATIONS, EVAL_EXIT_CODE, 
-#   APPROVAL_ID, PLAN_JSON_FILE, EVAL_MODE
+#   EVAL_RUN_ID, EVAL_SCAN_ID, EVAL_PASSED, EVAL_VIOLATIONS, EVAL_EXIT_CODE,
+#   APPROVAL_ID, PLAN_JSON_FILE, PLAN_URL, EVAL_MODE
 #
 # EVAL_MODE values:
 #   "full"        - Full evaluation with backend (remote state available)
@@ -40,6 +40,7 @@ run_plan_evaluation() {
     local chain_run_id="${6:-}"
     local existing_plan="${7:-}"
     local depends_on="${8:-}"
+    local frameworks="${9:-}"
 
     local results_file
     local results_dir
@@ -55,6 +56,7 @@ run_plan_evaluation() {
     EVAL_EXIT_CODE=0
     APPROVAL_ID=""
     PLAN_JSON_FILE=""
+    PLAN_URL=""
     EVAL_MODE="full"
 
     log_group "📋 Plan Evaluation: ${unit_name}"
@@ -106,7 +108,23 @@ run_plan_evaluation() {
         fi
         
         log_info "Terraform initialized successfully"
-        
+
+        # Extract S3 backend config from terraform's local state (works for all stack types)
+        local s3_bucket="" s3_key_prefix="" s3_region=""
+        local tf_backend_state=".terraform/terraform.tfstate"
+        if [[ -f "$tf_backend_state" ]]; then
+            local backend_type
+            backend_type=$(jq -r '.backend.type // empty' "$tf_backend_state" 2>/dev/null || echo "")
+            if [[ "$backend_type" == "s3" ]]; then
+                s3_bucket=$(jq -r '.backend.config.bucket // empty' "$tf_backend_state")
+                s3_region=$(jq -r '.backend.config.region // empty' "$tf_backend_state")
+                # Strip the .tfstate filename to get the key prefix
+                local s3_key
+                s3_key=$(jq -r '.backend.config.key // empty' "$tf_backend_state")
+                s3_key_prefix="${s3_key%/*}"
+            fi
+        fi
+
         # =====================================================================
         # Step 2.5: Check if THIS unit has existing state in the backend
         # This determines if downstream units can reference our remote state
@@ -190,6 +208,20 @@ run_plan_evaluation() {
         # Convert plan to JSON (full terraform plan JSON for policy evaluation)
         terraform show -json tfplan > tfplan.json 2>/dev/null
         PLAN_JSON_FILE="$(pwd)/tfplan.json"
+
+        # Upload plan JSON to S3 alongside the state file
+        local plan_s3_url=""
+        if [[ -n "$s3_bucket" ]] && [[ -n "$s3_key_prefix" ]]; then
+            local plan_s3_key="${s3_key_prefix}/plans/${chain_run_id:-$(date +%s)}-tfplan.json"
+            log_info "Uploading plan JSON to s3://${s3_bucket}/${plan_s3_key}"
+            if aws s3 cp "$PLAN_JSON_FILE" "s3://${s3_bucket}/${plan_s3_key}" \
+                --region "${s3_region:-us-east-1}" 2>&1 | tail -1; then
+                plan_s3_url="s3://${s3_bucket}/${plan_s3_key}"
+                log_info "Plan uploaded successfully"
+            else
+                log_warning "Failed to upload plan to S3 (non-fatal, continuing)"
+            fi
+        fi
 
         # Export current STATE (not plan) for audit trail and drift detection baseline
         # Note: `terraform show -json` (no args) shows the current state from the backend,
@@ -275,6 +307,11 @@ run_plan_evaluation() {
         cmd+=(--frameworks "$frameworks")
     fi
 
+    # Pass plan URL if upload succeeded
+    if [[ -n "${plan_s3_url:-}" ]]; then
+        cmd+=(--plan-url "$plan_s3_url")
+    fi
+
     # Note: Upload happens via Compliance API using scan_id from policy resolution
     # No --skip-upload needed - the CLI handles this automatically
 
@@ -282,6 +319,8 @@ run_plan_evaluation() {
     "${cmd[@]}"
     EVAL_EXIT_CODE=$?
     set -e
+
+    PLAN_URL="${plan_s3_url:-}"
 
     # Extract results
     if [[ -f "$results_file" ]]; then
