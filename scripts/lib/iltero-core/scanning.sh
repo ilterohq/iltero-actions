@@ -14,7 +14,7 @@
 # =============================================================================
 
 # Run compliance scan using iltero CLI
-# Args: $1=path $2=stack_id $3=unit $4=environment $5=fail_on $6=run_id (optional) $7=frameworks (optional)
+# Args: $1=path $2=stack_id $3=unit $4=environment $5=fail_on $6=run_id (optional) $7=frameworks (optional) $8=config_path (optional)
 # Sets: SCAN_RUN_ID, SCAN_ID, SCAN_PASSED, SCAN_VIOLATIONS, SCAN_EXIT_CODE
 run_compliance_scan() {
     local scan_path="$1"
@@ -24,6 +24,7 @@ run_compliance_scan() {
     local fail_on="${5:-high}"
     local chain_run_id="${6:-}"
     local frameworks="${7:-}"
+    local config_path="${8:-}"
 
     local results_file
     local results_dir
@@ -66,6 +67,11 @@ run_compliance_scan() {
     # Pass frameworks if configured
     if [[ -n "$frameworks" ]]; then
         cmd+=(--frameworks "$frameworks")
+    fi
+
+    # Pass config path for stack config.yml update
+    if [[ -n "$config_path" ]]; then
+        cmd+=(--config-path "$config_path")
     fi
 
     # Note: Upload happens via Compliance API using scan_id from policy resolution
