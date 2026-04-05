@@ -15,9 +15,9 @@
 #     with:
 #       stacks_path: infra/stacks
 #     env:
-#       ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
 #       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
 #       ILTERO_REGISTRY_TOKEN: ${{ secrets.ILTERO_REGISTRY_TOKEN }}
+#       # ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 #
 # OIDC Usage (no secrets required):
 #   - uses: ilterohq/iltero-actions@v1
@@ -26,8 +26,7 @@
 #       oidc: 'true'
 #       stack_id: ${{ vars.ILTERO_STACK_ID }}
 #       org_id: ${{ vars.ILTERO_ORG_ID }}
-#     env:
-#       ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+#       # ILTERO_API_URL defaults to https://api.iltero.io
 #
 # For granular control, use individual actions:
 #   - ilterohq/iltero-actions/setup@v1
@@ -208,35 +207,278 @@ outputs:
 runs:
   using: composite
   steps:
+    # =========================================================================
+    # SETUP: Install all tools (inlined from setup/, actions/setup-toolchain/,
+    #        and actions/setup-iltero-cli/ to avoid nested composite action
+    #        path resolution issues when consumed remotely)
+    # =========================================================================
+
     # -------------------------------------------------------------------------
-    # Step 1: Setup Tools
+    # Install yq
     # -------------------------------------------------------------------------
-    - name: Setup Iltero
+    - name: Install yq
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        YQ_VERSION="v4.35.2"
+        ARCH=$(uname -m)
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+        case "$ARCH" in
+          x86_64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+        esac
+
+        curl -sSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_${OS}_${ARCH}" -o /tmp/yq 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        sudo mv /tmp/yq /usr/local/bin/yq
+        sudo chmod +x /usr/local/bin/yq
+
+        echo "✅ yq installed"
+
+    # -------------------------------------------------------------------------
+    # Install jq
+    # -------------------------------------------------------------------------
+    - name: Install jq
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if command -v jq &> /dev/null; then
+          exit 0
+        fi
+
+        JQ_VERSION="1.7"
+        ARCH=$(uname -m)
+
+        case "$ARCH" in
+          x86_64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+        esac
+
+        curl -sSL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-${ARCH}" -o /tmp/jq 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        sudo mv /tmp/jq /usr/local/bin/jq
+        sudo chmod +x /usr/local/bin/jq
+
+        echo "✅ jq installed"
+
+    # -------------------------------------------------------------------------
+    # Setup Terraform
+    # -------------------------------------------------------------------------
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+      with:
+        terraform_version: '1.5.7'
+        terraform_wrapper: false
+
+    # -------------------------------------------------------------------------
+    # Install Python dependencies
+    # -------------------------------------------------------------------------
+    - name: Install Python dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        pip3 install --user --break-system-packages pyyaml jsonschema 2>/dev/null || \
+          pip3 install --user pyyaml jsonschema
+        echo "✅ Python dependencies installed"
+
+    # -------------------------------------------------------------------------
+    # Setup Python
+    # -------------------------------------------------------------------------
+    - name: Setup Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      with:
+        python-version: '3.11'
+
+    # -------------------------------------------------------------------------
+    # Install Iltero CLI
+    # -------------------------------------------------------------------------
+    - name: Install Iltero CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+        pip install --quiet --upgrade iltero-cli 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
+        echo "✅ Iltero CLI installed"
+
+    # -------------------------------------------------------------------------
+    # Install Checkov
+    # -------------------------------------------------------------------------
+    - name: Install Checkov
+      shell: bash
+      run: |
+        set -euo pipefail
+        pip install --quiet --upgrade --break-system-packages checkov 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || \
+          pip install --quiet --upgrade checkov 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
+        echo "✅ Checkov installed"
+
+    # -------------------------------------------------------------------------
+    # Install OPA
+    # -------------------------------------------------------------------------
+    - name: Install OPA
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        OPA_VERSION="0.60.0"
+        ARCH=$(uname -m)
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+        case "$ARCH" in
+          x86_64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+        esac
+
+        curl -sSL -o /usr/local/bin/opa \
+          "https://openpolicyagent.org/downloads/v${OPA_VERSION}/opa_${OS}_${ARCH}_static" 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        chmod +x /usr/local/bin/opa
+
+        echo "✅ OPA installed"
+
+    # -------------------------------------------------------------------------
+    # Configure CLI (keyring, API URL, token masking)
+    # -------------------------------------------------------------------------
+    - name: Configure CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Disable keyring in CI (credentials come from env vars / secrets)
+        if [ "${CI:-false}" = "true" ]; then
+          echo "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring" >> "$GITHUB_ENV"
+          echo "ℹ️  CI detected: Using null keyring backend (credentials via env vars)"
+        fi
+
+        # Resolve API URL: existing env var > default
+        ILTERO_DEFAULT_API_URL="https://api.iltero.io"
+        if [ -n "${ILTERO_API_URL:-}" ]; then
+          RESOLVED_API_URL="$ILTERO_API_URL"
+        else
+          RESOLVED_API_URL="$ILTERO_DEFAULT_API_URL"
+        fi
+
+        # Resolve API token from env var
+        RESOLVED_TOKEN="${ILTERO_TOKEN:-}"
+
+        # Mask secrets in GitHub Actions logs
+        if [ -n "$RESOLVED_TOKEN" ]; then
+          echo "::add-mask::$RESOLVED_TOKEN"
+        fi
+        if [ -n "${ILTERO_REGISTRY_TOKEN:-}" ]; then
+          echo "::add-mask::$ILTERO_REGISTRY_TOKEN"
+        fi
+
+        # Set environment variables for subsequent steps (heredoc-safe)
+        {
+          echo "ILTERO_API_URL<<GHEOF"
+          echo "$RESOLVED_API_URL"
+          echo "GHEOF"
+        } >> "$GITHUB_ENV"
+        echo "ℹ️  API URL: $RESOLVED_API_URL"
+
+        if [ -n "$RESOLVED_TOKEN" ]; then
+          {
+            echo "ILTERO_TOKEN<<GHEOF"
+            echo "$RESOLVED_TOKEN"
+            echo "GHEOF"
+          } >> "$GITHUB_ENV"
+        fi
+
+    # -------------------------------------------------------------------------
+    # Verify Installation
+    # -------------------------------------------------------------------------
+    - name: Verify Installation
       id: setup
-      uses: ./setup
-      with:
-        install-checkov: 'true'
-        install-opa: 'true'
-        install-toolchain: 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        echo "✅ Installation Summary:"
+
+        CLI_VERSION=$(iltero --version 2>/dev/null || echo "not installed")
+        echo "   Iltero CLI: $CLI_VERSION"
+
+        CHECKOV_VERSION=$(checkov --version 2>/dev/null || echo "not installed")
+        echo "   Checkov: $CHECKOV_VERSION"
+
+        OPA_VERSION=$(opa version 2>/dev/null | head -1 || echo "not installed")
+        echo "   OPA: $OPA_VERSION"
+
+        TF_VERSION=$(terraform version -json 2>/dev/null | jq -r '.terraform_version' || echo "not installed")
+        echo "   Terraform: $TF_VERSION"
+
+    # =========================================================================
+    # OIDC AUTHENTICATION (optional, when oidc input is true)
+    # Inlined from setup-oidc/ to avoid nested composite action issues.
+    # =========================================================================
 
     # -------------------------------------------------------------------------
-    # Step 1.5: OIDC Authentication (if enabled)
+    # Verify CLI available for OIDC
     # -------------------------------------------------------------------------
-    - name: OIDC Authentication
+    - name: OIDC - Verify CLI Available
       if: inputs.oidc == 'true'
-      uses: ./setup-oidc
-      with:
-        stack-id: ${{ inputs.stack_id }}
-        org-id: ${{ inputs.org_id }}
-        registry-host: ${{ inputs.registry_host }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v iltero &>/dev/null; then
+          echo "::error::Iltero CLI not found."
+          exit 1
+        fi
 
     # -------------------------------------------------------------------------
-    # Step 2: Configure Registry (if token provided)
+    # Exchange OIDC token via CLI
     # -------------------------------------------------------------------------
+    - name: OIDC - Exchange Token
+      id: oidc_exchange
+      if: inputs.oidc == 'true'
+      shell: bash
+      env:
+        ILTERO_STACK_ID: ${{ inputs.stack_id }}
+        ILTERO_ORG_ID: ${{ inputs.org_id }}
+      run: |
+        set -euo pipefail
+
+        ARGS=(
+          --stack-id "$ILTERO_STACK_ID"
+          --org-id "$ILTERO_ORG_ID"
+          --format github-actions
+        )
+
+        # Use ILTERO_API_URL (already set by Configure CLI step, with default)
+        if [[ -n "${ILTERO_API_URL:-}" ]]; then
+          ARGS+=(--api-url "$ILTERO_API_URL")
+        fi
+
+        iltero auth oidc "${ARGS[@]}"
+
+    # =========================================================================
+    # CONFIGURE REGISTRY
+    # Inlined from configure-registry/ to avoid nested composite action issues.
+    # =========================================================================
     - name: Configure Registry
-      uses: ./configure-registry
-      with:
-        registry-host: ${{ inputs.registry_host }}
+      id: registry
+      shell: bash
+      env:
+        REGISTRY_HOST: ${{ inputs.registry_host }}
+      run: |
+        set -euo pipefail
+
+        # Source shared library
+        ACTION_DIR="${GITHUB_ACTION_PATH:-$(dirname "$0")/..}"
+        source "${ACTION_DIR}/scripts/lib/iltero-core/index.sh"
+
+        # Use OIDC registry token if available, otherwise use env var
+        TOKEN="${ILTERO_REGISTRY_TOKEN:-}"
+
+        if configure_registry "$TOKEN" "$REGISTRY_HOST"; then
+          if [[ -n "$TOKEN" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+        else
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
 
     # -------------------------------------------------------------------------
     # Step 3: Validate Inputs

@@ -41,7 +41,8 @@ inputs:
 
   api-url:
     description: |
-      Iltero API URL. If not provided, uses ILTERO_API_URL env var.
+      Iltero API URL. Defaults to https://api.iltero.io if not provided.
+      Can also be set via ILTERO_API_URL environment variable.
     required: false
     default: ''
 
@@ -107,11 +108,14 @@ runs:
           --format github-actions
         )
 
-        # Add API URL if provided via input or env var
+        # Add API URL: input > env var > default
+        ILTERO_DEFAULT_API_URL="https://api.iltero.io"
         if [[ -n "${INPUT_API_URL:-}" ]]; then
           ARGS+=(--api-url "$INPUT_API_URL")
         elif [[ -n "${ILTERO_API_URL:-}" ]]; then
           ARGS+=(--api-url "$ILTERO_API_URL")
+        else
+          ARGS+=(--api-url "$ILTERO_DEFAULT_API_URL")
         fi
 
         # Run OIDC exchange via CLI

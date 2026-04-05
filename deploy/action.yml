@@ -44,8 +44,8 @@
 #       unit: network-baseline
 #       environment: production
 #     env:
-#       ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
 #       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
+#       # ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 # =============================================================================
 
 name: Iltero Deploy

@@ -52,8 +52,8 @@ jobs:
           oidc: 'true'
           stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
-        env:
-          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+        # env:
+        #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 ```
 
 > **Fallback: Token-Based Auth** — If you cannot use OIDC, set `ILTERO_TOKEN` and
@@ -86,8 +86,8 @@ jobs:
         with:
           stack-id: ${{ vars.ILTERO_STACK_ID }}
           org-id: ${{ vars.ILTERO_ORG_ID }}
-        env:
-          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+        # env:
+        #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 
       # 3. Custom validation step
       - run: ./scripts/custom-validation.sh
@@ -202,8 +202,8 @@ jobs:
   with:
     stack-id: ${{ vars.ILTERO_STACK_ID }}
     org-id: ${{ vars.ILTERO_ORG_ID }}
-  env:
-    ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+  # env:
+  #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 ```
 
 Replaces long-lived `ILTERO_TOKEN` and `ILTERO_REGISTRY_TOKEN` secrets with ephemeral
@@ -216,7 +216,7 @@ and `permissions: { id-token: write }` on the workflow or job.
 |-------|----------|---------|-------------|
 | `stack-id` | **Yes** | - | Iltero Stack ID |
 | `org-id` | **Yes** | - | Iltero Organization ID |
-| `api-url` | No | `ILTERO_API_URL` env | Iltero API URL |
+| `api-url` | No | `https://api.iltero.io` | Iltero API URL (or `ILTERO_API_URL` env) |
 | `registry-host` | No | `registry.iltero.io` | Registry hostname |
 | `configure-registry` | No | `true` | Auto-configure Terraform registry credentials |
 
@@ -435,8 +435,8 @@ jobs:
         with:
           stack-id: ${{ vars.ILTERO_STACK_ID }}
           org-id: ${{ vars.ILTERO_ORG_ID }}
-        env:
-          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+        # env:
+        #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -453,8 +453,8 @@ jobs:
           check-drift: 'true'
           run-compliance: 'true'
           create-issue-on-drift: 'true'
-        env:
-          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+        # env:
+        #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 ```
 
 See [examples/monitoring.yml](examples/monitoring.yml) for a complete example with matrix strategy.
@@ -477,8 +477,8 @@ OIDC exchanges a GitHub Actions token for short-lived Iltero credentials. No sec
     oidc: 'true'
     stack_id: ${{ vars.ILTERO_STACK_ID }}
     org_id: ${{ vars.ILTERO_ORG_ID }}
-  env:
-    ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+  # env:
+  #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 ```
 
 **Granular actions** (setup + setup-oidc):
@@ -489,8 +489,8 @@ OIDC exchanges a GitHub Actions token for short-lived Iltero credentials. No sec
   with:
     stack-id: ${{ vars.ILTERO_STACK_ID }}
     org-id: ${{ vars.ILTERO_ORG_ID }}
-  env:
-    ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+  # env:
+  #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 ```
 
 Prerequisites:
@@ -689,8 +689,8 @@ jobs:
           oidc: 'true'
           stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
-        env:
-          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+        # env:
+        #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 
   deploy-production:
     needs: compliance
@@ -717,8 +717,8 @@ jobs:
           oidc: 'true'
           stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
-        env:
-          ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
+        # env:
+        #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 ```
 
 See [examples/with-approval.yml](examples/with-approval.yml) for a complete example.

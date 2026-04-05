@@ -45,7 +45,9 @@ inputs:
     required: false
     default: '1.5.7'
   api-url:
-    description: Iltero API URL
+    description: |
+      Iltero API URL. Defaults to https://api.iltero.io if not provided.
+      Can also be set via ILTERO_API_URL environment variable.
     required: false
     default: ''
   api-token:
@@ -68,15 +70,77 @@ runs:
   using: composite
   steps:
     # -------------------------------------------------------------------------
-    # Setup Infrastructure Toolchain (optional)
+    # Install yq (optional - when toolchain requested)
     # -------------------------------------------------------------------------
-    - name: Setup Infrastructure Toolchain
+    - name: Install yq
       if: inputs.install-toolchain == 'true'
-      uses: ./actions/setup-toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        YQ_VERSION="v4.35.2"
+        ARCH=$(uname -m)
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+        case "$ARCH" in
+          x86_64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+        esac
+
+        curl -sSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_${OS}_${ARCH}" -o /tmp/yq 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        sudo mv /tmp/yq /usr/local/bin/yq
+        sudo chmod +x /usr/local/bin/yq
+
+        echo "✅ yq installed"
+
+    # -------------------------------------------------------------------------
+    # Install jq (optional - when toolchain requested)
+    # -------------------------------------------------------------------------
+    - name: Install jq
+      if: inputs.install-toolchain == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if command -v jq &> /dev/null; then
+          exit 0
+        fi
+
+        JQ_VERSION="1.7"
+        ARCH=$(uname -m)
+
+        case "$ARCH" in
+          x86_64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+        esac
+
+        curl -sSL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-${ARCH}" -o /tmp/jq 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        sudo mv /tmp/jq /usr/local/bin/jq
+        sudo chmod +x /usr/local/bin/jq
+
+        echo "✅ jq installed"
+
+    # -------------------------------------------------------------------------
+    # Setup Terraform (optional - when toolchain requested)
+    # -------------------------------------------------------------------------
+    - name: Setup Terraform
+      if: inputs.install-toolchain == 'true'
+      uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
       with:
         terraform_version: ${{ inputs.terraform-version }}
-        install_yq: 'true'
-        install_jq: 'true'
+        terraform_wrapper: false
+
+    # -------------------------------------------------------------------------
+    # Install Python dependencies (optional - when toolchain requested)
+    # -------------------------------------------------------------------------
+    - name: Install Python dependencies
+      if: inputs.install-toolchain == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        pip3 install --user --break-system-packages pyyaml jsonschema 2>/dev/null || \
+          pip3 install --user pyyaml jsonschema
+        echo "✅ Python dependencies installed"
 
     # -------------------------------------------------------------------------
     # Setup Python
@@ -150,8 +214,8 @@ runs:
     - name: Configure CLI
       shell: bash
       env:
-        ILTERO_API_URL: ${{ inputs.api-url }}
-        ILTERO_TOKEN: ${{ inputs.api-token }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+        INPUT_API_TOKEN: ${{ inputs.api-token }}
       run: |
         set -euo pipefail
         # =================================================================
@@ -174,26 +238,38 @@ runs:
           echo "ℹ️  CI detected: Using null keyring backend (credentials via env vars)"
         fi
 
+        # Resolve API URL: input > existing env var > default
+        ILTERO_DEFAULT_API_URL="https://api.iltero.io"
+        if [ -n "$INPUT_API_URL" ]; then
+          RESOLVED_API_URL="$INPUT_API_URL"
+        elif [ -n "${ILTERO_API_URL:-}" ]; then
+          RESOLVED_API_URL="$ILTERO_API_URL"
+        else
+          RESOLVED_API_URL="$ILTERO_DEFAULT_API_URL"
+        fi
+
+        # Resolve API token: input > existing env var
+        RESOLVED_TOKEN="${INPUT_API_TOKEN:-${ILTERO_TOKEN:-}}"
+
         # Mask secrets in GitHub Actions logs
-        if [ -n "$ILTERO_TOKEN" ]; then
-          echo "::add-mask::$ILTERO_TOKEN"
+        if [ -n "$RESOLVED_TOKEN" ]; then
+          echo "::add-mask::$RESOLVED_TOKEN"
         fi
         if [ -n "${ILTERO_REGISTRY_TOKEN:-}" ]; then
           echo "::add-mask::$ILTERO_REGISTRY_TOKEN"
         fi
 
         # Set environment variables for subsequent steps (heredoc-safe)
-        if [ -n "$ILTERO_API_URL" ]; then
-          {
-            echo "ILTERO_API_URL<<GHEOF"
-            echo "$ILTERO_API_URL"
-            echo "GHEOF"
-          } >> "$GITHUB_ENV"
-        fi
-        if [ -n "$ILTERO_TOKEN" ]; then
+        {
+          echo "ILTERO_API_URL<<GHEOF"
+          echo "$RESOLVED_API_URL"
+          echo "GHEOF"
+        } >> "$GITHUB_ENV"
+
+        if [ -n "$RESOLVED_TOKEN" ]; then
           {
             echo "ILTERO_TOKEN<<GHEOF"
-            echo "$ILTERO_TOKEN"
+            echo "$RESOLVED_TOKEN"
             echo "GHEOF"
           } >> "$GITHUB_ENV"
         fi
