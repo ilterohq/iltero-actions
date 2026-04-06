@@ -37,7 +37,7 @@ jobs:
   iltero:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -73,7 +73,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # 1. Setup tools
       - uses: ilterohq/iltero-actions/setup@v1
@@ -427,7 +427,7 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: ilterohq/iltero-actions/setup@v1
 
@@ -678,7 +678,7 @@ jobs:
       approval_id: ${{ steps.pipeline.outputs.approval_id }}
       deployment_ready: ${{ steps.pipeline.outputs.deployment_ready }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
       - uses: ilterohq/iltero-actions@v1
@@ -705,7 +705,7 @@ jobs:
       url: https://production.example.com
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # Deploy using pipeline action with chained run_id
       - uses: ilterohq/iltero-actions@v1
