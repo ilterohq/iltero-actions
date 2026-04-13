@@ -496,12 +496,17 @@ runs:
         CONFIG_PATH="$INPUT_CONFIG_PATH"
 
         # Detect pipeline mode
-        if [[ -n "$STACKS_PATH" ]] && [[ -d "$STACKS_PATH" ]]; then
+        if [[ -n "$STACKS_PATH" ]]; then
           PIPELINE_MODE="greenfield"
           echo "pipeline_mode=greenfield" >> $GITHUB_OUTPUT
           echo "config_path=" >> $GITHUB_OUTPUT
-          echo "✅ Inputs validated (greenfield)"
-          echo "   Stacks path: $STACKS_PATH"
+          if [[ -d "$STACKS_PATH" ]]; then
+            echo "✅ Inputs validated (greenfield)"
+            echo "   Stacks path: $STACKS_PATH"
+          else
+            echo "✅ Inputs validated (greenfield — stacks directory not yet present, will be treated as no stacks to process)"
+            echo "   Stacks path: $STACKS_PATH"
+          fi
         elif [[ -f "$CONFIG_PATH" ]]; then
           PIPELINE_MODE="brownfield"
           echo "pipeline_mode=brownfield" >> $GITHUB_OUTPUT
@@ -509,7 +514,7 @@ runs:
           echo "✅ Inputs validated (brownfield)"
           echo "   Config path: $CONFIG_PATH"
         else
-          echo "::error::Neither stacks directory ($STACKS_PATH) nor brownfield config ($CONFIG_PATH) found"
+          echo "::error::Neither stacks_path input nor brownfield config ($CONFIG_PATH) provided"
           exit 1
         fi
 
