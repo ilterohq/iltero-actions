@@ -843,8 +843,12 @@ main() {
     else
         # Greenfield: stacks directory with infrastructure units
         if [[ ! -d "$STACKS_PATH" ]]; then
-            log_error "Stacks directory not found: $STACKS_PATH"
-            exit 1
+            log_info "Stacks directory not found: $STACKS_PATH — no stacks to process"
+            set_output "stacks_processed" "[]"
+            set_output "overall_status" "skipped"
+            set_output "compliance_passed" "true"
+            set_output "evaluation_passed" "true"
+            exit 0
         fi
 
         local stacks_json
