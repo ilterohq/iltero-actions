@@ -76,13 +76,13 @@ jobs:
           persist-credentials: false
 
       # Configure AWS credentials (required for terraform plan)
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
       # Run compliance pipeline (does NOT deploy)
-      - uses: ilterohq/iltero-actions@v1
+      - uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         id: pipeline
         with:
           stacks_path: infra/stacks
@@ -116,7 +116,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -149,7 +149,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -203,7 +203,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
           aws-region: ${{ vars.AWS_REGION }}

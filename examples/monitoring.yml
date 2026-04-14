@@ -52,11 +52,11 @@ jobs:
 
       # Setup Iltero CLI (required before monitor action)
       - name: Setup Iltero
-        uses: ilterohq/iltero-actions/setup@v1
+        uses: ilterohq/iltero-actions/setup@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
 
       # OIDC authentication for Iltero API
       - name: Iltero OIDC Authentication
-        uses: ilterohq/iltero-actions/setup-oidc@v1
+        uses: ilterohq/iltero-actions/setup-oidc@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stack-id: ${{ vars.ILTERO_STACK_ID }}
           org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -65,14 +65,14 @@ jobs:
 
       # AWS credentials for Terraform state access
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
       # Run monitoring checks
       - name: Monitor ${{ matrix.unit }}
-        uses: ilterohq/iltero-actions/monitor@v1
+        uses: ilterohq/iltero-actions/monitor@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           path: ${{ matrix.path }}
           stack-id: ${{ vars.ILTERO_STACK_ID }}

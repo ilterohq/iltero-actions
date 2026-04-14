@@ -54,13 +54,15 @@ jobs:
     steps:
       # SECURITY: Validate inputs before processing
       - name: Validate Inputs
+        env:
+          INPUT_STACK: ${{ inputs.stack }}
+          INPUT_SKIP_COMPLIANCE: ${{ inputs.skip_compliance }}
         run: |
-          STACK="${{ inputs.stack }}"
-          if [[ -n "$STACK" ]] && ! [[ "$STACK" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+          if [[ -n "$INPUT_STACK" ]] && ! [[ "$INPUT_STACK" =~ ^[a-zA-Z0-9_-]+$ ]]; then
             echo "::error::Invalid stack name. Only alphanumeric, hyphens, underscores allowed."
             exit 1
           fi
-          if [[ "${{ inputs.skip_compliance }}" == "true" ]]; then
+          if [[ "$INPUT_SKIP_COMPLIANCE" == "true" ]]; then
             echo "::warning::Compliance checks will be skipped. This should only be used in emergencies."
           fi
 
@@ -71,13 +73,13 @@ jobs:
           persist-credentials: false
 
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Run Iltero Pipeline
-        uses: ilterohq/iltero-actions@v1
+        uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stacks_path: infra/stacks
           stack: ${{ inputs.stack }}
