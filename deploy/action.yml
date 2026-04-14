@@ -206,8 +206,8 @@ runs:
                 environment: environment
               });
 
-              console.log(`✅ GitHub Deployment created for ${unitName}`);
+              console.log(`[PASS] GitHub Deployment created for ${unitName}`);
             }
           } catch (error) {
-            console.log(`⚠️ Could not create GitHub Deployment: ${error.message}`);
+            console.log(`[WARN] Could not create GitHub Deployment: ${error.message}`);
           }

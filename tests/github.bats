@@ -235,7 +235,7 @@ teardown() {
     write_pipeline_summary "$results"
 
     # Violations summary table
-    assert_file_contains "$GITHUB_STEP_SUMMARY" "Compliance Scan | 2"
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "Static Analysis | 2"
     assert_file_contains "$GITHUB_STEP_SUMMARY" "Plan Evaluation | 4"
     # Use grep -F for fixed string match (** is invalid regex)
     grep -qF '**Total** | **6**' "$GITHUB_STEP_SUMMARY"
@@ -260,7 +260,7 @@ teardown() {
 
     write_pipeline_summary "$results"
 
-    assert_file_contains "$GITHUB_STEP_SUMMARY" "All checks passed"
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "Result: Passed"
 }
 
 @test "write_pipeline_summary v1 legacy format still works" {
@@ -279,6 +279,6 @@ teardown() {
 
     write_pipeline_summary "$results"
 
-    assert_file_contains "$GITHUB_STEP_SUMMARY" "All checks passed"
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "Result: Passed"
     assert_file_contains "$GITHUB_STEP_SUMMARY" "my-stack"
 }

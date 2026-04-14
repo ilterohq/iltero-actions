@@ -59,7 +59,7 @@ run_plan_evaluation() {
     PLAN_URL=""
     EVAL_MODE="full"
 
-    log_group "📋 Plan Evaluation: ${unit_name}"
+    log_group "Plan Evaluation: ${unit_name}"
 
     # Use existing plan or generate one
     if [[ -n "$existing_plan" ]] && [[ -f "$existing_plan" ]]; then
@@ -88,7 +88,6 @@ run_plan_evaluation() {
         # =====================================================================
         # Step 2: Initialize terraform (always with backend for this unit's state)
         # =====================================================================
-        log_info "Running terraform init..."
         local init_output
         set +e
         init_output=$(terraform init -input=false 2>&1)
@@ -96,18 +95,18 @@ run_plan_evaluation() {
         set -e
 
         if [[ $init_exit -ne 0 ]]; then
-            log_error "Terraform init failed"
-            log_info "--- Terraform Init Output ---"
-            echo "$init_output"
-            log_info "--- End Terraform Init Output ---"
+            log_step "terraform init" "FAILED"
+            echo ""
+            echo "$init_output" | grep -A 5 "Error:" | head -30 || echo "$init_output" | tail -20
+            log_result "FAIL" "Plan evaluation aborted: terraform init failed for ${unit_name}"
             update_unit_remote_state_status "$unit_name" "unavailable" "init_failed"
             popd > /dev/null
             log_group_end
             EVAL_EXIT_CODE=2
             return 1
         fi
-        
-        log_info "Terraform initialized successfully"
+
+        log_step "terraform init" "ok"
 
         # Extract S3 backend config from terraform's local state (works for all stack types)
         local s3_bucket="" s3_key_prefix="" s3_region=""
@@ -167,7 +166,7 @@ run_plan_evaluation() {
         fi
 
         # Run plan (capture output, only show on failure)
-        log_info "Running terraform plan..."
+        # Run terraform plan
         local plan_output
         set +e
         plan_output=$(terraform plan "${plan_args[@]}" 2>&1)
@@ -177,22 +176,17 @@ run_plan_evaluation() {
         if [[ $plan_exit -ne 0 ]] || [[ ! -f "tfplan" ]]; then
             # Check if this is a remote state reference error
             if echo "$plan_output" | grep -qE "Unable to find remote state|No stored state was found|Error loading state"; then
-                log_warning "⚠️  Remote state reference error in ${unit_name}"
-                log_info "This unit references remote state from units that haven't been deployed yet"
-                log_info "Hint: Ensure 'enable_remote_state_dependencies' variable exists and for_each pattern is used"
+                log_warning "Remote state unavailable for ${unit_name} (upstream dependency not deployed)"
                 update_unit_remote_state_status "$unit_name" "unavailable" "remote_state_reference_error"
             else
                 update_unit_remote_state_status "$unit_name" "unavailable" "plan_failed"
             fi
 
-            log_error "Terraform plan failed for ${unit_name}"
-
-            # Extract and show only error lines (not the full plan output)
-            # Note: Sensitive data should be passed via GitHub secrets which are auto-masked
-            log_info "--- Terraform Plan Errors ---"
+            log_step "terraform plan" "FAILED"
+            echo ""
             echo "$plan_output" | grep -A 5 "Error:" | head -50 || echo "$plan_output" | tail -30
-            log_info "--- End Terraform Plan Errors ---"
             
+            log_result "FAIL" "Plan evaluation aborted: terraform plan failed for ${unit_name}"
             popd > /dev/null
             log_group_end
             EVAL_EXIT_CODE=2  # Infrastructure error (not policy violation)
@@ -200,7 +194,13 @@ run_plan_evaluation() {
             return 1
         fi
 
-        log_info "Terraform plan completed successfully"
+        local resource_count
+        resource_count=$(echo "$state_output" 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$has_backend_state" == "true" ]]; then
+            log_step "terraform plan" "ok" "${resource_count} existing resources"
+        else
+            log_step "terraform plan" "ok" "no existing state"
+        fi
         
         # Note: Unit state availability was already determined by `terraform state list`
         # after init - we don't update it here based on plan success
@@ -357,35 +357,46 @@ run_plan_evaluation() {
         esac
         
         if [[ -n "$EVAL_SCAN_ID" ]]; then
-            log_info "Scan ID (for apply phase): $EVAL_SCAN_ID"
+            log_info "Scan ID: $EVAL_SCAN_ID"
         fi
-        
-        # Log summary for visibility
-        local summary
-        summary=$(jq -r '.summary // empty' "$results_file" 2>/dev/null || echo "")
-        if [[ -n "$summary" ]]; then
-            log_info "Evaluation summary: $(echo "$summary" | jq -c .)"
-        fi
-        log_info "Violations at '$fail_on' severity or above: $EVAL_VIOLATIONS"
+
+        # Structured policy results
+        local total_evaluated passed_count failed_count
+        total_evaluated=$(jq -r '.summary.total // 0' "$results_file" 2>/dev/null || echo "0")
+        passed_count=$(jq -r '.summary.passed // 0' "$results_file" 2>/dev/null || echo "0")
+        failed_count=$(jq -r '.summary.failed // 0' "$results_file" 2>/dev/null || echo "0")
+
+        log_info "Mode: ${EVAL_MODE}"
+        log_info "Threshold: ${fail_on}"
+        echo ""
+        log_info "Policy results: ${total_evaluated} evaluated, ${passed_count} passed, ${failed_count} failed"
+        log_info "  critical  ${critical}"
+        log_info "  high      ${high}"
+        log_info "  medium    ${medium}"
+        log_info "  low       ${low}"
+        echo ""
     else
         log_warning "Results file not found: $results_file"
-        log_warning "Cannot extract violation count or scan metadata"
     fi
 
     if [[ $EVAL_EXIT_CODE -eq 0 ]]; then
         EVAL_PASSED="true"
-        log_success "Plan evaluation passed for ${unit_name}"
+        if [[ "$EVAL_MODE" == "best_effort" ]]; then
+            log_result "PASS" "Plan evaluation passed (best-effort mode, ${EVAL_VIOLATIONS} violations)"
+        else
+            log_result "PASS" "Plan evaluation passed (${EVAL_VIOLATIONS} policy violations)"
+        fi
     else
         EVAL_PASSED="false"
         if [[ "$EVAL_VIOLATIONS" -gt 0 ]]; then
-            log_error "Plan evaluation failed for ${unit_name} ($EVAL_VIOLATIONS violations above threshold)"
+            log_result "FAIL" "${EVAL_VIOLATIONS} policy violations at or above '${fail_on}' threshold"
         else
-            log_error "Plan evaluation failed for ${unit_name} (exit code: $EVAL_EXIT_CODE)"
+            log_result "FAIL" "Plan evaluation failed for ${unit_name} (exit code: ${EVAL_EXIT_CODE})"
         fi
     fi
 
     if [[ -n "$APPROVAL_ID" ]]; then
-        log_info "Approval created: $APPROVAL_ID"
+        log_info "Approval ID: $APPROVAL_ID"
     fi
 
     log_group_end

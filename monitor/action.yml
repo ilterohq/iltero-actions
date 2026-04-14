@@ -138,7 +138,7 @@ runs:
       run: |
         set -euo pipefail
 
-        echo "::group::🔍 Validating unit structure: ${UNIT_NAME}"
+        echo "::group::Validate: ${UNIT_NAME}"
 
         if [[ ! -d "$UNIT_PATH" ]]; then
           echo "::error::Unit directory not found: $UNIT_PATH"
@@ -169,7 +169,7 @@ runs:
           echo "backend-config=" >> $GITHUB_OUTPUT
         fi
 
-        echo "✅ Unit structure validated"
+        echo "[PASS] Unit structure validated"
         echo "::endgroup::"
 
     # -------------------------------------------------------------------------
@@ -184,7 +184,7 @@ runs:
       run: |
         set -euo pipefail
 
-        echo "::group::⚙️ Terraform Init for monitoring"
+        echo "::group::Terraform Init"
 
         if [[ -n "$BACKEND_CONFIG" ]] && [[ -f "$BACKEND_CONFIG" ]]; then
           terraform init -backend-config="$BACKEND_CONFIG" -input=false
@@ -192,7 +192,7 @@ runs:
           terraform init -input=false
         fi
 
-        echo "✅ Terraform initialized"
+        echo "[PASS] Terraform initialized"
         echo "::endgroup::"
 
     # -------------------------------------------------------------------------
@@ -208,7 +208,7 @@ runs:
       run: |
         set -euo pipefail
 
-        echo "::group::🔄 Checking for configuration drift"
+        echo "::group::Drift Detection"
 
         # Refresh state to get current actual state
         terraform refresh -input=false || true
@@ -225,7 +225,7 @@ runs:
           echo "::warning::Configuration drift detected in ${UNIT_NAME}"
           DRIFT_DETECTED="true"
         elif [[ "$PLAN_EXIT" == "0" ]]; then
-          echo "✅ No drift detected"
+          echo "[PASS] No drift detected"
         else
           echo "::warning::Terraform plan failed (exit code: $PLAN_EXIT)"
         fi
@@ -257,7 +257,7 @@ runs:
       run: |
         set -euo pipefail
 
-        echo "::group::🛡️ Runtime Compliance Scan"
+        echo "::group::Runtime Compliance Scan"
 
         # Skip if CLI not available or API not configured
         if ! command -v iltero &> /dev/null; then
@@ -286,7 +286,7 @@ runs:
         set -e
 
         if [[ $EXIT_CODE -eq 0 ]]; then
-          echo "✅ Runtime compliance scan passed"
+          echo "[PASS] Runtime compliance scan passed"
           echo "passed=true" >> $GITHUB_OUTPUT
         else
           echo "::warning::Runtime compliance scan found issues (exit code: $EXIT_CODE)"
@@ -309,7 +309,7 @@ runs:
       run: |
         set -euo pipefail
 
-        echo "::group::❤️ Health Checks"
+        echo "::group::Health Checks"
 
         if [[ ! -f "$OUTPUTS_FILE" ]]; then
           echo "::warning::No outputs file found"
@@ -345,7 +345,7 @@ runs:
           fi
 
           if [[ "$HTTP_STATUS" -ge 200 ]] && [[ "$HTTP_STATUS" -lt 400 ]]; then
-            echo "✅ Healthy: $endpoint (HTTP $HTTP_STATUS)"
+            echo "[PASS] Healthy: $endpoint (HTTP $HTTP_STATUS)"
           else
             echo "::warning::Unhealthy: $endpoint (HTTP $HTTP_STATUS)"
             ALL_HEALTHY=false
@@ -377,7 +377,7 @@ runs:
       run: |
         set -euo pipefail
 
-        echo "::group::📊 Submit Metrics"
+        echo "::group::Submit Metrics"
 
         # Build CLI command args
         CLI_ARGS=(
@@ -408,7 +408,7 @@ runs:
 
         # Use CLI command for proper retry logic and auth handling
         if iltero monitor submit-metrics "${CLI_ARGS[@]}"; then
-          echo "✅ Metrics submitted successfully"
+          echo "[PASS] Metrics submitted successfully"
         else
           echo "::warning::Failed to submit metrics via CLI"
         fi

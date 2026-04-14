@@ -58,47 +58,40 @@ fi
 # Fallback: simple summary table (no per-unit data)
 # -------------------------------------------------------------------------
 
-# Determine status emoji and color
+# Determine status text
 case "$STATUS" in
     success)
-        STATUS_EMOJI="✅"
-        STATUS_TEXT="Success"
+        STATUS_TEXT="Passed"
         ;;
     compliance_failed)
-        STATUS_EMOJI="❌"
-        STATUS_TEXT="Compliance Failed"
+        STATUS_TEXT="Failed (static analysis)"
         ;;
     evaluation_failed)
-        STATUS_EMOJI="❌"
-        STATUS_TEXT="Evaluation Failed"
+        STATUS_TEXT="Failed (plan evaluation)"
         ;;
     deploy_failed)
-        STATUS_EMOJI="❌"
-        STATUS_TEXT="Deployment Failed"
+        STATUS_TEXT="Failed (deploy)"
         ;;
     skipped)
-        STATUS_EMOJI="⏭️"
         STATUS_TEXT="Skipped"
         ;;
     *)
-        STATUS_EMOJI="❓"
         STATUS_TEXT="Unknown"
         ;;
 esac
 
 # Generate summary
 cat >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}" << EOF
-# $STATUS_EMOJI Iltero Infrastructure Pipeline
+# Iltero Pipeline — $ENV
+
+**Result: $STATUS_TEXT** | $STACK_COUNT stack(s) processed
 
 ## Summary
 
-| Metric | Value |
-|--------|-------|
-| **Status** | $STATUS_TEXT |
-| **Environment** | \`$ENV\` |
-| **Stacks Processed** | $STACK_COUNT |
-| **Compliance** | $([ "$COMPLIANCE" == "true" ] && echo "✅ Passed" || echo "❌ Failed") |
-| **Evaluation** | $([ "$EVALUATION" == "true" ] && echo "✅ Passed" || echo "❌ Failed") |
+| Phase | Status |
+|-------|--------|
+| **Static Analysis** | $([ "$COMPLIANCE" == "true" ] && echo "Pass" || echo "Fail") |
+| **Plan Evaluation** | $([ "$EVALUATION" == "true" ] && echo "Pass" || echo "Fail") |
 
 EOF
 

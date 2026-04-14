@@ -4,6 +4,15 @@
 # =============================================================================
 # Provides consistent logging functions for the pipeline scripts.
 # Uses GitHub Actions workflow commands for proper formatting.
+#
+# Log levels:
+#   log_info     - Informational (indented, no prefix)
+#   log_success  - Pass/success result ([PASS] prefix)
+#   log_warning  - Non-fatal issue ([WARN] prefix, GA annotation)
+#   log_error    - Error ([FAIL] prefix, GA annotation)
+#   log_debug    - Debug detail ([DEBUG] prefix, only when DEBUG=true)
+#   log_step     - Compact step status (e.g., "terraform init ... ok")
+#   log_result   - Final verdict line with tag (e.g., "[PASS] message")
 # =============================================================================
 
 # Colors (only used when not in GitHub Actions)
@@ -11,6 +20,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
+BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # =============================================================================
@@ -20,18 +30,18 @@ NC='\033[0m' # No Color
 log_info() {
     local message="$1"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-        echo "ℹ️  $message"
+        echo "  $message"
     else
-        echo -e "${BLUE}ℹ️  $message${NC}"
+        echo -e "${BLUE}  $message${NC}"
     fi
 }
 
 log_success() {
     local message="$1"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-        echo "✅ $message"
+        echo "[PASS] $message"
     else
-        echo -e "${GREEN}✅ $message${NC}"
+        echo -e "${GREEN}[PASS] $message${NC}"
     fi
 }
 
@@ -40,7 +50,7 @@ log_warning() {
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
         echo "::warning::$message"
     else
-        echo -e "${YELLOW}⚠️  $message${NC}"
+        echo -e "${YELLOW}[WARN] $message${NC}"
     fi
 }
 
@@ -49,7 +59,7 @@ log_error() {
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
         echo "::error::$message"
     else
-        echo -e "${RED}❌ $message${NC}"
+        echo -e "${RED}[FAIL] $message${NC}"
     fi
 }
 
@@ -59,7 +69,38 @@ log_debug() {
         if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
             echo "::debug::$message"
         else
-            echo "🔍 DEBUG: $message"
+            echo "[DEBUG] $message"
+        fi
+    fi
+}
+
+# Compact step status line (e.g., "  terraform init ... ok")
+log_step() {
+    local step="$1"
+    local status="$2"
+    local detail="${3:-}"
+    if [[ -n "$detail" ]]; then
+        echo "  ${step} ... ${status} (${detail})"
+    else
+        echo "  ${step} ... ${status}"
+    fi
+}
+
+# Final verdict line with pass/fail tag
+log_result() {
+    local status="$1"  # "PASS" or "FAIL"
+    local message="$2"
+    if [[ "$status" == "PASS" ]]; then
+        if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+            echo "[PASS] ${message}"
+        else
+            echo -e "${GREEN}[PASS] ${message}${NC}"
+        fi
+    else
+        if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+            echo "[FAIL] ${message}"
+        else
+            echo -e "${RED}[FAIL] ${message}${NC}"
         fi
     fi
 }
@@ -74,9 +115,7 @@ log_group() {
         echo "::group::$title"
     else
         echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "$title"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "--- ${title} $(printf '%0.s-' $(seq 1 $((60 - ${#title}))))"
     fi
 }
 
@@ -89,15 +128,15 @@ log_group_end() {
 }
 
 # =============================================================================
-# Banner Function
+# Banner Function (single-line pipeline header)
 # =============================================================================
 
 log_banner() {
     local title="$1"
     echo ""
-    echo "╔════════════════════════════════════════════════════════════╗"
-    printf "║ %-58s ║\n" "$title"
-    echo "╚════════════════════════════════════════════════════════════╝"
+    echo "==============================================================================="
+    echo "$title"
+    echo "==============================================================================="
     echo ""
 }
 
@@ -119,7 +158,7 @@ log_mask() {
 set_output() {
     local name="$1"
     local value="$2"
-    
+
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         # Check if value contains newlines - use heredoc format if so
         if [[ "$value" == *$'\n'* ]]; then

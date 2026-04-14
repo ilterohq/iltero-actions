@@ -52,7 +52,7 @@ write_summary() {
 # Args: $1=scan_results_json (array of scan results)
 write_scan_summary() {
     local results_json="$1"
-    local title="${2:-Compliance Scan Results}"
+    local title="${2:-Static Analysis Results}"
     
     [[ -z "${GITHUB_STEP_SUMMARY:-}" ]] && return 0
     
@@ -64,7 +64,7 @@ write_scan_summary() {
     # Parse each result and add row
     local rows
     rows=$(echo "$results_json" | jq -r '.[] | 
-        "\(.unit_name // "unknown") | \(if .passed then "✅ Pass" else "❌ Fail" end) | \(.high // 0) | \(.medium // 0) | \(.low // 0) | `\(.scan_id // "N/A")`"')
+        "\(.unit_name // "unknown") | \(if .passed then "Pass" else "Fail" end) | \(.high // 0) | \(.medium // 0) | \(.low // 0) | `\(.scan_id // "N/A")`"')
     
     while IFS= read -r row; do
         summary+="| $row |\n"
@@ -96,7 +96,7 @@ write_evaluation_summary() {
     
     local rows
     rows=$(echo "$results_json" | jq -r '.[] | 
-        "\(.unit_name // "unknown") | \(if .passed then "✅ Pass" else "❌ Fail" end) | +\(.additions // 0)/-\(.deletions // 0)/~\(.changes // 0) | \(.violations // 0) | `\(.approval_id // "N/A")`"')
+        "\(.unit_name // "unknown") | \(if .passed then "Pass" else "Fail" end) | +\(.additions // 0)/-\(.deletions // 0)/~\(.changes // 0) | \(.violations // 0) | `\(.approval_id // "N/A")`"')
     
     while IFS= read -r row; do
         summary+="| $row |\n"
@@ -120,7 +120,7 @@ write_deployment_summary() {
     
     local rows
     rows=$(echo "$results_json" | jq -r '.[] | 
-        "\(.unit_name // "unknown") | \(if .success then "✅ Success" else "❌ Failed" end) | \(.resource_count // 0) | \(.duration // "N/A")"')
+        "\(.unit_name // "unknown") | \(if .success then "Pass" else "Fail" end) | \(.resource_count // 0) | \(.duration // "N/A")"')
     
     while IFS= read -r row; do
         summary+="| $row |\n"
@@ -161,30 +161,32 @@ _write_pipeline_summary_v1() {
     failed_count=$(echo "$results_json" | jq '[.units[] | select(.passed == false or .success == false)] | length')
 
     local overall_status
+    local environment
+    environment=$(echo "$results_json" | jq -r '.environment // "unknown"')
+
     if [[ "$failed_count" -eq 0 ]]; then
-        overall_status="✅ All checks passed"
+        overall_status="Passed"
     else
-        overall_status="❌ $failed_count unit(s) failed"
+        overall_status="Failed"
     fi
 
-    local summary=""
-    summary+="# Iltero Pipeline Summary\n\n"
-    summary+="**Status:** $overall_status\n\n"
-
-    # Stack info
-    local stack_name environment
+    local stack_name
     stack_name=$(echo "$results_json" | jq -r '.stack // "unknown"')
-    environment=$(echo "$results_json" | jq -r '.environment // "unknown"')
-    summary+="**Stack:** $stack_name | **Environment:** $environment\n\n"
+    local unit_count
+    unit_count=$(echo "$results_json" | jq '.units | length')
+
+    local summary=""
+    summary+="# Iltero Pipeline — ${environment}\n\n"
+    summary+="**Result: ${overall_status}** | ${unit_count} units | Stack: ${stack_name}\n\n"
 
     # Unit details table
     summary+="## Unit Results\n\n"
-    summary+="| Unit | Scan | Evaluation | Deploy |\n"
-    summary+="|------|------|------------|--------|\n"
+    summary+="| Unit | Static Analysis | Plan Evaluation | Deploy |\n"
+    summary+="|------|-----------------|-----------------|--------|\n"
 
     local rows
     rows=$(echo "$results_json" | jq -r '.units[] |
-        "\(.name) | \(if .scan.passed then "✅" elif .scan.skipped then "⏭️" else "❌" end) | \(if .evaluation.passed then "✅" elif .evaluation.skipped then "⏭️" else "❌" end) | \(if .deploy.success then "✅" elif .deploy.skipped then "⏭️" else "❌" end)"')
+        "\(.name) | \(if .scan.passed then "Pass" elif .scan.skipped then "--" else "Fail" end) | \(if .evaluation.passed then "Pass" elif .evaluation.skipped then "--" else "Fail" end) | \(if .deploy.success then "Pass" elif .deploy.skipped then "--" else "Fail" end)"')
 
     while IFS= read -r row; do
         summary+="| $row |\n"
@@ -195,10 +197,9 @@ _write_pipeline_summary_v1() {
     total_violations=$(echo "$results_json" | jq '[.units[].scan.violations // 0, .units[].evaluation.violations // 0] | add // 0')
 
     if [[ "$total_violations" -gt 0 ]]; then
-        summary+="\n### ⚠️ Violations Summary\n\n"
+        summary+="\n### Violations\n\n"
         summary+="Total violations found: **$total_violations**\n\n"
 
-        # List units with violations
         local units_with_violations
         units_with_violations=$(echo "$results_json" | jq -r '.units[] | select((.scan.violations // 0) > 0 or (.evaluation.violations // 0) > 0) | "- **\(.name)**: \((.scan.violations // 0) + (.evaluation.violations // 0)) violation(s)"')
         summary+="$units_with_violations\n"
@@ -222,53 +223,51 @@ _write_pipeline_summary_v2() {
         (.evaluation.passed == false and .evaluation.skipped != true)
     )] | length')
 
+    local environment stacks_csv
+    stacks_csv=$(echo "$results_json" | jq -r '.stacks // [] | join(", ")')
+    environment=$(echo "$results_json" | jq -r '.environment // "unknown"')
+
     local overall_status
     if [[ "$failed_count" -eq 0 ]]; then
-        overall_status="✅ All checks passed"
+        overall_status="Passed"
     else
-        overall_status="❌ $failed_count of $unit_count unit(s) failed"
+        overall_status="Failed"
     fi
 
     local summary=""
-    summary+="# Iltero Pipeline Summary\n\n"
-    summary+="**Status:** $overall_status\n\n"
-
-    # Stack + environment info
-    local stacks_csv environment
-    stacks_csv=$(echo "$results_json" | jq -r '.stacks // [] | join(", ")')
-    environment=$(echo "$results_json" | jq -r '.environment // "unknown"')
-    summary+="**Stacks:** $stacks_csv | **Environment:** $environment\n\n"
+    summary+="# Iltero Pipeline — ${environment}\n\n"
+    summary+="**Result: ${overall_status}** | ${unit_count} units | Stacks: ${stacks_csv}\n\n"
 
     # Unit details table with eval mode column
     summary+="## Unit Results\n\n"
-    summary+="| Unit | Scan | Evaluation | Eval Mode | Deploy |\n"
-    summary+="|------|------|------------|-----------|--------|\n"
+    summary+="| Unit | Static Analysis | Plan Evaluation | Eval Mode | Deploy |\n"
+    summary+="|------|-----------------|-----------------|-----------|--------|\n"
 
     local has_best_effort=false
     local rows
     rows=$(echo "$unit_results" | jq -r '.[] |
         "\(.unit) | \(
-            if .scan == null then "—"
-            elif .scan.skipped then "⏭️ Skip"
-            elif .scan.passed then "✅ Pass"
-            else "❌ Fail (\(.scan.violations // 0))"
+            if .scan == null then "--"
+            elif .scan.skipped then "Skip"
+            elif .scan.passed then "Pass"
+            else "Fail (\(.scan.violations // 0))"
             end
         ) | \(
-            if .evaluation == null then "—"
-            elif .evaluation.skipped then "⏭️ Skip"
-            elif .evaluation.passed then "✅ Pass"
-            else "❌ Fail (\(.evaluation.violations // 0))"
+            if .evaluation == null then "--"
+            elif .evaluation.skipped then "Skip"
+            elif .evaluation.passed then "Pass"
+            else "Fail (\(.evaluation.violations // 0))"
             end
         ) | \(
-            if .evaluation == null then "—"
-            elif .evaluation.skipped then "—"
+            if .evaluation == null then "--"
+            elif .evaluation.skipped then "--"
             else (.evaluation.eval_mode // "full")
             end
         ) | \(
-            if .deploy == null then "—"
-            elif .deploy.skipped then "⏭️ Skip"
-            elif .deploy.success then "✅ Success"
-            else "❌ Failed"
+            if .deploy == null then "--"
+            elif .deploy.skipped then "Skip"
+            elif .deploy.success then "Pass"
+            else "Fail"
             end
         )"')
 
@@ -292,10 +291,10 @@ _write_pipeline_summary_v2() {
     total_violations=$((total_scan_violations + total_eval_violations))
 
     if [[ "$total_violations" -gt 0 ]]; then
-        summary+="\n### ⚠️ Violations Summary\n\n"
+        summary+="\n### Violations\n\n"
         summary+="| Phase | Violations |\n"
         summary+="|-------|------------|\n"
-        summary+="| Compliance Scan | $total_scan_violations |\n"
+        summary+="| Static Analysis | $total_scan_violations |\n"
         summary+="| Plan Evaluation | $total_eval_violations |\n"
         summary+="| **Total** | **$total_violations** |\n\n"
 
