@@ -2,9 +2,12 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-A **configuration-driven** GitHub Actions toolkit for Infrastructure as Code (IaC) compliance scanning and deployment orchestration. Reduce your infrastructure workflows from 200+ lines to ~20.
+A **configuration-driven** GitHub Actions toolkit for Infrastructure as Code (IaC)
+compliance scanning and deployment orchestration. Reduce your infrastructure workflows
+from 200+ lines to ~20.
 
-> **Supported IaC tools:** Terraform today. OpenTofu, Pulumi, and CloudFormation are on the roadmap — the pipeline, policy engine, and audit trail are IaC-agnostic.
+> **Supported IaC tools:** Terraform today. OpenTofu, Pulumi, and CloudFormation are
+> on the roadmap — the pipeline, policy engine, and audit trail are IaC-agnostic.
 
 ## What you get
 
@@ -51,7 +54,9 @@ jobs:
           org_id: ${{ vars.ILTERO_ORG_ID }}
 ```
 
-> **Not using OIDC?** Set `ILTERO_TOKEN` and `ILTERO_REGISTRY_TOKEN` as repository secrets and pass them via `env:` instead of `oidc`/`stack_id`/`org_id`. OIDC is strongly recommended — see [docs/authentication.md](docs/authentication.md).
+> **Not using OIDC?** Set `ILTERO_TOKEN` and `ILTERO_REGISTRY_TOKEN` as repository
+> secrets and pass them via `env:` instead of `oidc`/`stack_id`/`org_id`.
+> OIDC is strongly recommended — see [docs/authentication.md](docs/authentication.md).
 
 ## Documentation
 
