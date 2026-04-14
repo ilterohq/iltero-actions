@@ -191,6 +191,13 @@ outputs:
         iltero stack approvals show <approval_id>
     value: ${{ steps.pipeline.outputs.approval_id }}
 
+  compliance_only:
+    description: |
+      Whether the pipeline ran in compliance-only mode (no deployment).
+      True for pull_request events — scan and evaluate run against
+      the target environment's policies, but deployment is blocked.
+    value: ${{ steps.pipeline.outputs.compliance_only }}
+
   deployment_ready:
     description: |
       Whether the pipeline passed and deployment can proceed.
@@ -234,7 +241,7 @@ runs:
         sudo mv /tmp/yq /usr/local/bin/yq
         sudo chmod +x /usr/local/bin/yq
 
-        echo "✅ yq installed"
+        echo "  yq installed"
 
     # -------------------------------------------------------------------------
     # Install jq
@@ -260,7 +267,7 @@ runs:
         sudo mv /tmp/jq /usr/local/bin/jq
         sudo chmod +x /usr/local/bin/jq
 
-        echo "✅ jq installed"
+        echo "  jq installed"
 
     # -------------------------------------------------------------------------
     # Setup Terraform
@@ -280,7 +287,7 @@ runs:
         set -euo pipefail
         pip3 install --user --break-system-packages pyyaml jsonschema 2>/dev/null || \
           pip3 install --user pyyaml jsonschema
-        echo "✅ Python dependencies installed"
+        echo "  Python dependencies installed"
 
     # -------------------------------------------------------------------------
     # Setup Python
@@ -298,7 +305,7 @@ runs:
       run: |
         set -euo pipefail
         pip install --quiet --upgrade iltero-cli 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
-        echo "✅ Iltero CLI installed"
+        echo "  Iltero CLI installed"
 
     # -------------------------------------------------------------------------
     # Install Checkov
@@ -309,7 +316,7 @@ runs:
         set -euo pipefail
         pip install --quiet --upgrade --break-system-packages checkov 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || \
           pip install --quiet --upgrade checkov 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
-        echo "✅ Checkov installed"
+        echo "  Checkov installed"
 
     # -------------------------------------------------------------------------
     # Install OPA
@@ -332,7 +339,7 @@ runs:
           "https://openpolicyagent.org/downloads/v${OPA_VERSION}/opa_${OS}_${ARCH}_static" 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
         chmod +x /usr/local/bin/opa
 
-        echo "✅ OPA installed"
+        echo "  OPA installed"
 
     # -------------------------------------------------------------------------
     # Configure CLI (keyring, API URL, token masking)
@@ -345,7 +352,7 @@ runs:
         # Disable keyring in CI (credentials come from env vars / secrets)
         if [ "${CI:-false}" = "true" ]; then
           echo "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring" >> "$GITHUB_ENV"
-          echo "ℹ️  CI detected: Using null keyring backend (credentials via env vars)"
+          echo "  CI detected: using null keyring backend (credentials via env vars)"
         fi
 
         # Resolve API URL: existing env var > default
@@ -373,7 +380,7 @@ runs:
           echo "$RESOLVED_API_URL"
           echo "GHEOF"
         } >> "$GITHUB_ENV"
-        echo "ℹ️  API URL: $RESOLVED_API_URL"
+        echo "  API URL: $RESOLVED_API_URL"
 
         if [ -n "$RESOLVED_TOKEN" ]; then
           {
@@ -392,7 +399,7 @@ runs:
       run: |
         set -euo pipefail
 
-        echo "✅ Installation Summary:"
+        echo "  Installation Summary:"
 
         CLI_VERSION=$(iltero --version 2>/dev/null || echo "not installed")
         echo "   Iltero CLI: $CLI_VERSION"
@@ -498,20 +505,20 @@ runs:
         # Detect pipeline mode
         if [[ -n "$STACKS_PATH" ]]; then
           PIPELINE_MODE="greenfield"
-          echo "pipeline_mode=greenfield" >> $GITHUB_OUTPUT
-          echo "config_path=" >> $GITHUB_OUTPUT
+          echo "pipeline_mode=greenfield" >> "$GITHUB_OUTPUT"
+          echo "config_path=" >> "$GITHUB_OUTPUT"
           if [[ -d "$STACKS_PATH" ]]; then
-            echo "✅ Inputs validated (greenfield)"
+            echo "  Inputs validated (greenfield)"
             echo "   Stacks path: $STACKS_PATH"
           else
-            echo "✅ Inputs validated (greenfield — stacks directory not yet present, will be treated as no stacks to process)"
+            echo "  Inputs validated (greenfield — stacks directory not yet present, no stacks to process)"
             echo "   Stacks path: $STACKS_PATH"
           fi
         elif [[ -f "$CONFIG_PATH" ]]; then
           PIPELINE_MODE="brownfield"
-          echo "pipeline_mode=brownfield" >> $GITHUB_OUTPUT
-          echo "config_path=$CONFIG_PATH" >> $GITHUB_OUTPUT
-          echo "✅ Inputs validated (brownfield)"
+          echo "pipeline_mode=brownfield" >> "$GITHUB_OUTPUT"
+          echo "config_path=$CONFIG_PATH" >> "$GITHUB_OUTPUT"
+          echo "  Inputs validated (brownfield)"
           echo "   Config path: $CONFIG_PATH"
         else
           echo "::error::Neither stacks_path input nor brownfield config ($CONFIG_PATH) provided"
@@ -543,9 +550,10 @@ runs:
         GITHUB_RUN_ID: ${{ github.run_id }}
         GITHUB_SERVER_URL: ${{ github.server_url }}
         GITHUB_REPOSITORY: ${{ github.repository }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         # Run the main pipeline script
-        "${{ github.action_path }}/scripts/run-pipeline.sh"
+        "${ACTION_PATH}/scripts/run-pipeline.sh"
 
     # -------------------------------------------------------------------------
     # Step 5: Generate Summary
@@ -560,5 +568,6 @@ runs:
         EVALUATION_PASSED: ${{ steps.pipeline.outputs.evaluation_passed }}
         ENVIRONMENT: ${{ steps.pipeline.outputs.environment }}
         UNIT_RESULTS: ${{ steps.pipeline.outputs.unit_results }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
-        "${{ github.action_path }}/scripts/generate-summary.sh"
+        "${ACTION_PATH}/scripts/generate-summary.sh"

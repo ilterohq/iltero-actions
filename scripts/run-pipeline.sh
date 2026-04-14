@@ -118,6 +118,9 @@ if [[ "${DEPLOY_ONLY:-false}" == "true" ]]; then
     MODE="deploy"
 fi
 
+# Compliance-only mode: PRs validate against the target environment but never deploy
+COMPLIANCE_ONLY="false"
+
 # Pipeline state
 COMPLIANCE_FAILED=false
 EVALUATION_FAILED=false
@@ -421,7 +424,9 @@ process_stack() {
         return 1
     fi
 
-    log_group "📦 Processing stack: $stack"
+    echo ""
+    echo "=== Stack: $stack ==="
+    echo ""
 
     # Export stack name for use by scanning.sh, evaluation.sh, and state tracking
     export ILTERO_STACK_NAME="$stack"
@@ -459,12 +464,16 @@ process_stack() {
         environment="$ENVIRONMENT"
         log_info "Using environment override: $environment"
     else
-        environment=$(detect_environment "$config_file")
+        if ! environment=$(detect_environment "$config_file") || [[ -z "$environment" ]]; then
+            log_warning "No environment matched for this branch — skipping stack '$stack'"
+            log_info "Compliance checks require a matching environment in config.yml"
+            return 0
+        fi
         log_info "Auto-detected environment: $environment"
     fi
 
     # Validate environment exists in config
-    if ! yq eval ".environments.${environment}" "$config_file" > /dev/null 2>&1; then
+    if ! validate_environment "$config_file" "$environment"; then
         log_error "Environment '$environment' not found in config.yml"
         log_info "Available environments:"
         yq eval '.environments | keys | .[]' "$config_file" | while read -r env; do
@@ -514,7 +523,6 @@ process_stack() {
 
     if [[ "$unit_count" -eq 0 ]]; then
         log_warning "No enabled infrastructure units found"
-        log_group_end
         return 0
     fi
 
@@ -559,8 +567,6 @@ process_stack() {
         set_output "approval_id" "$APPROVAL_ID"
         log_success "Approval created: $APPROVAL_ID"
     fi
-
-    log_group_end
 }
 
 # =============================================================================
@@ -748,7 +754,9 @@ process_brownfield_stack() {
     # Initialize result tracking for this stack
     init_stack_results "${stack_slug:-$stack_name}"
 
-    log_group "Processing brownfield stack: $stack_name"
+    echo ""
+    echo "=== Stack: $stack_name (brownfield) ==="
+    echo ""
 
     # Detect environment
     local environment
@@ -756,8 +764,22 @@ process_brownfield_stack() {
         environment="$ENVIRONMENT"
         log_info "Using environment override: $environment"
     else
-        environment=$(detect_environment "$config_file")
+        if ! environment=$(detect_environment "$config_file") || [[ -z "$environment" ]]; then
+            log_warning "No environment matched for this branch — skipping stack '$stack_name'"
+            log_info "Compliance checks require a matching environment in config.yml"
+            return 0
+        fi
         log_info "Auto-detected environment: $environment"
+    fi
+
+    # Validate environment exists in config
+    if ! validate_environment "$config_file" "$environment"; then
+        log_error "Environment '$environment' not found in config.yml"
+        log_info "Available environments:"
+        yq eval '.environments | keys | .[]' "$config_file" | while read -r env; do
+            log_info "  - $env"
+        done
+        return 1
     fi
 
     # Extract environment-specific config
@@ -796,8 +818,6 @@ process_brownfield_stack() {
         set_output "approval_id" "$APPROVAL_ID"
         log_success "Approval created: $APPROVAL_ID"
     fi
-
-    log_group_end
 }
 
 # =============================================================================
@@ -807,8 +827,20 @@ main() {
     # Parse CLI arguments (if any)
     parse_args "$@"
 
-    log_banner "Iltero Infrastructure Pipeline"
-    log_info "Mode: $MODE"
+    # Compliance-only mode: PRs run scan/evaluate but never deploy
+    if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]] || [[ "${GITHUB_EVENT_NAME:-}" == "pull_request_target" ]]; then
+        COMPLIANCE_ONLY="true"
+        if [[ "$MODE" == "deploy" ]]; then
+            log_error "Deploy mode is not allowed on pull_request events"
+            exit 1
+        fi
+        DRY_RUN="true"
+        log_info "Pull request detected — running in compliance-only mode (no deployment)"
+    fi
+
+    set_output "compliance_only" "$COMPLIANCE_ONLY"
+
+    log_banner "Iltero Pipeline | Mode: $MODE"
 
     # -------------------------------------------------------------------------
     # Configure Registry Credentials (if token provided)
@@ -906,33 +938,78 @@ main() {
     set_output "compliance_passed" "$compliance_passed"
     set_output "evaluation_passed" "$evaluation_passed"
 
+    # Determine phase statuses for summary
+    local scan_status="[PASS]" eval_status="[PASS]" deploy_status="--"
+    local scan_detail="0 findings above threshold" eval_detail="0 policy violations" deploy_detail=""
+
+    if [[ "$COMPLIANCE_FAILED" == "true" ]]; then
+        scan_status="[FAIL]"
+        scan_detail="${total_scan_violations} findings above threshold"
+    fi
+    if [[ "$EVALUATION_FAILED" == "true" ]]; then
+        eval_status="[FAIL]"
+        eval_detail="${total_eval_violations} policy violations above threshold"
+    fi
+    if [[ "$DEPLOY_FAILED" == "true" ]]; then
+        deploy_status="[FAIL]"
+        deploy_detail="deployment failed"
+    elif [[ "$AUTHORIZATION_FAILED" == "true" ]]; then
+        deploy_status="[FAIL]"
+        deploy_detail="not authorized"
+    elif [[ "$COMPLIANCE_FAILED" == "true" ]] || [[ "$EVALUATION_FAILED" == "true" ]]; then
+        deploy_status="  --  "
+        deploy_detail="blocked (compliance/evaluation failed)"
+    fi
+
+    # Print structured summary
+    echo ""
+    echo "==============================================================================="
+    echo "Pipeline Result"
+    echo "==============================================================================="
+    echo ""
+    printf "  %-20s %s  %s\n" "Static Analysis" "$scan_status" "$scan_detail"
+    printf "  %-20s %s  %s\n" "Plan Evaluation" "$eval_status" "$eval_detail"
+    printf "  %-20s %s  %s\n" "Deploy" "$deploy_status" "$deploy_detail"
+    echo ""
+
     if [[ "$COMPLIANCE_FAILED" == "true" ]] || [[ "$EVALUATION_FAILED" == "true" ]]; then
+        local total_violations=$((total_scan_violations + total_eval_violations))
         if [[ "$COMPLIANCE_FAILED" == "true" ]] && [[ "$EVALUATION_FAILED" == "true" ]]; then
             set_output "overall_status" "compliance_failed"
-            log_error "Pipeline failed: $total_scan_violations scan violation(s) and $total_eval_violations evaluation violation(s) detected"
         elif [[ "$COMPLIANCE_FAILED" == "true" ]]; then
             set_output "overall_status" "compliance_failed"
-            log_error "Pipeline failed: $total_scan_violations compliance violation(s) detected"
         else
             set_output "overall_status" "evaluation_failed"
-            log_error "Pipeline failed: $total_eval_violations plan evaluation violation(s) detected"
         fi
+        echo "Result: FAILED — ${total_violations} violation(s) detected"
+        echo ""
+        echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
+        echo "==============================================================================="
         exit 1
     elif [[ "$AUTHORIZATION_FAILED" == "true" ]]; then
         set_output "overall_status" "authorization_failed"
         set_output "authorization_passed" "false"
-        log_error "Pipeline failed: Deployment not authorized"
+        echo "Result: FAILED — deployment not authorized"
+        echo ""
+        echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
+        echo "==============================================================================="
         exit 1
     elif [[ "$DEPLOY_FAILED" == "true" ]]; then
         set_output "overall_status" "deploy_failed"
         set_output "authorization_passed" "true"
-        log_error "Pipeline failed: Deployment failed"
+        echo "Result: FAILED — deployment failed"
+        echo ""
+        echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
+        echo "==============================================================================="
         exit 1
     else
         set_output "overall_status" "success"
         set_output "authorization_passed" "true"
         set_output "deployment_ready" "true"
-        log_success "Pipeline completed successfully"
+        echo "Result: PASSED"
+        echo ""
+        echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
+        echo "==============================================================================="
     fi
 }
 
