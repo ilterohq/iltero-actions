@@ -29,7 +29,7 @@ run_deployment() {
     OUTPUTS_FILE=""
     TERRAFORM_STATE_FILE=""
 
-    log_group "🚀 Deploy: ${unit_name}"
+    log_group "Deploy: ${unit_name}"
 
     pushd "$deploy_path" > /dev/null
 

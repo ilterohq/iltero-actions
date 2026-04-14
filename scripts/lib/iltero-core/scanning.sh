@@ -39,7 +39,7 @@ run_compliance_scan() {
     SCAN_VIOLATIONS="0"
     SCAN_EXIT_CODE=0
 
-    log_group "🔍 Compliance Scan: ${unit_name}"
+    log_group "Static Analysis: ${unit_name}"
 
     # Build command array
     local cmd=(
@@ -101,23 +101,33 @@ run_compliance_scan() {
         low_count=$(jq -r '[.violations[]? | select(.severity == "low")] | length' "$results_file" 2>/dev/null || echo "0")
         
         if [[ -n "$SCAN_ID" ]]; then
-            log_info "Scan ID (for apply phase): $SCAN_ID"
+            log_info "Scan ID: $SCAN_ID"
         fi
     fi
 
+    # Structured severity breakdown
+    log_info "Threshold: ${fail_on}"
+    echo ""
+    log_info "Findings: $SCAN_VIOLATIONS total"
+    log_info "  critical  ${critical_count}"
+    log_info "  high      ${high_count}"
+    log_info "  medium    ${medium_count}"
+    log_info "  low       ${low_count}"
+    echo ""
+
     if [[ $SCAN_EXIT_CODE -eq 0 ]]; then
         SCAN_PASSED="true"
-        if [[ "$SCAN_VIOLATIONS" -gt 0 ]]; then
-            # Passed threshold but found violations - clarify the message
-            log_success "Compliance threshold check passed for ${unit_name}"
-            log_info "Violations found: $SCAN_VIOLATIONS total (${critical_count} critical, ${high_count} high, ${medium_count} medium, ${low_count} low)"
-            log_info "No violations at or above '${fail_on}' severity threshold"
-        else
-            log_success "Compliance scan passed for ${unit_name} (no violations)"
+        local above_threshold=$((critical_count + high_count))
+        if [[ "$fail_on" == "critical" ]]; then
+            above_threshold=$critical_count
+        elif [[ "$fail_on" == "medium" ]]; then
+            above_threshold=$((critical_count + high_count + medium_count))
+        elif [[ "$fail_on" == "low" ]]; then
+            above_threshold=$SCAN_VIOLATIONS
         fi
+        log_result "PASS" "Static analysis passed (${above_threshold} findings at or above '${fail_on}')"
     else
-        log_error "Compliance scan failed for ${unit_name}"
-        log_error "Violations above '${fail_on}' threshold: $SCAN_VIOLATIONS (${critical_count} critical, ${high_count} high)"
+        log_result "FAIL" "${SCAN_VIOLATIONS} findings at or above '${fail_on}' threshold (${critical_count} critical, ${high_count} high)"
     fi
 
     log_group_end

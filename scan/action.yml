@@ -20,8 +20,8 @@
 #       # ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 # =============================================================================
 
-name: Iltero Compliance Scan
-description: Run compliance scanning on Terraform infrastructure code
+name: Iltero Static Analysis
+description: Run static analysis on Terraform infrastructure code
 author: Iltero
 
 branding:
@@ -93,9 +93,9 @@ runs:
   using: composite
   steps:
     # -------------------------------------------------------------------------
-    # Run Compliance Scan (using shared library)
+    # Run Static Analysis (using shared library)
     # -------------------------------------------------------------------------
-    - name: Run Compliance Scan
+    - name: Run Static Analysis
       id: scan
       shell: bash
       env:
@@ -151,27 +151,23 @@ runs:
           const passed = process.env.PASSED === 'true';
           const runId = process.env.RUN_ID || '';
 
-          const status = passed ? '✅ Scan Passed' : '❌ Violations Detected';
-          const statusIcon = passed ? '🟢' : '🔴';
+          const status = passed ? 'Passed' : 'Failed';
 
-          let comment = `## ${statusIcon} Compliance Scan: \`${unitName}\`\n\n`;
+          let comment = `## Static Analysis: \`${unitName}\`\n\n`;
           comment += `**Environment:** ${environment}\n`;
-          comment += `**Status:** ${status}\n\n`;
-          comment += `### Static Analysis Summary\n\n`;
+          comment += `**Result:** ${status}\n\n`;
           comment += `| Metric | Value |\n`;
           comment += `|--------|-------|\n`;
-          comment += `| Violations | ${violations} |\n`;
-          comment += `| Passed | ${passed ? 'Yes' : 'No'} |\n`;
+          comment += `| Findings | ${violations} |\n`;
+          comment += `| Status | ${status} |\n`;
           if (runId) {
-            comment += `| Iltero Run ID | \`${runId}\` |\n`;
+            comment += `| Run ID | \`${runId}\` |\n`;
           }
           if (!passed) {
-            comment += `\n### ⚠️ Action Required\n\n`;
-            comment += `This code has compliance violations that should be reviewed.\n`;
-            comment += `Check the workflow run for details.\n`;
+            comment += `\n**Action Required:** This code has findings that must be resolved before merge.\n`;
           }
           comment += `\n---\n`;
-          comment += `<sub>🛡️ Powered by [Iltero](https://iltero.io)</sub>`;
+          comment += `<sub>Powered by [Iltero](https://iltero.io)</sub>`;
 
           // Check for existing Iltero comment to update
           const { data: comments } = await github.rest.issues.listComments({
@@ -181,7 +177,7 @@ runs:
           });
 
           const existingComment = comments.find(c =>
-            c.body.includes(`Compliance Scan: \`${unitName}\``) &&
+            c.body.includes(`Static Analysis: \`${unitName}\``) &&
             c.body.includes('Powered by [Iltero]')
           );
 

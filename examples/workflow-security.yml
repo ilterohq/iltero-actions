@@ -1,0 +1,84 @@
+# =============================================================================
+# Static Analysis for GitHub Actions Workflows (zizmor)
+# =============================================================================
+# This workflow runs zizmor against your repository's workflow files to catch
+# common GitHub Actions security issues BEFORE they reach production:
+#
+#   - Unpinned actions (tag references that can be moved by an attacker)
+#   - Template injection in `run:` blocks (${{ inputs.* }} shell injection)
+#   - Overprivileged `GITHUB_TOKEN` permissions
+#   - `pull_request_target` misuse against untrusted code
+#   - Dangerous cache poisoning patterns
+#   - Many more — see https://woodruffw.github.io/zizmor/audits/
+#
+# Results are uploaded to GitHub's code scanning as SARIF, so findings appear
+# in the Security tab and inline on pull requests.
+#
+# SETUP:
+#   1. Copy this file to .github/workflows/workflow-security.yml in your repo
+#   2. Enable code scanning in repo Settings → Code security and analysis
+#   3. (Optional) Require the `zizmor` check on protected branches
+#
+# Note: this example is named `workflow-security.yml` to avoid collision with
+# zizmor's own config file, which conventionally uses the name `zizmor.yml`
+# at the repo root.
+#
+# References:
+#   - zizmor:        https://github.com/zizmorcore/zizmor
+#   - Rule reference: https://woodruffw.github.io/zizmor/audits/
+#   - SARIF upload:  https://github.com/github/codeql-action
+# =============================================================================
+
+name: Workflow Security Analysis
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+  # Run weekly to catch newly discovered issues in unchanged workflows
+  schedule:
+    - cron: '0 6 * * 1'  # Monday 06:00 UTC
+  workflow_dispatch:
+
+# Minimum permissions — no writes to source
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      security-events: write   # Required to upload SARIF to code scanning
+      actions: read            # Required for private repo analysis
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e # v0.5.3
+        with:
+          # Fail the job on any pedantic-or-higher finding.
+          # Options: all, pedantic, informational (default: pedantic)
+          min-severity: low
+          # Use extended rules to catch more issues
+          advanced-security: 'true'
+
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+        with:
+          sarif_file: results.sarif
+          category: zizmor

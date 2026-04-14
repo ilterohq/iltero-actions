@@ -142,11 +142,15 @@ jobs:
     steps:
       - name: Check Repository Context
         id: context
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO_FULL_NAME: ${{ github.repository }}
         run: |
           # Detect if this is a fork PR
           IS_FORK="false"
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            if [[ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]]; then
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ "$PR_HEAD_REPO" != "$REPO_FULL_NAME" ]]; then
               IS_FORK="true"
               echo "⚠️ This is a PR from a fork - secrets will not be available"
             fi
@@ -155,37 +159,39 @@ jobs:
 
       - name: Validate Inputs
         id: validate
+        env:
+          INPUT_STACK: ${{ inputs.stack }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_SKIP_COMPLIANCE: ${{ inputs.skip_compliance }}
+          INPUT_JUSTIFICATION: ${{ inputs.justification }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run || github.event_name == 'pull_request' }}
         run: |
           # Validate stack input (alphanumeric, hyphens, underscores only)
-          STACK="${{ inputs.stack }}"
-          if [[ -n "$STACK" ]] && ! [[ "$STACK" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+          if [[ -n "$INPUT_STACK" ]] && ! [[ "$INPUT_STACK" =~ ^[a-zA-Z0-9_-]+$ ]]; then
             echo "::error::Invalid stack name. Only alphanumeric characters, hyphens, and underscores allowed."
             exit 1
           fi
 
           # Validate environment is from allowed list
-          ENV="${{ inputs.environment }}"
-          if [[ -n "$ENV" ]] && ! [[ "$ENV" =~ ^(development|staging|production)$ ]]; then
+          if [[ -n "$INPUT_ENVIRONMENT" ]] && ! [[ "$INPUT_ENVIRONMENT" =~ ^(development|staging|production)$ ]]; then
             echo "::error::Invalid environment. Must be: development, staging, or production."
             exit 1
           fi
 
           # Require justification for skip_compliance
-          SKIP_COMPLIANCE="${{ inputs.skip_compliance }}"
-          JUSTIFICATION="${{ inputs.justification }}"
-          if [[ "$SKIP_COMPLIANCE" == "true" ]]; then
-            if [[ -z "$JUSTIFICATION" ]] || [[ ${#JUSTIFICATION} -lt 20 ]]; then
+          if [[ "$INPUT_SKIP_COMPLIANCE" == "true" ]]; then
+            if [[ -z "$INPUT_JUSTIFICATION" ]] || [[ ${#INPUT_JUSTIFICATION} -lt 20 ]]; then
               echo "::error::Skipping compliance requires a justification of at least 20 characters."
               exit 1
             fi
-            echo "::warning::Compliance skip requested. Justification: $JUSTIFICATION"
+            echo "::warning::Compliance skip requested. Justification: $INPUT_JUSTIFICATION"
           fi
 
           # Output validated inputs
-          echo "stack=${STACK}" >> "$GITHUB_OUTPUT"
-          echo "environment=${ENV}" >> "$GITHUB_OUTPUT"
-          echo "dry_run=${{ inputs.dry_run || github.event_name == 'pull_request' }}" >> "$GITHUB_OUTPUT"
-          echo "skip_compliance=${SKIP_COMPLIANCE}" >> "$GITHUB_OUTPUT"
+          echo "stack=${INPUT_STACK}" >> "$GITHUB_OUTPUT"
+          echo "environment=${INPUT_ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${INPUT_DRY_RUN}" >> "$GITHUB_OUTPUT"
+          echo "skip_compliance=${INPUT_SKIP_COMPLIANCE}" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
   # Job 2: Compliance & Evaluation
@@ -239,13 +245,14 @@ jobs:
 
       # SECURITY: Verify checkout integrity
       - name: Verify Repository Integrity
+        env:
+          EXPECTED_REPO: ${{ github.repository }}
         run: |
           # Ensure we're in the expected repository
           REPO_URL=$(git config --get remote.origin.url)
-          EXPECTED_REPO="https://github.com/${{ github.repository }}"
 
-          if [[ "$REPO_URL" != *"${{ github.repository }}"* ]]; then
-            echo "::error::Repository URL mismatch. Expected ${{ github.repository }}"
+          if [[ "$REPO_URL" != *"$EXPECTED_REPO"* ]]; then
+            echo "::error::Repository URL mismatch. Expected $EXPECTED_REPO"
             exit 1
           fi
 
@@ -255,7 +262,7 @@ jobs:
       - name: Run Iltero Pipeline
         id: pipeline
         # SECURITY: Pin to SHA when available for your action
-        uses: ilterohq/iltero-actions@v1
+        uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stacks_path: ${{ env.STACKS_PATH }}
           stack: ${{ needs.validate.outputs.stack }}
@@ -320,7 +327,7 @@ jobs:
           role-session-name: iltero-deploy-dev-${{ github.run_id }}
 
       - name: Deploy
-        uses: ilterohq/iltero-actions@v1
+        uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stacks_path: ${{ env.STACKS_PATH }}
           deploy_only: 'true'
@@ -371,7 +378,7 @@ jobs:
           role-session-name: iltero-deploy-staging-${{ github.run_id }}
 
       - name: Deploy
-        uses: ilterohq/iltero-actions@v1
+        uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stacks_path: ${{ env.STACKS_PATH }}
           deploy_only: 'true'
@@ -434,22 +441,29 @@ jobs:
 
       # SECURITY: Additional verification before production deployment
       - name: Verify Deployment Authorization
+        env:
+          GIT_SHA: ${{ github.sha }}
+          GIT_REF_NAME: ${{ github.ref_name }}
+          GIT_REF: ${{ github.ref }}
+          GIT_ACTOR: ${{ github.actor }}
+          COMPLIANCE_RUN_ID: ${{ needs.compliance.outputs.run_id }}
+          COMPLIANCE_APPROVAL_ID: ${{ needs.compliance.outputs.approval_id }}
         run: |
           echo "📋 Pre-deployment verification:"
-          echo "  - Commit: ${{ github.sha }}"
-          echo "  - Branch: ${{ github.ref_name }}"
-          echo "  - Actor: ${{ github.actor }}"
-          echo "  - Run ID: ${{ needs.compliance.outputs.run_id }}"
-          echo "  - Approval ID: ${{ needs.compliance.outputs.approval_id }}"
+          echo "  - Commit: $GIT_SHA"
+          echo "  - Branch: $GIT_REF_NAME"
+          echo "  - Actor: $GIT_ACTOR"
+          echo "  - Run ID: $COMPLIANCE_RUN_ID"
+          echo "  - Approval ID: $COMPLIANCE_APPROVAL_ID"
 
           # Verify we're on main branch
-          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+          if [[ "$GIT_REF" != "refs/heads/main" ]]; then
             echo "::error::Production deployments must be from main branch"
             exit 1
           fi
 
       - name: Deploy
-        uses: ilterohq/iltero-actions@v1
+        uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stacks_path: ${{ env.STACKS_PATH }}
           deploy_only: 'true'
@@ -463,11 +477,14 @@ jobs:
 
       - name: Notify Success
         if: success()
+        env:
+          GIT_SHA: ${{ github.sha }}
+          GIT_ACTOR: ${{ github.actor }}
         run: |
           echo "✅ Production deployment completed successfully"
           echo "  - Environment: production"
-          echo "  - Commit: ${{ github.sha }}"
-          echo "  - Deployed by: ${{ github.actor }}"
+          echo "  - Commit: $GIT_SHA"
+          echo "  - Deployed by: $GIT_ACTOR"
 
   # ===========================================================================
   # Job 6: PR Comment (for visibility)

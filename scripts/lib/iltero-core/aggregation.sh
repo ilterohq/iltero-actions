@@ -64,7 +64,7 @@ aggregate_scan_results() {
         return 1
     fi
 
-    log_group "📊 Aggregating Scan Results"
+    log_group "Aggregate Results"
 
     # Get batch status with details
     set +e
@@ -111,21 +111,21 @@ aggregate_scan_results() {
             AGG_MEDIUM=$(echo "$violations_result" | jq -r '.summary.medium // 0' 2>/dev/null)
             AGG_LOW=$(echo "$violations_result" | jq -r '.summary.low // 0' 2>/dev/null)
 
-            log_info "Violations: $AGG_TOTAL total ($AGG_HIGH high, $AGG_MEDIUM medium, $AGG_LOW low)"
+            log_info "Findings: $AGG_TOTAL total ($AGG_HIGH high, $AGG_MEDIUM medium, $AGG_LOW low)"
 
-            # Log top violations by rule
+            # Top violations by rule
             echo ""
-            log_info "Top Violations by Rule:"
-            echo "$violations_result" | jq -r '.violations_by_rule[0:5][] | "  • \(.rule_id) (\(.severity)): \(.count) occurrences"' 2>/dev/null || true
+            log_info "Top findings by rule:"
+            echo "$violations_result" | jq -r '.violations_by_rule[0:5][] | "    \(.rule_id) (\(.severity)): \(.count) occurrences"' 2>/dev/null || true
         fi
     fi
 
     # Determine pass/fail
     if [[ "$overall_status" == "COMPLETED" ]] && [[ "$has_violations" == "false" ]] && [[ "$failed_scans" == "0" ]]; then
         AGG_PASSED="true"
-        log_success "All scans completed with no violations"
+        log_result "PASS" "All scans completed with no findings"
     else
-        log_warning "Aggregation complete with issues"
+        log_result "FAIL" "Aggregation complete: ${failed_scans} failed, ${AGG_TOTAL} findings"
     fi
 
     log_group_end
@@ -141,24 +141,17 @@ print_scan_summary() {
     aggregate_scan_results "$scan_ids" > /dev/null 2>&1
 
     echo ""
-    echo "═══════════════════════════════════════════════════════"
-    echo "  Compliance Scan Summary"
-    echo "═══════════════════════════════════════════════════════"
+    echo "--- Static Analysis Summary ---------------------------------------------------"
     echo ""
 
     if [[ "$AGG_PASSED" == "true" ]]; then
-        echo "  ✅ Status: PASSED"
+        echo "  Status:   PASSED"
     else
-        echo "  ❌ Status: FAILED"
+        echo "  Status:   FAILED"
     fi
 
+    echo "  Findings: $AGG_TOTAL total ($AGG_HIGH high, $AGG_MEDIUM medium, $AGG_LOW low)"
     echo ""
-    echo "  📊 Violations Breakdown:"
-    echo "     Total:  $AGG_TOTAL"
-    echo "     High:   $AGG_HIGH"
-    echo "     Medium: $AGG_MEDIUM"
-    echo "     Low:    $AGG_LOW"
-    echo ""
-    echo "═══════════════════════════════════════════════════════"
+    echo "-------------------------------------------------------------------------------"
     echo ""
 }
