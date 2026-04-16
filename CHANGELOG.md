@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-04-16
+
+### Added
+
+- OIDC audience auto-derivation from the API URL host
+- Preflight check for `id-token: write` workflow permission
+- Shared `scripts/oidc-exchange.sh` used by root and `setup-oidc` actions
+
+### Changed
+
+- Deploy authorization uses the updated Iltero CLI command
+
+### Docs
+
+- Document deploy-gate contract in `docs/authentication.md`
+- Remove stale CLI references from approval docs and examples
+
 ## [1.2.0] - 2026-04-14
 
 ### Fixed
