@@ -9,12 +9,15 @@ For each, OIDC is the recommended approach: no long-lived secrets to rotate, sho
 
 ## Table of Contents
 
-- [Iltero Tokens](#iltero-tokens)
-  - [Option A: OIDC (Recommended)](#option-a-oidc-recommended)
-  - [Option B: Token-Based Auth](#option-b-token-based-auth)
-- [AWS Credentials](#aws-credentials)
-  - [Option A: OIDC (Recommended)](#option-a-oidc-recommended-1)
-  - [Option B: Access Keys](#option-b-access-keys)
+- [Authentication](#authentication)
+  - [Table of Contents](#table-of-contents)
+  - [Iltero Tokens](#iltero-tokens)
+    - [Option A: OIDC (Recommended)](#option-a-oidc-recommended)
+    - [Option B: Token-Based Auth](#option-b-token-based-auth)
+  - [AWS Credentials](#aws-credentials)
+    - [Option A: OIDC (Recommended)](#option-a-oidc-recommended-1)
+    - [Option B: Access Keys](#option-b-access-keys)
+  - [Further reading](#further-reading)
 
 ---
 
@@ -58,8 +61,8 @@ If OIDC is not an option, use long-lived secrets. Less secure because these toke
 
 | Secret | Purpose | Source |
 |--------|---------|--------|
-| `ILTERO_TOKEN` | API authentication | Dashboard → Settings → API Tokens |
-| `ILTERO_REGISTRY_TOKEN` | Private modules | Dashboard → Settings → Registry Tokens |
+| `ILTERO_TOKEN` | API authentication | Iltero Console |
+| `ILTERO_REGISTRY_TOKEN` | Private modules | Iltero Console |
 
 ```yaml
 - uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1

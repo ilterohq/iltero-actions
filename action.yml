@@ -187,8 +187,6 @@ outputs:
   approval_id:
     description: |
       Iltero approval ID (when require_approval is true).
-      Use this to track or query approval status:
-        iltero stack approvals show <approval_id>
     value: ${{ steps.pipeline.outputs.approval_id }}
 
   compliance_only:
@@ -214,6 +212,77 @@ outputs:
 runs:
   using: composite
   steps:
+    # -------------------------------------------------------------------------
+    # Validate inputs. Every subsequent step assumes these are well-formed.
+    # -------------------------------------------------------------------------
+    - name: Validate Inputs
+      shell: bash
+      env:
+        INPUT_STACK_ID: ${{ inputs.stack_id }}
+        INPUT_ORG_ID: ${{ inputs.org_id }}
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        INPUT_STACK: ${{ inputs.stack }}
+        INPUT_STACKS_PATH: ${{ inputs.stacks_path }}
+        INPUT_CONFIG_PATH: ${{ inputs.config_path }}
+        INPUT_RUN_ID: ${{ inputs.run_id }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        set -euo pipefail
+
+        # pull_request_target runs with write-scoped GITHUB_TOKEN against
+        # base-branch workflow code + PR-author inputs. Refuse to run —
+        # SECURITY.md marks this trigger unsupported; this enforces it.
+        case "${EVENT_NAME}" in
+          pull_request_target)
+            echo "::error::ilterohq/iltero-actions does not support pull_request_target triggers. See SECURITY.md."
+            exit 1
+            ;;
+        esac
+
+        fail() {
+          echo "::error::Invalid input: $1"
+          exit 1
+        }
+
+        # Optional UUID fields (empty = unset → OK)
+        uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+        if [[ -n "${INPUT_STACK_ID:-}" && ! "${INPUT_STACK_ID}" =~ $uuid_re ]]; then
+          fail "stack_id must be a UUID"
+        fi
+        if [[ -n "${INPUT_ORG_ID:-}" && ! "${INPUT_ORG_ID}" =~ $uuid_re ]]; then
+          fail "org_id must be a UUID"
+        fi
+        if [[ -n "${INPUT_RUN_ID:-}" && ! "${INPUT_RUN_ID}" =~ $uuid_re ]]; then
+          fail "run_id must be a UUID"
+        fi
+
+        # Environment / stack slug — lowercase alnum + _ - (slugs).
+        slug_re='^[a-z][a-z0-9_-]{0,63}$'
+        if [[ -n "${INPUT_ENVIRONMENT:-}" && ! "${INPUT_ENVIRONMENT}" =~ $slug_re ]]; then
+          fail "environment must match ${slug_re}"
+        fi
+        if [[ -n "${INPUT_STACK:-}" && ! "${INPUT_STACK}" =~ $slug_re ]]; then
+          fail "stack must match ${slug_re}"
+        fi
+
+        # Path inputs — relative only, no ``..`` segments, no leading slash,
+        # no shell metacharacters. The runner ``cd``s into these, and the
+        # backend compares them against repo contents — a traversal would
+        # either escape the checkout dir or confuse diff computation.
+        reject_path() {
+          local name="$1"
+          local value="$2"
+          if [[ -z "${value}" ]]; then return 0; fi
+          case "${value}" in
+            /*|*..*|*'$'*|*'`'*|*'*'*|*'?'*|*'['*) fail "${name} must be a simple relative path" ;;
+          esac
+          if [[ ! "${value}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            fail "${name} contains disallowed characters"
+          fi
+        }
+        reject_path stacks_path "${INPUT_STACKS_PATH:-}"
+        reject_path config_path "${INPUT_CONFIG_PATH:-}"
+
     # =========================================================================
     # SETUP: Install all tools (inlined from setup/, actions/setup-toolchain/,
     #        and actions/setup-iltero-cli/ to avoid nested composite action
@@ -432,7 +501,8 @@ runs:
         fi
 
     # -------------------------------------------------------------------------
-    # Exchange OIDC token via CLI
+    # Exchange OIDC token via CLI (delegates to scripts/oidc-exchange.sh so the
+    # logic stays in sync with the standalone setup-oidc/action.yml).
     # -------------------------------------------------------------------------
     - name: OIDC - Exchange Token
       id: oidc_exchange
@@ -442,20 +512,7 @@ runs:
         ILTERO_STACK_ID: ${{ inputs.stack_id }}
         ILTERO_ORG_ID: ${{ inputs.org_id }}
       run: |
-        set -euo pipefail
-
-        ARGS=(
-          --stack-id "$ILTERO_STACK_ID"
-          --org-id "$ILTERO_ORG_ID"
-          --format github-actions
-        )
-
-        # Use ILTERO_API_URL (already set by Configure CLI step, with default)
-        if [[ -n "${ILTERO_API_URL:-}" ]]; then
-          ARGS+=(--api-url "$ILTERO_API_URL")
-        fi
-
-        iltero auth oidc "${ARGS[@]}"
+        "${GITHUB_ACTION_PATH}/scripts/oidc-exchange.sh"
 
     # =========================================================================
     # CONFIGURE REGISTRY

@@ -89,7 +89,8 @@ runs:
         fi
 
     # -------------------------------------------------------------------------
-    # Exchange OIDC token via CLI
+    # Exchange OIDC token via CLI (delegates to scripts/oidc-exchange.sh so the
+    # logic stays in sync with the copy inlined into the root action.yml).
     # -------------------------------------------------------------------------
     - name: Exchange OIDC Token
       id: exchange
@@ -99,29 +100,7 @@ runs:
         ILTERO_STACK_ID: ${{ inputs.stack-id }}
         ILTERO_ORG_ID: ${{ inputs.org-id }}
       run: |
-        set -euo pipefail
-
-        # Build CLI arguments
-        ARGS=(
-          --stack-id "$ILTERO_STACK_ID"
-          --org-id "$ILTERO_ORG_ID"
-          --format github-actions
-        )
-
-        # Add API URL: input > env var > default
-        ILTERO_DEFAULT_API_URL="https://api.iltero.io"
-        if [[ -n "${INPUT_API_URL:-}" ]]; then
-          ARGS+=(--api-url "$INPUT_API_URL")
-        elif [[ -n "${ILTERO_API_URL:-}" ]]; then
-          ARGS+=(--api-url "$ILTERO_API_URL")
-        else
-          ARGS+=(--api-url "$ILTERO_DEFAULT_API_URL")
-        fi
-
-        # Run OIDC exchange via CLI
-        # Provider and OIDC token are auto-detected/acquired by the CLI
-        # --format github-actions writes to $GITHUB_ENV and $GITHUB_OUTPUT
-        iltero auth oidc "${ARGS[@]}"
+        "${GITHUB_ACTION_PATH}/../scripts/oidc-exchange.sh"
 
     # -------------------------------------------------------------------------
     # Configure Terraform registry credentials (optional)
