@@ -126,6 +126,52 @@ runs:
   using: composite
   steps:
     # -------------------------------------------------------------------------
+    # Validate inputs before any ``working-directory: ${{ inputs.path }}``
+    # step uses them. ``working-directory`` is not shell-interpreted, but
+    # an unvalidated path still lets the runner ``cd`` somewhere unexpected.
+    # -------------------------------------------------------------------------
+    - name: Validate Inputs
+      shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_UNIT: ${{ inputs.unit }}
+        INPUT_ENVIRONMENT: ${{ inputs.environment }}
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        set -euo pipefail
+
+        case "${EVENT_NAME}" in
+          pull_request_target)
+            echo "::error::ilterohq/iltero-actions/monitor does not support pull_request_target triggers."
+            exit 1
+            ;;
+        esac
+
+        fail() {
+          echo "::error::Invalid input: $1"
+          exit 1
+        }
+
+        # path: required relative path, no traversal, no metacharacters.
+        if [[ -z "${INPUT_PATH:-}" ]]; then
+          fail "path is required"
+        fi
+        case "${INPUT_PATH}" in
+          /*|*..*|*'$'*|*'`'*|*'*'*|*'?'*|*'['*) fail "path must be a simple relative path" ;;
+        esac
+        if [[ ! "${INPUT_PATH}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+          fail "path contains disallowed characters"
+        fi
+
+        slug_re='^[a-z0-9][a-z0-9_.-]{0,63}$'
+        if [[ -n "${INPUT_UNIT:-}" && ! "${INPUT_UNIT}" =~ $slug_re ]]; then
+          fail "unit must match ${slug_re}"
+        fi
+        if [[ -n "${INPUT_ENVIRONMENT:-}" && ! "${INPUT_ENVIRONMENT}" =~ $slug_re ]]; then
+          fail "environment must match ${slug_re}"
+        fi
+
+    # -------------------------------------------------------------------------
     # Validate Self-Contained Unit Structure
     # -------------------------------------------------------------------------
     - name: Validate Unit Structure

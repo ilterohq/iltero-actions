@@ -20,15 +20,7 @@
 #   - Define environments in Settings → Environments (e.g., "production")
 #   - Add required reviewers who must approve before deployment
 #   - The deployment job will pause and wait for approval
-#   - After approval, the deploy job records the external approval and verifies authorization
-#
-# CLI Commands for managing approvals:
-#   iltero stack approvals list              # List pending approvals
-#   iltero stack approvals show <id>         # View approval details
-#   iltero stack approvals run <run_id>      # Get approval for a run
-#   iltero stack approvals approve <id>      # Approve via CLI
-#   iltero stack approvals reject <id>       # Reject via CLI
-#   iltero stack approvals compliance <run>  # View compliance analysis
+#   - After approval, the deploy job verifies authorization and deploys
 #
 # =============================================================================
 

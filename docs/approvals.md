@@ -1,13 +1,12 @@
 # Deployment Approvals
 
-When a stack's `config.yml` has `deployment.require_approval: true`, Iltero Actions will run compliance and evaluation but **will not deploy automatically**. Deployment waits for a human to approve via GitHub Environment Protection or the Iltero CLI.
+When a stack's `config.yml` has `deployment.require_approval: true`, Iltero Actions will run compliance and evaluation but **will not deploy automatically**. Deployment waits for a human to approve via GitHub Environment Protection.
 
 ## Table of Contents
 
 - [How It Works](#how-it-works)
 - [Setup: GitHub Environment Protection](#setup-github-environment-protection)
 - [Example Workflow](#example-workflow)
-- [CLI Commands](#cli-commands)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -22,9 +21,9 @@ When a stack's `config.yml` has `deployment.require_approval: true`, Iltero Acti
 
 2. **A downstream deploy job declares `environment: <name>`**, which triggers GitHub Environment Protection. The job pauses and shows in the Actions UI as waiting for approval.
 
-3. **Reviewers approve** — either in the GitHub UI (Actions → the run → "Review deployments") or via `iltero stack approvals approve <approval_id>`.
+3. **Reviewers approve** in the GitHub UI (Actions → the run → "Review deployments").
 
-4. **The deploy job resumes**, records the external approval with Iltero, calls `verify_authorization`, and then runs `terraform apply`.
+4. **The deploy job resumes**, calls `verify_authorization`, and then runs `terraform apply`.
 
 Approval is tracked at two layers:
 
@@ -115,39 +114,6 @@ jobs:
 ```
 
 See [`examples/with-approval.yml`](../examples/with-approval.yml) for a complete multi-environment example (dev and staging auto-deploy, production requires approval).
-
----
-
-## CLI Commands
-
-For teams that prefer approving from the terminal:
-
-```bash
-# List pending approvals
-iltero stack approvals list
-
-# Show approval details
-iltero stack approvals show <approval_id>
-
-# Get approval for a specific run
-iltero stack approvals run <run_id>
-
-# Approve deployment (alternative to GitHub UI)
-iltero stack approvals approve <approval_id> --comment "LGTM"
-
-# Reject deployment
-iltero stack approvals reject <approval_id> --reason "Needs fixes"
-
-# View compliance analysis for a run
-iltero stack approvals compliance <run_id>
-
-# Record external approval (when approval happened outside Iltero, e.g., in the GitHub UI)
-iltero stack approvals record-external \
-    --run-id <run_id> \
-    --source github_environment \
-    --approver-id <github_username> \
-    --reference <workflow_url>
-```
 
 ---
 
