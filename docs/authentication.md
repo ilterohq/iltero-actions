@@ -33,7 +33,6 @@ OIDC exchanges a GitHub Actions token for short-lived Iltero credentials. No sec
 - uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
   with:
     oidc: 'true'
-    stack_id: ${{ vars.ILTERO_STACK_ID }}
     org_id: ${{ vars.ILTERO_ORG_ID }}
   # env:
   #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
@@ -53,7 +52,7 @@ OIDC exchanges a GitHub Actions token for short-lived Iltero credentials. No sec
 
 - `permissions: { id-token: write }` on the workflow or job
 - A PipelinePrincipal configured in Iltero for the repository
-- `ILTERO_STACK_ID` and `ILTERO_ORG_ID` stored as repository **variables** (not secrets — these are not sensitive)
+- `ILTERO_ORG_ID` stored as a repository **variable** (not a secret — it is not sensitive)
 
 ### Option B: Token-Based Auth
 

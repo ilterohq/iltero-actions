@@ -12,7 +12,6 @@
 #
 # Requirements:
 #   - ILTERO_API_URL in repository variables
-#   - ILTERO_STACK_ID in repository variables
 #   - ILTERO_ORG_ID in repository variables
 #   - PipelinePrincipal configured in Iltero for this repository
 #   - `permissions: { id-token: write }` in the workflow
@@ -72,7 +71,6 @@ jobs:
         with:
           stacks_path: infra/stacks
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,7 +107,6 @@ jobs:
           deploy_only: 'true'
           run_id: ${{ needs.compliance.outputs.run_id }}
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -101,7 +101,6 @@ jobs:
           dry_run: ${{ inputs.dry_run || github.event_name == 'pull_request' }}
           skip_compliance: ${{ inputs.skip_compliance }}
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}

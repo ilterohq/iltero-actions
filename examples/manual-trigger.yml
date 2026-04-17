@@ -88,7 +88,6 @@ jobs:
           skip_compliance: ${{ inputs.skip_compliance }}
           debug: 'true'  # Enable debug for manual runs
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}

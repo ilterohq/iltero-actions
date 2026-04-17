@@ -87,7 +87,7 @@ Use the right store for each kind of value:
 | Store | What goes here | Examples |
 |-------|----------------|----------|
 | **Secrets** | Credentials, tokens, API keys | `ILTERO_TOKEN`, `AWS_ROLE_ARN`, `GITHUB_TOKEN` |
-| **Variables** | Non-sensitive config | `ILTERO_STACK_ID`, `ILTERO_ORG_ID`, `AWS_REGION`, `ILTERO_API_URL` |
+| **Variables** | Non-sensitive config | `ILTERO_ORG_ID`, `AWS_REGION`, `ILTERO_API_URL` |
 
 GitHub masks secret values in logs automatically. Variables are visible in logs — don't put anything sensitive there.
 

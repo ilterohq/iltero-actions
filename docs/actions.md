@@ -38,7 +38,6 @@ Complete reference for every action in this toolkit. For an overview and quick s
 | `environment` | No | Auto-detect | Override environment detection |
 | `stack` | No | Auto-detect | Specific stack to process |
 | `oidc` | No | `false` | Enable OIDC authentication (recommended) |
-| `stack_id` | No | — | Iltero Stack ID (required when `oidc` is `true`) |
 | `org_id` | No | — | Iltero Organization ID (required when `oidc` is `true`) |
 | `registry_host` | No | `registry.iltero.io` | Private module registry |
 | `dry_run` | No | `false` | Skip deployment |
