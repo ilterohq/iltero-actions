@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-04-17
+
+### Added
+
+- Per-stack OIDC exchange — multi-stack repos get a correctly scoped token per stack
+- Stack-level error tracking — OIDC or config failures now fail the pipeline instead of silently passing
+
+### Removed
+
+- `stack_id` input from the root action (read from each stack's `config.yml`)
+
 ## [1.3.0] - 2026-04-16
 
 ### Added
