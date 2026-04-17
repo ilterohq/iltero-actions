@@ -24,7 +24,6 @@
 #     with:
 #       stacks_path: infra/stacks
 #       oidc: 'true'
-#       stack_id: ${{ vars.ILTERO_STACK_ID }}
 #       org_id: ${{ vars.ILTERO_ORG_ID }}
 #       # ILTERO_API_URL defaults to https://api.iltero.io
 #
@@ -128,21 +127,16 @@ inputs:
 
   oidc:
     description: |
-      Enable OIDC authentication. When true, exchanges GitHub Actions OIDC
-      token for short-lived Iltero tokens instead of using secrets.ILTERO_TOKEN.
-      Requires stack_id and org_id inputs.
+      Enable OIDC authentication. When true, the pipeline exchanges a
+      GitHub Actions OIDC token for short-lived Iltero tokens per stack
+      (using stack.id from each stack's config.yml). Requires org_id.
     required: false
     default: 'false'
-
-  stack_id:
-    description: |
-      Iltero Stack ID (required when oidc is true).
-    required: false
-    default: ''
 
   org_id:
     description: |
       Iltero Organization ID (required when oidc is true).
+      Set as a repository variable: vars.ILTERO_ORG_ID
     required: false
     default: ''
 
@@ -218,7 +212,6 @@ runs:
     - name: Validate Inputs
       shell: bash
       env:
-        INPUT_STACK_ID: ${{ inputs.stack_id }}
         INPUT_ORG_ID: ${{ inputs.org_id }}
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
         INPUT_STACK: ${{ inputs.stack }}
@@ -246,9 +239,6 @@ runs:
 
         # Optional UUID fields (empty = unset → OK)
         uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-        if [[ -n "${INPUT_STACK_ID:-}" && ! "${INPUT_STACK_ID}" =~ $uuid_re ]]; then
-          fail "stack_id must be a UUID"
-        fi
         if [[ -n "${INPUT_ORG_ID:-}" && ! "${INPUT_ORG_ID}" =~ $uuid_re ]]; then
           fail "org_id must be a UUID"
         fi
@@ -487,39 +477,14 @@ runs:
     # Inlined from setup-oidc/ to avoid nested composite action issues.
     # =========================================================================
 
-    # -------------------------------------------------------------------------
-    # Verify CLI available for OIDC
-    # -------------------------------------------------------------------------
-    - name: OIDC - Verify CLI Available
-      if: inputs.oidc == 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        if ! command -v iltero &>/dev/null; then
-          echo "::error::Iltero CLI not found."
-          exit 1
-        fi
-
-    # -------------------------------------------------------------------------
-    # Exchange OIDC token via CLI (delegates to scripts/oidc-exchange.sh so the
-    # logic stays in sync with the standalone setup-oidc/action.yml).
-    # -------------------------------------------------------------------------
-    - name: OIDC - Exchange Token
-      id: oidc_exchange
-      if: inputs.oidc == 'true'
-      shell: bash
-      env:
-        ILTERO_STACK_ID: ${{ inputs.stack_id }}
-        ILTERO_ORG_ID: ${{ inputs.org_id }}
-      run: |
-        "${GITHUB_ACTION_PATH}/scripts/oidc-exchange.sh"
-
     # =========================================================================
-    # CONFIGURE REGISTRY
-    # Inlined from configure-registry/ to avoid nested composite action issues.
+    # CONFIGURE REGISTRY (non-OIDC only)
+    # When oidc is true, the pipeline configures registry per-stack after
+    # each OIDC exchange. For non-OIDC (long-lived secrets), configure once.
     # =========================================================================
     - name: Configure Registry
       id: registry
+      if: inputs.oidc != 'true'
       shell: bash
       env:
         REGISTRY_HOST: ${{ inputs.registry_host }}
@@ -530,7 +495,6 @@ runs:
         ACTION_DIR="${GITHUB_ACTION_PATH:-$(dirname "$0")/..}"
         source "${ACTION_DIR}/scripts/lib/iltero-core/index.sh"
 
-        # Use OIDC registry token if available, otherwise use env var
         TOKEN="${ILTERO_REGISTRY_TOKEN:-}"
 
         if configure_registry "$TOKEN" "$REGISTRY_HOST"; then
@@ -601,6 +565,8 @@ runs:
         VERIFY_AUTHORIZATION: ${{ inputs.verify_authorization }}
         DEBUG: ${{ inputs.debug }}
         REGISTRY_HOST: ${{ inputs.registry_host }}
+        OIDC_ENABLED: ${{ inputs.oidc }}
+        ILTERO_ORG_ID: ${{ inputs.org_id }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}
         GITHUB_REF: ${{ github.ref }}
         GITHUB_BASE_REF: ${{ github.base_ref }}

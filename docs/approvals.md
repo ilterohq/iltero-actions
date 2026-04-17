@@ -73,7 +73,6 @@ jobs:
           stacks_path: infra/stacks
           dry_run: 'true'                        # Compliance only — deploy in separate job
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
 
   deploy-production:
@@ -109,7 +108,6 @@ jobs:
           run_id: ${{ needs.compliance.outputs.run_id }}
           verify_authorization: 'true'
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
 ```
 

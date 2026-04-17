@@ -126,6 +126,7 @@ COMPLIANCE_FAILED=false
 EVALUATION_FAILED=false
 DEPLOY_FAILED=false
 AUTHORIZATION_FAILED=false
+STACK_ERROR=false
 PROCESSED_STACKS=()
 APPROVAL_ID=""
 declare -A FAILED_UNITS  # Track failed units for dependency checking
@@ -445,15 +446,49 @@ process_stack() {
     stack_name=$(yq eval '.stack.name // ""' "$config_file")
     workspace=$(yq eval '.stack.workspace // ""' "$config_file")
 
-    if [[ -z "$stack_id" ]]; then
+    if [[ -z "${stack_id}" ]]; then
         log_error "stack.id is required in config.yml"
         return 1
     fi
 
     # Export workspace for CLI commands (used by iltero-cli for API headers)
-    if [[ -n "$workspace" ]]; then
-        export ILTERO_WORKSPACE="$workspace"
-        log_info "Workspace: $workspace"
+    if [[ -n "${workspace}" ]]; then
+        export ILTERO_WORKSPACE="${workspace}"
+        log_info "Workspace: ${workspace}"
+    fi
+
+    # -------------------------------------------------------------------------
+    # Per-stack OIDC exchange (when enabled)
+    # -------------------------------------------------------------------------
+    if [[ "${OIDC_ENABLED:-false}" == "true" ]]; then
+        log_info "Exchanging OIDC token for stack ${stack_id}..."
+
+        # Token hygiene: clear previous stack's tokens
+        unset ILTERO_TOKEN ILTERO_REGISTRY_TOKEN 2>/dev/null || true
+
+        # oidc-exchange.sh reads these from env
+        export ILTERO_STACK_ID="${stack_id}"
+
+        # Run exchange — writes tokens to $GITHUB_ENV and masks them
+        if ! "${ACTION_PATH}/scripts/oidc-exchange.sh"; then
+            log_error "OIDC token exchange failed for stack ${stack_id}"
+            return 1
+        fi
+
+        # The CLI wrote tokens to $GITHUB_ENV (for subsequent GitHub Actions
+        # steps) but they are not in the current shell. Read them back.
+        ILTERO_TOKEN=$(grep '^ILTERO_TOKEN=' "${GITHUB_ENV}" | tail -1 | cut -d= -f2-)
+        export ILTERO_TOKEN
+        ILTERO_REGISTRY_TOKEN=$(grep '^ILTERO_REGISTRY_TOKEN=' "${GITHUB_ENV}" | tail -1 | cut -d= -f2-)
+        export ILTERO_REGISTRY_TOKEN
+
+        if [[ -z "${ILTERO_TOKEN:-}" ]]; then
+            log_error "OIDC exchange did not produce ILTERO_TOKEN"
+            return 1
+        fi
+
+        # Configure registry credentials with the per-stack token
+        configure_registry "${ILTERO_REGISTRY_TOKEN:-}" "${REGISTRY_HOST:-registry.iltero.io}"
     fi
 
     # -------------------------------------------------------------------------
@@ -740,16 +775,36 @@ process_brownfield_stack() {
     workspace=$(yq eval '.stack.workspace // ""' "$config_file")
     tf_dir=$(yq eval '.stack.terraform_working_directory // "."' "$config_file")
 
-    if [[ -z "$stack_id" ]]; then
+    if [[ -z "${stack_id}" ]]; then
         log_error "stack.id is required in config.yml"
         return 1
     fi
 
-    export ILTERO_STACK_NAME="${stack_slug:-$stack_name}"
-    [[ -n "$workspace" ]] && export ILTERO_WORKSPACE="$workspace"
+    export ILTERO_STACK_NAME="${stack_slug:-${stack_name}}"
+    [[ -n "${workspace}" ]] && export ILTERO_WORKSPACE="${workspace}"
+
+    # Per-stack OIDC exchange (when enabled)
+    if [[ "${OIDC_ENABLED:-false}" == "true" ]]; then
+        log_info "Exchanging OIDC token for stack ${stack_id}..."
+        unset ILTERO_TOKEN ILTERO_REGISTRY_TOKEN 2>/dev/null || true
+        export ILTERO_STACK_ID="${stack_id}"
+        if ! "${ACTION_PATH}/scripts/oidc-exchange.sh"; then
+            log_error "OIDC token exchange failed for stack ${stack_id}"
+            return 1
+        fi
+        ILTERO_TOKEN=$(grep '^ILTERO_TOKEN=' "${GITHUB_ENV}" | tail -1 | cut -d= -f2-)
+        export ILTERO_TOKEN
+        ILTERO_REGISTRY_TOKEN=$(grep '^ILTERO_REGISTRY_TOKEN=' "${GITHUB_ENV}" | tail -1 | cut -d= -f2-)
+        export ILTERO_REGISTRY_TOKEN
+        if [[ -z "${ILTERO_TOKEN:-}" ]]; then
+            log_error "OIDC exchange did not produce ILTERO_TOKEN"
+            return 1
+        fi
+        configure_registry "${ILTERO_REGISTRY_TOKEN:-}" "${REGISTRY_HOST:-registry.iltero.io}"
+    fi
 
     # Initialize remote state tracking
-    init_remote_state_tracking "${stack_slug:-$stack_name}"
+    init_remote_state_tracking "${stack_slug:-${stack_name}}"
 
     # Initialize result tracking for this stack
     init_stack_results "${stack_slug:-$stack_name}"
@@ -871,7 +926,7 @@ main() {
         fi
 
         # Brownfield always processes the single config file
-        process_brownfield_stack "$CONFIG_PATH" || true
+        process_brownfield_stack "${CONFIG_PATH}" || STACK_ERROR=true
     else
         # Greenfield: stacks directory with infrastructure units
         if [[ ! -d "$STACKS_PATH" ]]; then
@@ -901,8 +956,8 @@ main() {
             exit 0
         fi
 
-        for stack in $(echo "$stacks_json" | jq -r '.[]'); do
-            process_stack "$stack" || true
+        for stack in $(echo "${stacks_json}" | jq -r '.[]'); do
+            process_stack "${stack}" || STACK_ERROR=true
         done
     fi
 
@@ -972,11 +1027,19 @@ main() {
     printf "  %-20s %s  %s\n" "Deploy" "$deploy_status" "$deploy_detail"
     echo ""
 
-    if [[ "$COMPLIANCE_FAILED" == "true" ]] || [[ "$EVALUATION_FAILED" == "true" ]]; then
+    if [[ "${STACK_ERROR}" == "true" ]]; then
+        set_output "overall_status" "error"
+        set_output "deployment_ready" "false"
+        echo "Result: FAILED — one or more stacks failed to process (see errors above)"
+        echo ""
+        echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
+        echo "==============================================================================="
+        exit 1
+    elif [[ "${COMPLIANCE_FAILED}" == "true" ]] || [[ "${EVALUATION_FAILED}" == "true" ]]; then
         local total_violations=$((total_scan_violations + total_eval_violations))
-        if [[ "$COMPLIANCE_FAILED" == "true" ]] && [[ "$EVALUATION_FAILED" == "true" ]]; then
+        if [[ "${COMPLIANCE_FAILED}" == "true" ]] && [[ "${EVALUATION_FAILED}" == "true" ]]; then
             set_output "overall_status" "compliance_failed"
-        elif [[ "$COMPLIANCE_FAILED" == "true" ]]; then
+        elif [[ "${COMPLIANCE_FAILED}" == "true" ]]; then
             set_output "overall_status" "compliance_failed"
         else
             set_output "overall_status" "evaluation_failed"
@@ -986,7 +1049,7 @@ main() {
         echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
         echo "==============================================================================="
         exit 1
-    elif [[ "$AUTHORIZATION_FAILED" == "true" ]]; then
+    elif [[ "${AUTHORIZATION_FAILED}" == "true" ]]; then
         set_output "overall_status" "authorization_failed"
         set_output "authorization_passed" "false"
         echo "Result: FAILED — deployment not authorized"

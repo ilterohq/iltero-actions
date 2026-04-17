@@ -80,7 +80,6 @@ jobs:
           stacks_path: infra/stacks
           dry_run: 'true'  # Compliance only, no deployment
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}

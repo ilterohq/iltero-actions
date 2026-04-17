@@ -23,7 +23,6 @@
 #
 # Requirements:
 #   - ILTERO_API_URL in repository variables
-#   - ILTERO_STACK_ID in repository variables
 #   - ILTERO_ORG_ID in repository variables
 #   - PipelinePrincipal configured in Iltero for this repository
 #   - .iltero/config.yml in the repository root (or custom config_path)
@@ -69,7 +68,6 @@ jobs:
         uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}

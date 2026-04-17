@@ -270,7 +270,6 @@ jobs:
           dry_run: ${{ needs.validate.outputs.dry_run }}
           skip_compliance: ${{ needs.validate.outputs.skip_compliance }}
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
@@ -334,7 +333,6 @@ jobs:
           run_id: ${{ needs.compliance.outputs.run_id }}
           verify_authorization: 'true'
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
@@ -385,7 +383,6 @@ jobs:
           run_id: ${{ needs.compliance.outputs.run_id }}
           verify_authorization: 'true'
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
@@ -470,7 +467,6 @@ jobs:
           run_id: ${{ needs.compliance.outputs.run_id }}
           verify_authorization: 'true'
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
           ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}

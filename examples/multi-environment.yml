@@ -58,7 +58,6 @@ jobs:
         with:
           stacks_path: infra/stacks
           oidc: 'true'
-          stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
           # No environment input needed - auto-detected from branch!
         env:
