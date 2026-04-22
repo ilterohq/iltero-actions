@@ -32,7 +32,8 @@
 # Args: $1=path $2=stack_id $3=unit $4=environment $5=fail_on $6=run_id $7=plan_file $8=depends_on $9=frameworks (optional)
 # Sets: EVAL_RUN_ID, EVAL_SCAN_ID, EVAL_PASSED, EVAL_VIOLATIONS, EVAL_EXIT_CODE, APPROVAL_ID, PLAN_JSON_FILE, EVAL_MODE
 run_plan_evaluation() {
-    local eval_path="$1"
+    local eval_path
+    eval_path="$(cd "$1" && pwd)"
     local stack_id="$2"
     local unit_name="$3"
     local environment="$4"
@@ -90,7 +91,6 @@ run_plan_evaluation() {
         # =====================================================================
         # Resolve backend config before init (partial backend configs need -backend-config)
         log_info "Working directory: $(pwd)"
-        log_info "Resolving env config: eval_path=${eval_path} environment=${environment}"
         check_env_config "${eval_path}" "${environment}"
         log_info "Resolved: BACKEND_HCL=${BACKEND_HCL:-<empty>} TFVARS_FILE=${TFVARS_FILE:-<empty>}"
 
