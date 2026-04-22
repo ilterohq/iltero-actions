@@ -89,14 +89,17 @@ run_plan_evaluation() {
         # Step 2: Initialize terraform (always with backend for this unit's state)
         # =====================================================================
         # Resolve backend config before init (partial backend configs need -backend-config)
+        log_info "Working directory: $(pwd)"
+        log_info "Resolving env config: eval_path=${eval_path} environment=${environment}"
         check_env_config "${eval_path}" "${environment}"
+        log_info "Resolved: BACKEND_HCL=${BACKEND_HCL:-<empty>} TFVARS_FILE=${TFVARS_FILE:-<empty>}"
 
         local init_args=(-input=false)
         if [[ -n "${BACKEND_HCL}" ]]; then
             init_args+=(-backend-config="${BACKEND_HCL}")
-            log_info "Initializing with backend config: ${BACKEND_HCL}"
         fi
 
+        log_info "Running: terraform init ${init_args[*]}"
         local init_output
         set +e
         init_output=$(terraform init "${init_args[@]}" 2>&1)
@@ -173,8 +176,8 @@ run_plan_evaluation() {
             log_warning "No tfvars file found for environment: ${environment}"
         fi
 
-        # Run plan (capture output, only show on failure)
         # Run terraform plan
+        log_info "Running: terraform plan ${plan_args[*]}"
         local plan_output
         set +e
         plan_output=$(terraform plan "${plan_args[@]}" 2>&1)
@@ -323,6 +326,7 @@ run_plan_evaluation() {
     # Note: Upload happens via Compliance API using scan_id from policy resolution
     # No --skip-upload needed - the CLI handles this automatically
 
+    log_info "Running: ${cmd[*]}"
     set +e
     "${cmd[@]}"
     EVAL_EXIT_CODE=$?
