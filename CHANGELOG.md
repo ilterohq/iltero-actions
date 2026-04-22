@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Command logging in plan evaluation — logs working directory, resolved backend/tfvars paths, and exact `terraform init`/`plan`/`iltero scan` commands before execution
+- Command logging in plan evaluation — logs working directory, resolved
+  backend/tfvars paths, and exact terraform commands before execution
 
 ## [1.3.2] - 2026-04-22
 
