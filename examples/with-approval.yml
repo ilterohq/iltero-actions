@@ -5,7 +5,7 @@
 #
 # When config.yml has `deployment.require_approval: true`, the iltero-actions
 # pipeline will:
-#   1. Run compliance checks and plan evaluation
+#   1. Run static scans and plan evaluation
 #   2. Iltero backend creates an approval automatically when it receives the
 #      plan-phase webhook. The approval_id is returned in the evaluation response
 #      and captured by the script.

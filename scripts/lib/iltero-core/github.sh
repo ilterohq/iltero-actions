@@ -48,7 +48,7 @@ write_summary() {
     fi
 }
 
-# Generate and write a compliance scan summary table
+# Generate and write a static scan summary table
 # Args: $1=scan_results_json (array of scan results)
 write_scan_summary() {
     local results_json="$1"

@@ -7,7 +7,7 @@
 #   - Automatic environment detection from branch
 #   - Automatic stack detection from changed files
 #   - Sequential unit processing with dependency ordering
-#   - Compliance scanning (Checkov) and plan evaluation (OPA)
+#   - Static scanning (Checkov) and plan evaluation (OPA)
 #   - Result submission to Iltero
 #
 # Usage:
@@ -148,12 +148,12 @@ outputs:
   overall_status:
     description: |
       Overall pipeline status.
-      Values: success, compliance_failed, evaluation_failed, authorization_failed, deploy_failed, skipped
+      Values: success, static_scan_failed, evaluation_failed, authorization_failed, deploy_failed, skipped
     value: ${{ steps.pipeline.outputs.overall_status }}
 
-  compliance_passed:
-    description: Whether all compliance scans passed (true/false)
-    value: ${{ steps.pipeline.outputs.compliance_passed }}
+  static_scan_passed:
+    description: Whether all static scans passed (true/false)
+    value: ${{ steps.pipeline.outputs.static_scan_passed }}
 
   evaluation_passed:
     description: Whether all plan evaluations passed (true/false)
@@ -587,10 +587,98 @@ runs:
       env:
         OVERALL_STATUS: ${{ steps.pipeline.outputs.overall_status }}
         STACKS_PROCESSED: ${{ steps.pipeline.outputs.stacks_processed }}
-        COMPLIANCE_PASSED: ${{ steps.pipeline.outputs.compliance_passed }}
+        STATIC_SCAN_PASSED: ${{ steps.pipeline.outputs.static_scan_passed }}
         EVALUATION_PASSED: ${{ steps.pipeline.outputs.evaluation_passed }}
         ENVIRONMENT: ${{ steps.pipeline.outputs.environment }}
         UNIT_RESULTS: ${{ steps.pipeline.outputs.unit_results }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         "${ACTION_PATH}/scripts/generate-summary.sh"
+
+    # -------------------------------------------------------------------------
+    # Step 6: Comment on PR
+    # -------------------------------------------------------------------------
+    - name: Comment on PR
+      if: github.event_name == 'pull_request' && always()
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+      env:
+        OVERALL_STATUS: ${{ steps.pipeline.outputs.overall_status }}
+        ENVIRONMENT: ${{ steps.pipeline.outputs.environment }}
+        STATIC_SCAN_PASSED: ${{ steps.pipeline.outputs.static_scan_passed }}
+        EVALUATION_PASSED: ${{ steps.pipeline.outputs.evaluation_passed }}
+        UNIT_RESULTS: ${{ steps.pipeline.outputs.unit_results }}
+        RUN_ID: ${{ steps.pipeline.outputs.run_id }}
+      with:
+        github-token: ${{ github.token }}
+        script: |
+          const status = process.env.OVERALL_STATUS || 'unknown';
+          const env = process.env.ENVIRONMENT || 'unknown';
+          const scanPassed = process.env.STATIC_SCAN_PASSED === 'true';
+          const evalPassed = process.env.EVALUATION_PASSED === 'true';
+          const runId = process.env.RUN_ID || '';
+          const allPassed = status === 'success';
+
+          const emoji = allPassed ? '✅' : '❌';
+
+          let body = `## ${emoji} Iltero Infrastructure Pipeline\n\n`;
+          body += `| Check | Status |\n`;
+          body += `|-------|--------|\n`;
+          body += `| **Environment** | \`${env}\` |\n`;
+          body += `| **Static Analysis** | ${scanPassed ? '✅ Passed' : '❌ Failed'} |\n`;
+          body += `| **Plan Evaluation** | ${evalPassed ? '✅ Passed' : '❌ Failed'} |\n`;
+          if (runId) {
+            body += `| **Run ID** | \`${runId}\` |\n`;
+          }
+
+          // Per-unit details if available
+          try {
+            const unitResults = JSON.parse(process.env.UNIT_RESULTS || '[]');
+            if (unitResults.length > 0) {
+              body += `\n### Unit Results\n\n`;
+              body += `| Unit | Static Analysis | Plan Evaluation |\n`;
+              body += `|------|-----------------|------------------|\n`;
+              for (const result of unitResults) {
+                const scan = result.scan || {};
+                const evaluation = result.evaluation || {};
+                const scanStatus = scan.skipped ? '⏭️ Skipped' : (scan.passed ? '✅ Passed' : `❌ ${scan.violations || 0} finding(s)`);
+                const evalStatus = evaluation.skipped ? '⏭️ Skipped' : (evaluation.passed ? '✅ Passed' : `❌ ${evaluation.violations || 0} violation(s)`);
+                body += `| \`${result.unit}\` | ${scanStatus} | ${evalStatus} |\n`;
+              }
+            }
+          } catch (e) {
+            // unit_results not available or not valid JSON
+          }
+
+          if (!allPassed) {
+            body += `\n**Action Required:** Resolve findings before merge.\n`;
+          }
+          body += `\n---\n`;
+          body += `<sub>Powered by [Iltero](https://iltero.io)</sub>`;
+
+          // Update existing comment or create new one
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existing = comments.find(c =>
+            c.body.includes('Iltero Infrastructure Pipeline') &&
+            c.body.includes('Powered by [Iltero]')
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body: body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
+          }

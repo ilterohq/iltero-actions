@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      compliance_passed: ${{ steps.pipeline.outputs.compliance_passed }}
+      static_scan_passed: ${{ steps.pipeline.outputs.static_scan_passed }}
       environment: ${{ steps.pipeline.outputs.environment }}
       run_id: ${{ steps.pipeline.outputs.run_id }}
       require_approval: ${{ steps.pipeline.outputs.require_approval }}

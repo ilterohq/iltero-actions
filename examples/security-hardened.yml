@@ -215,7 +215,7 @@ jobs:
       require_approval: ${{ steps.pipeline.outputs.require_approval }}
       approval_id: ${{ steps.pipeline.outputs.approval_id }}
       deployment_ready: ${{ steps.pipeline.outputs.deployment_ready }}
-      compliance_passed: ${{ steps.pipeline.outputs.compliance_passed }}
+      static_scan_passed: ${{ steps.pipeline.outputs.static_scan_passed }}
       evaluation_passed: ${{ steps.pipeline.outputs.evaluation_passed }}
 
     steps:
@@ -503,7 +503,7 @@ jobs:
           # SECURITY: Use GITHUB_TOKEN with minimal scope, not PAT
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const status = '${{ needs.compliance.outputs.compliance_passed }}' === 'true' &&
+            const status = '${{ needs.compliance.outputs.static_scan_passed }}' === 'true' &&
                           '${{ needs.compliance.outputs.evaluation_passed }}' === 'true';
             const emoji = status ? '✅' : '❌';
             const env = '${{ needs.compliance.outputs.environment }}';
@@ -514,7 +514,7 @@ jobs:
             | Check | Status |
             |-------|--------|
             | **Environment** | \`${env}\` |
-            | **Compliance** | ${'${{ needs.compliance.outputs.compliance_passed }}' === 'true' ? '✅ Passed' : '❌ Failed'} |
+            | **Static Scan** | ${'${{ needs.compliance.outputs.static_scan_passed }}' === 'true' ? '✅ Passed' : '❌ Failed'} |
             | **Plan Evaluation** | ${'${{ needs.compliance.outputs.evaluation_passed }}' === 'true' ? '✅ Passed' : '❌ Failed'} |
             `;
 

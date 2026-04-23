@@ -1,7 +1,7 @@
 # =============================================================================
 # ilterohq/iltero-actions/scan
 # =============================================================================
-# Run compliance scanning on Terraform infrastructure code.
+# Run static scanning on Terraform infrastructure code.
 #
 # This action runs static analysis using Checkov and submits results to Iltero.
 # It can scan individual units or auto-detect from config.yml.
@@ -68,7 +68,7 @@ inputs:
 
   run-id:
     description: |
-      Chain to an existing Iltero run ID (for linking compliance → evaluation).
+      Chain to an existing Iltero run ID (for linking static scan → evaluation).
     required: false
     default: ''
 
@@ -119,15 +119,15 @@ runs:
           validate_unit_structure "$SCAN_PATH"
         fi
 
-        # Run compliance scan
+        # Run static scan
         set +e
-        run_compliance_scan "$SCAN_PATH" "$STACK_ID" "$UNIT_NAME" "$ENVIRONMENT" "$FAIL_ON" "$CHAIN_RUN_ID"
+        run_static_scan "$SCAN_PATH" "$STACK_ID" "$UNIT_NAME" "$ENVIRONMENT" "$FAIL_ON" "$CHAIN_RUN_ID"
         EXIT_CODE=$?
         set -e
 
         # Set outputs using helper
         set_scan_outputs
-        echo "results-file=/tmp/compliance-${UNIT_NAME}-*.json" >> $GITHUB_OUTPUT
+        echo "results-file=/tmp/static-${UNIT_NAME}-*.json" >> $GITHUB_OUTPUT
         echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
 
     # -------------------------------------------------------------------------

@@ -5,13 +5,13 @@
 # This script orchestrates the complete infrastructure compliance pipeline:
 #   1. Detect environment from git ref (or use override)
 #   2. Detect stacks from changed files (or use manual input)
-#   3. For each stack: parse config, run compliance, evaluate plans, deploy
+#   3. For each stack: parse config, run static scan, evaluate plans, deploy
 #
 # Usage:
 #   run-pipeline.sh [OPTIONS]
 #
 # Modes:
-#   --scan-only         Run compliance scan only
+#   --scan-only         Run static scan only
 #   --evaluate-only     Run plan evaluation only
 #   --deploy-only       Run deployment only (requires --run-id)
 #   (default)           Run full pipeline
@@ -23,7 +23,7 @@
 #   --environment ENV   Override environment detection
 #   --run-id ID         Chain to existing Iltero run
 #   --dry-run           Skip deployment phase
-#   --skip-compliance   Skip compliance scanning
+#   --skip-compliance  Skip compliance scanning
 #   --verify-auth       Verify deployment authorization (default: true)
 #   --no-verify-auth    Skip authorization verification
 #   --debug             Enable debug output
@@ -65,7 +65,7 @@ Usage: run-pipeline.sh [OPTIONS]
 Iltero Infrastructure Compliance Pipeline
 
 Modes:
-  --scan-only         Run compliance scan only
+  --scan-only         Run static scan only
   --evaluate-only     Run plan evaluation only
   --deploy-only       Run deployment only (requires --run-id)
   (default)           Run full pipeline
@@ -122,11 +122,12 @@ fi
 COMPLIANCE_ONLY="false"
 
 # Pipeline state
-COMPLIANCE_FAILED=false
+STATIC_SCAN_FAILED=false
 EVALUATION_FAILED=false
 DEPLOY_FAILED=false
 AUTHORIZATION_FAILED=false
 STACK_ERROR=false
+BLOCK_ON_VIOLATIONS=true  # Default: block pipeline on violations
 PROCESSED_STACKS=()
 APPROVAL_ID=""
 declare -A FAILED_UNITS  # Track failed units for dependency checking
@@ -264,12 +265,12 @@ process_unit() {
     fi
 
     # -------------------------------------------------------------------------
-    # Compliance Scan (if enabled) — always runs regardless of dep failures
+    # Static Scan (if enabled) — always runs regardless of dep failures
     # -------------------------------------------------------------------------
     if [[ "$MODE" == "scan" ]] || [[ "$MODE" == "full" ]]; then
         if [[ "$SKIP_COMPLIANCE" != "true" ]] && echo "$scan_types" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
             set +e
-            run_compliance_scan "$full_path" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
+            run_static_scan "$full_path" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
             local scan_exit=$?
             set -e
 
@@ -290,8 +291,12 @@ process_unit() {
             # Collect scan result
             local scan_passed="true"
             if [[ $scan_exit -ne 0 ]]; then
-                COMPLIANCE_FAILED=true
-                FAILED_UNITS["$unit_name"]="compliance_failed"
+                if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                    STATIC_SCAN_FAILED=true
+                else
+                    log_warning "Compliance violations found but block_on_violations is false - continuing"
+                fi
+                FAILED_UNITS["$unit_name"]="static_scan_failed"
                 scan_passed="false"
             fi
 
@@ -330,17 +335,19 @@ process_unit() {
                 GLOBAL_SCAN_ID="$EVAL_SCAN_ID"
             fi
 
-            if [[ -n "${APPROVAL_ID:-}" ]] && [[ -z "$APPROVAL_ID" ]]; then
-                APPROVAL_ID="$APPROVAL_ID"
-            fi
-
             local eval_passed="true"
             if [[ $eval_exit -ne 0 ]]; then
-                EVALUATION_FAILED=true
                 if [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
+                    if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                        EVALUATION_FAILED=true
+                    else
+                        log_warning "Evaluation violations found but block_on_violations is false — continuing"
+                    fi
                     FAILED_UNITS["$unit_name"]="evaluation_failed"
                     log_warning "Unit $unit_name has $EVAL_VIOLATIONS policy violations"
                 else
+                    # Infrastructure errors always block regardless of block_on_violations
+                    EVALUATION_FAILED=true
                     FAILED_UNITS["$unit_name"]="infra_error"
                     log_warning "Unit $unit_name had infrastructure errors but no policy violations"
                 fi
@@ -365,7 +372,7 @@ process_unit() {
     # -------------------------------------------------------------------------
     if [[ "$MODE" == "deploy" ]] || [[ "$MODE" == "full" ]]; then
         if [[ "$DRY_RUN" != "true" ]] && \
-           [[ "$COMPLIANCE_FAILED" != "true" ]] && \
+           [[ "$STATIC_SCAN_FAILED" != "true" ]] && \
            [[ "$EVALUATION_FAILED" != "true" ]]; then
 
             # Only deploy in deploy mode or if specifically enabled in full mode
@@ -525,6 +532,7 @@ process_stack() {
     scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "$config_file" -o json)
     severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "$config_file")
     require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "$config_file")
+    BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "$config_file")
     frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "$config_file" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
 
     # Default framework based on cloud provider if none explicitly configured
@@ -638,7 +646,7 @@ process_brownfield_unit() {
     if [[ "$MODE" == "scan" ]] || [[ "$MODE" == "full" ]]; then
         if [[ "$SKIP_COMPLIANCE" != "true" ]] && echo "$scan_types" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
             set +e
-            run_compliance_scan "$tf_dir" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
+            run_static_scan "$tf_dir" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
             local scan_exit=$?
             set -e
 
@@ -654,7 +662,11 @@ process_brownfield_unit() {
 
             local scan_passed="true"
             if [[ $scan_exit -ne 0 ]]; then
-                COMPLIANCE_FAILED=true
+                if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                    STATIC_SCAN_FAILED=true
+                else
+                    log_warning "Compliance violations found but block_on_violations is false — continuing"
+                fi
                 scan_passed="false"
             fi
 
@@ -691,7 +703,16 @@ process_brownfield_unit() {
 
             local eval_passed="true"
             if [[ $eval_exit -ne 0 ]]; then
-                EVALUATION_FAILED=true
+                if [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
+                    if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                        EVALUATION_FAILED=true
+                    else
+                        log_warning "Evaluation violations found but block_on_violations is false — continuing"
+                    fi
+                else
+                    # Infrastructure errors always block regardless of block_on_violations
+                    EVALUATION_FAILED=true
+                fi
                 eval_passed="false"
             fi
 
@@ -712,7 +733,7 @@ process_brownfield_unit() {
     # -------------------------------------------------------------------------
     if [[ "$MODE" == "deploy" ]] || [[ "$MODE" == "full" ]]; then
         if [[ "$DRY_RUN" != "true" ]] && \
-           [[ "$COMPLIANCE_FAILED" != "true" ]] && \
+           [[ "$STATIC_SCAN_FAILED" != "true" ]] && \
            [[ "$EVALUATION_FAILED" != "true" ]]; then
 
             local should_deploy=false
@@ -842,6 +863,7 @@ process_brownfield_stack() {
     scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "$config_file" -o json)
     severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "$config_file")
     require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "$config_file")
+    BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "$config_file")
     frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "$config_file" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
 
     log_info "Stack ID: $stack_id"
@@ -920,8 +942,9 @@ main() {
             log_info "No stacks to process"
             set_output "stacks_processed" "[]"
             set_output "overall_status" "skipped"
-            set_output "compliance_passed" "true"
+            set_output "static_scan_passed" "true"
             set_output "evaluation_passed" "true"
+            set_output "deployment_ready" "false"
             exit 0
         fi
 
@@ -933,8 +956,9 @@ main() {
             log_info "Stacks directory not found: $STACKS_PATH — no stacks to process"
             set_output "stacks_processed" "[]"
             set_output "overall_status" "skipped"
-            set_output "compliance_passed" "true"
+            set_output "static_scan_passed" "true"
             set_output "evaluation_passed" "true"
+            set_output "deployment_ready" "false"
             exit 0
         fi
 
@@ -951,8 +975,9 @@ main() {
             log_info "No stacks to process"
             set_output "stacks_processed" "[]"
             set_output "overall_status" "skipped"
-            set_output "compliance_passed" "true"
+            set_output "static_scan_passed" "true"
             set_output "evaluation_passed" "true"
+            set_output "deployment_ready" "false"
             exit 0
         fi
 
@@ -980,24 +1005,24 @@ main() {
     total_scan_violations=$(echo "$all_unit_results" | jq '[.[].scan // {} | .violations // 0] | add // 0')
     total_eval_violations=$(echo "$all_unit_results" | jq '[.[].evaluation // {} | .violations // 0] | add // 0')
 
-    # Determine compliance_passed and evaluation_passed independently
-    local compliance_passed="true"
+    # Determine static_scan_passed and evaluation_passed independently
+    local static_scan_passed="true"
     local evaluation_passed="true"
-    if [[ "$COMPLIANCE_FAILED" == "true" ]]; then
-        compliance_passed="false"
+    if [[ "$STATIC_SCAN_FAILED" == "true" ]]; then
+        static_scan_passed="false"
     fi
     if [[ "$EVALUATION_FAILED" == "true" ]]; then
         evaluation_passed="false"
     fi
 
-    set_output "compliance_passed" "$compliance_passed"
+    set_output "static_scan_passed" "$static_scan_passed"
     set_output "evaluation_passed" "$evaluation_passed"
 
     # Determine phase statuses for summary
     local scan_status="[PASS]" eval_status="[PASS]" deploy_status="--"
     local scan_detail="0 findings above threshold" eval_detail="0 policy violations" deploy_detail=""
 
-    if [[ "$COMPLIANCE_FAILED" == "true" ]]; then
+    if [[ "$STATIC_SCAN_FAILED" == "true" ]]; then
         scan_status="[FAIL]"
         scan_detail="${total_scan_violations} findings above threshold"
     fi
@@ -1011,9 +1036,9 @@ main() {
     elif [[ "$AUTHORIZATION_FAILED" == "true" ]]; then
         deploy_status="[FAIL]"
         deploy_detail="not authorized"
-    elif [[ "$COMPLIANCE_FAILED" == "true" ]] || [[ "$EVALUATION_FAILED" == "true" ]]; then
+    elif [[ "$STATIC_SCAN_FAILED" == "true" ]] || [[ "$EVALUATION_FAILED" == "true" ]]; then
         deploy_status="  --  "
-        deploy_detail="blocked (compliance/evaluation failed)"
+        deploy_detail="blocked (static scan/evaluation failed)"
     fi
 
     # Print structured summary
@@ -1035,15 +1060,16 @@ main() {
         echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
         echo "==============================================================================="
         exit 1
-    elif [[ "${COMPLIANCE_FAILED}" == "true" ]] || [[ "${EVALUATION_FAILED}" == "true" ]]; then
+    elif [[ "${STATIC_SCAN_FAILED}" == "true" ]] || [[ "${EVALUATION_FAILED}" == "true" ]]; then
         local total_violations=$((total_scan_violations + total_eval_violations))
-        if [[ "${COMPLIANCE_FAILED}" == "true" ]] && [[ "${EVALUATION_FAILED}" == "true" ]]; then
-            set_output "overall_status" "compliance_failed"
-        elif [[ "${COMPLIANCE_FAILED}" == "true" ]]; then
-            set_output "overall_status" "compliance_failed"
+        if [[ "${STATIC_SCAN_FAILED}" == "true" ]] && [[ "${EVALUATION_FAILED}" == "true" ]]; then
+            set_output "overall_status" "static_scan_failed"
+        elif [[ "${STATIC_SCAN_FAILED}" == "true" ]]; then
+            set_output "overall_status" "static_scan_failed"
         else
             set_output "overall_status" "evaluation_failed"
         fi
+        set_output "deployment_ready" "false"
         echo "Result: FAILED — ${total_violations} violation(s) detected"
         echo ""
         echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
@@ -1051,6 +1077,7 @@ main() {
         exit 1
     elif [[ "${AUTHORIZATION_FAILED}" == "true" ]]; then
         set_output "overall_status" "authorization_failed"
+        set_output "deployment_ready" "false"
         set_output "authorization_passed" "false"
         echo "Result: FAILED — deployment not authorized"
         echo ""
@@ -1059,6 +1086,7 @@ main() {
         exit 1
     elif [[ "$DEPLOY_FAILED" == "true" ]]; then
         set_output "overall_status" "deploy_failed"
+        set_output "deployment_ready" "false"
         set_output "authorization_passed" "true"
         echo "Result: FAILED — deployment failed"
         echo ""
