@@ -51,9 +51,9 @@ Complete reference for every action in this toolkit. For an overview and quick s
 
 | Output | Description |
 |--------|-------------|
-| `overall_status` | `success`, `compliance_failed`, `evaluation_failed`, `authorization_failed`, `skipped` |
+| `overall_status` | `success`, `static_scan_failed`, `evaluation_failed`, `authorization_failed`, `skipped` |
 | `stacks_processed` | JSON array of processed stacks |
-| `compliance_passed` | Whether static analysis passed |
+| `static_scan_passed` | Whether static analysis passed |
 | `evaluation_passed` | Whether plan evaluation passed |
 | `compliance_only` | `true` when running on a pull request (no deployment) |
 | `authorization_passed` | Whether authorization passed (deploy mode) |

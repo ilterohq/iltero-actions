@@ -5,7 +5,7 @@
 # It will:
 #   - Auto-detect environment from the branch (via git_ref mapping in config.yml)
 #   - Auto-detect which stacks changed
-#   - Run compliance scans and plan evaluations
+#   - Run static scans and plan evaluations
 #
 # Requirements:
 #   - ILTERO_API_URL in repository variables

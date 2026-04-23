@@ -7,7 +7,7 @@
 # Environment Variables (set by action.yml):
 #   OVERALL_STATUS     - Overall pipeline status
 #   STACKS_PROCESSED   - JSON array of processed stacks
-#   COMPLIANCE_PASSED  - Whether compliance passed
+#   STATIC_SCAN_PASSED  - Whether static scans passed
 #   EVALUATION_PASSED  - Whether evaluation passed
 #   ENVIRONMENT        - Target environment
 # =============================================================================
@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Parse inputs with defaults
 STATUS="${OVERALL_STATUS:-unknown}"
 STACKS="${STACKS_PROCESSED:-[]}"
-COMPLIANCE="${COMPLIANCE_PASSED:-unknown}"
+STATIC_SCAN="${STATIC_SCAN_PASSED:-unknown}"
 EVALUATION="${EVALUATION_PASSED:-unknown}"
 ENV="${ENVIRONMENT:-unknown}"
 UNIT_RESULTS_JSON="${UNIT_RESULTS:-}"
@@ -63,7 +63,7 @@ case "$STATUS" in
     success)
         STATUS_TEXT="Passed"
         ;;
-    compliance_failed)
+    static_scan_failed)
         STATUS_TEXT="Failed (static analysis)"
         ;;
     evaluation_failed)
@@ -90,7 +90,7 @@ cat >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}" << EOF
 
 | Phase | Status |
 |-------|--------|
-| **Static Analysis** | $([ "$COMPLIANCE" == "true" ] && echo "Pass" || echo "Fail") |
+| **Static Analysis** | $([ "$STATIC_SCAN" == "true" ] && echo "Pass" || echo "Fail") |
 | **Plan Evaluation** | $([ "$EVALUATION" == "true" ] && echo "Pass" || echo "Fail") |
 
 EOF

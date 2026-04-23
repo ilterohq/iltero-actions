@@ -74,7 +74,7 @@ jobs:
     outputs:
       status: ${{ steps.iltero.outputs.overall_status }}
       environment: ${{ steps.iltero.outputs.environment }}
-      compliance_passed: ${{ steps.iltero.outputs.compliance_passed }}
+      static_scan_passed: ${{ steps.iltero.outputs.static_scan_passed }}
       evaluation_passed: ${{ steps.iltero.outputs.evaluation_passed }}
       stacks: ${{ steps.iltero.outputs.stacks_processed }}
 
@@ -123,7 +123,7 @@ jobs:
           script: |
             const status = '${{ needs.pipeline.outputs.status }}';
             const env = '${{ needs.pipeline.outputs.environment }}';
-            const compliance = '${{ needs.pipeline.outputs.compliance_passed }}' === 'true';
+            const static_scan = '${{ needs.pipeline.outputs.static_scan_passed }}' === 'true';
             const evaluation = '${{ needs.pipeline.outputs.evaluation_passed }}' === 'true';
 
             const emoji = status === 'success' ? '✅' : '❌';
@@ -132,7 +132,7 @@ jobs:
             | Check | Status |
             |-------|--------|
             | **Environment** | \`${env}\` |
-            | **Compliance** | ${compliance ? '✅ Passed' : '❌ Failed'} |
+            | **Static Scan** | ${static_scan ? '✅ Passed' : '❌ Failed'} |
             | **Plan Evaluation** | ${evaluation ? '✅ Passed' : '❌ Failed'} |
             | **Overall** | ${status} |
 

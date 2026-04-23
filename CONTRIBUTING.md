@@ -51,7 +51,7 @@ iltero-actions/
 ├── setup/action.yml               # Install tools
 ├── setup-oidc/action.yml          # OIDC authentication
 ├── configure-registry/action.yml  # Registry auth
-├── scan/action.yml                # Compliance scanning
+├── scan/action.yml                # Static scanning
 ├── evaluate/action.yml            # Plan evaluation
 ├── deploy/action.yml              # Deployment action
 ├── monitor/action.yml             # Drift detection & runtime compliance

@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-04-23
+
+### Added
+
+- `block_on_violations` config support — when
+  `compliance.block_on_violations` is `false` in config.yml, violations
+  warn but do not fail the pipeline (infrastructure errors always block)
+- PR comment on the root action — posts per-unit results table on pull
+  requests, matching the behaviour of the granular scan/evaluate actions
+
+### Changed
+
+- **Breaking:** rename `compliance_passed` output to `static_scan_passed`
+- **Breaking:** rename `compliance_failed` overall-status value to
+  `static_scan_failed`
+- Rename internal `run_compliance_scan` function to `run_static_scan`
+
+### Fixed
+
+- `deployment_ready` output now set in every exit branch (was missing
+  from violation, authorization, deploy-failed, and skipped branches)
+- Remove dead self-assignment of `APPROVAL_ID`
+
 ## [1.3.4] - 2026-04-22
 
 ### Fixed

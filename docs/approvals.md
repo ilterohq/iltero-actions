@@ -1,19 +1,22 @@
 # Deployment Approvals
 
-When a stack's `config.yml` has `deployment.require_approval: true`, Iltero Actions will run compliance and evaluation but **will not deploy automatically**. Deployment waits for a human to approve via GitHub Environment Protection.
+When a stack's `config.yml` has `deployment.require_approval: true`, Iltero Actions will run static scan and evaluation but **will not deploy automatically**. Deployment waits for a human to approve via GitHub Environment Protection.
 
 ## Table of Contents
 
-- [How It Works](#how-it-works)
-- [Setup: GitHub Environment Protection](#setup-github-environment-protection)
-- [Example Workflow](#example-workflow)
-- [Troubleshooting](#troubleshooting)
+- [Deployment Approvals](#deployment-approvals)
+  - [Table of Contents](#table-of-contents)
+  - [How It Works](#how-it-works)
+  - [Setup: GitHub Environment Protection](#setup-github-environment-protection)
+  - [Example Workflow](#example-workflow)
+  - [Troubleshooting](#troubleshooting)
+  - [Further reading](#further-reading)
 
 ---
 
 ## How It Works
 
-1. **Pipeline runs compliance and evaluation** on push. If they pass and the environment requires approval, the pipeline creates an approval record and outputs:
+1. **Pipeline runs static scan and evaluation** on push. If they pass and the environment requires approval, the pipeline creates an approval record and outputs:
    - `require_approval=true`
    - `approval_id=<uuid>`
    - `run_id=<uuid>`
@@ -126,7 +129,7 @@ Check Settings → Environments → your environment → Deployment protection r
 The `verify_authorization` step checks with Iltero that the deployment is authorized. Common causes:
 
 - The `run_id` passed to deploy doesn't match the one from compliance (check the `needs.compliance.outputs.run_id` wiring)
-- Compliance or evaluation actually failed (check `deployment_ready` is `true` before deploying)
+- Static scan or evaluation actually failed (check `deployment_ready` is `true` before deploying)
 - The GitHub user who approved doesn't have permission in Iltero (add them as an approver in the Iltero dashboard)
 
 **Approval happens but the deploy job doesn't resume**

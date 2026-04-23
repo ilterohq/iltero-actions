@@ -9,14 +9,14 @@
 #   EXIT_VIOLATIONS (1) - Scan found violations above fail_on threshold
 #   EXIT_ERROR (2)      - Scan failed to execute (API error, timeout, etc.)
 #
-# Exports after run_compliance_scan():
+# Exports after run_static_scan():
 #   SCAN_RUN_ID, SCAN_ID, SCAN_PASSED, SCAN_VIOLATIONS, SCAN_EXIT_CODE
 # =============================================================================
 
-# Run compliance scan using iltero CLI
+# Run static scan using iltero CLI
 # Args: $1=path $2=stack_id $3=unit $4=environment $5=fail_on $6=run_id (optional) $7=frameworks (optional) $8=config_path (optional)
 # Sets: SCAN_RUN_ID, SCAN_ID, SCAN_PASSED, SCAN_VIOLATIONS, SCAN_EXIT_CODE
-run_compliance_scan() {
+run_static_scan() {
     local scan_path="$1"
     local stack_id="$2"
     local unit_name="$3"
@@ -30,7 +30,7 @@ run_compliance_scan() {
     local results_dir
     results_dir="$(pwd)/.iltero/${ILTERO_STACK_NAME:?ILTERO_STACK_NAME not set}/static"
     mkdir -p "$results_dir"
-    results_file="${results_dir}/compliance-${unit_name}-$(date +%s).json"
+    results_file="${results_dir}/static-${unit_name}-$(date +%s).json"
 
     # Reset outputs
     SCAN_RUN_ID=""
