@@ -30,16 +30,12 @@ on:
           - staging
           - production
         default: ''
-      dry_run:
-        description: 'Dry run (compliance only, no deployment)'
+      mode:
+        description: 'Pipeline mode'
         required: false
-        type: boolean
-        default: true
-      skip_compliance:
-        description: 'Skip compliance checks (emergency deployments only)'
-        required: false
-        type: boolean
-        default: false
+        type: choice
+        options: ['scan_evaluate', 'full', 'scan', 'evaluate', 'deploy']
+        default: 'scan_evaluate'
 
 jobs:
   iltero:
@@ -56,14 +52,10 @@ jobs:
       - name: Validate Inputs
         env:
           INPUT_STACK: ${{ inputs.stack }}
-          INPUT_SKIP_COMPLIANCE: ${{ inputs.skip_compliance }}
         run: |
           if [[ -n "$INPUT_STACK" ]] && ! [[ "$INPUT_STACK" =~ ^[a-zA-Z0-9_-]+$ ]]; then
             echo "::error::Invalid stack name. Only alphanumeric, hyphens, underscores allowed."
             exit 1
-          fi
-          if [[ "$INPUT_SKIP_COMPLIANCE" == "true" ]]; then
-            echo "::warning::Compliance checks will be skipped. This should only be used in emergencies."
           fi
 
       - name: Checkout
@@ -84,8 +76,7 @@ jobs:
           stacks_path: infra/stacks
           stack: ${{ inputs.stack }}
           environment: ${{ inputs.environment }}
-          dry_run: ${{ inputs.dry_run }}
-          skip_compliance: ${{ inputs.skip_compliance }}
+          mode: ${{ inputs.mode }}
           debug: 'true'  # Enable debug for manual runs
           oidc: 'true'
           org_id: ${{ vars.ILTERO_ORG_ID }}

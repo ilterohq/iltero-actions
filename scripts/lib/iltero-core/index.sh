@@ -20,6 +20,8 @@
 #   aggregation.sh   - Multi-unit result aggregation
 #   runtime.sh       - Runtime/drift scanning
 #   results.sh       - Per-stack result accumulation
+#   ci-credential.sh - CI credential resolution (deploy-time)
+#   terraform.sh     - Shared terraform init+plan+state-export pipeline
 # =============================================================================
 
 set -euo pipefail
@@ -31,7 +33,7 @@ fi
 
 # Get directory containing this script
 ILTERO_CORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ILTERO_LIB_DIR="$(dirname "$ILTERO_CORE_DIR")"
+ILTERO_LIB_DIR="$(dirname "${ILTERO_CORE_DIR}")"
 
 # Source logging first (dependency for all modules)
 if [[ -z "${ILTERO_LOGGING_SOURCED:-}" ]]; then
@@ -57,6 +59,8 @@ source "${ILTERO_CORE_DIR}/polling.sh"
 source "${ILTERO_CORE_DIR}/aggregation.sh"
 source "${ILTERO_CORE_DIR}/runtime.sh"
 source "${ILTERO_CORE_DIR}/results.sh"
+source "${ILTERO_CORE_DIR}/ci-credential.sh"
+source "${ILTERO_CORE_DIR}/terraform.sh"
 
 # Mark as sourced
 export ILTERO_CORE_SOURCED=1

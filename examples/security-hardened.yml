@@ -76,21 +76,12 @@ on:
           - staging
           - production
         default: ''
-      dry_run:
-        description: 'Dry run (compliance only)'
+      mode:
+        description: 'Pipeline mode'
         required: false
-        type: boolean
-        default: true
-      skip_compliance:
-        description: 'Skip compliance (requires justification)'
-        required: false
-        type: boolean
-        default: false
-      justification:
-        description: 'Required if skip_compliance is true'
-        required: false
-        type: string
-        default: ''
+        type: choice
+        options: ['scan_evaluate', 'full', 'scan', 'evaluate', 'deploy']
+        default: 'scan_evaluate'
 
 # =============================================================================
 # Concurrency Control
@@ -135,8 +126,7 @@ jobs:
     outputs:
       stack: ${{ steps.validate.outputs.stack }}
       environment: ${{ steps.validate.outputs.environment }}
-      dry_run: ${{ steps.validate.outputs.dry_run }}
-      skip_compliance: ${{ steps.validate.outputs.skip_compliance }}
+      mode: ${{ steps.validate.outputs.mode }}
       is_fork: ${{ steps.context.outputs.is_fork }}
 
     steps:
@@ -162,9 +152,7 @@ jobs:
         env:
           INPUT_STACK: ${{ inputs.stack }}
           INPUT_ENVIRONMENT: ${{ inputs.environment }}
-          INPUT_SKIP_COMPLIANCE: ${{ inputs.skip_compliance }}
-          INPUT_JUSTIFICATION: ${{ inputs.justification }}
-          INPUT_DRY_RUN: ${{ inputs.dry_run || github.event_name == 'pull_request' }}
+          INPUT_MODE: ${{ github.event_name == 'pull_request' && 'scan_evaluate' || inputs.mode }}
         run: |
           # Validate stack input (alphanumeric, hyphens, underscores only)
           if [[ -n "$INPUT_STACK" ]] && ! [[ "$INPUT_STACK" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -178,20 +166,10 @@ jobs:
             exit 1
           fi
 
-          # Require justification for skip_compliance
-          if [[ "$INPUT_SKIP_COMPLIANCE" == "true" ]]; then
-            if [[ -z "$INPUT_JUSTIFICATION" ]] || [[ ${#INPUT_JUSTIFICATION} -lt 20 ]]; then
-              echo "::error::Skipping compliance requires a justification of at least 20 characters."
-              exit 1
-            fi
-            echo "::warning::Compliance skip requested. Justification: $INPUT_JUSTIFICATION"
-          fi
-
           # Output validated inputs
           echo "stack=${INPUT_STACK}" >> "$GITHUB_OUTPUT"
           echo "environment=${INPUT_ENVIRONMENT}" >> "$GITHUB_OUTPUT"
-          echo "dry_run=${INPUT_DRY_RUN}" >> "$GITHUB_OUTPUT"
-          echo "skip_compliance=${INPUT_SKIP_COMPLIANCE}" >> "$GITHUB_OUTPUT"
+          echo "mode=${INPUT_MODE}" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
   # Job 2: Compliance & Evaluation
@@ -267,8 +245,7 @@ jobs:
           stacks_path: ${{ env.STACKS_PATH }}
           stack: ${{ needs.validate.outputs.stack }}
           environment: ${{ needs.validate.outputs.environment }}
-          dry_run: ${{ needs.validate.outputs.dry_run }}
-          skip_compliance: ${{ needs.validate.outputs.skip_compliance }}
+          mode: ${{ needs.validate.outputs.mode }}
           oidc: 'true'
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
@@ -329,7 +306,7 @@ jobs:
         uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stacks_path: ${{ env.STACKS_PATH }}
-          deploy_only: 'true'
+          mode: deploy
           run_id: ${{ needs.compliance.outputs.run_id }}
           verify_authorization: 'true'
           oidc: 'true'
@@ -379,7 +356,7 @@ jobs:
         uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stacks_path: ${{ env.STACKS_PATH }}
-          deploy_only: 'true'
+          mode: deploy
           run_id: ${{ needs.compliance.outputs.run_id }}
           verify_authorization: 'true'
           oidc: 'true'
@@ -463,7 +440,7 @@ jobs:
         uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stacks_path: ${{ env.STACKS_PATH }}
-          deploy_only: 'true'
+          mode: deploy
           run_id: ${{ needs.compliance.outputs.run_id }}
           verify_authorization: 'true'
           oidc: 'true'
@@ -522,7 +499,7 @@ jobs:
               body += `\n> ⚠️ This PR is from a fork. Deployment validation was limited.`;
             }
 
-            body += `\n> This is a dry-run. Deployment will occur on merge to the target branch.`;
+            body += `\n> This is a compliance-only run. Deployment will occur on merge to the target branch.`;
 
             github.rest.issues.createComment({
               owner: context.repo.owner,

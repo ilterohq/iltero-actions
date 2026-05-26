@@ -74,7 +74,7 @@ jobs:
         id: pipeline
         with:
           stacks_path: infra/stacks
-          dry_run: 'true'                        # Compliance only — deploy in separate job
+          mode: scan_evaluate                    # Compliance only — deploy in separate job
           oidc: 'true'
           org_id: ${{ vars.ILTERO_ORG_ID }}
 
@@ -107,7 +107,7 @@ jobs:
       - uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
         with:
           stacks_path: infra/stacks
-          deploy_only: 'true'
+          mode: deploy
           run_id: ${{ needs.compliance.outputs.run_id }}
           verify_authorization: 'true'
           oidc: 'true'

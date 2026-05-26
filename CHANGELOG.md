@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-05-25
+
+### Added
+
+- `resolve-credentials` composite action — resolves the cloud role bound to a
+  (workspace, environment) via the Iltero CLI and configures cloud auth,
+  delegating the OIDC + STS exchange to
+  `aws-actions/configure-aws-credentials`. Accepts `workspace-id` (preferred
+  for generated workflows) or `stack-id`; mutually exclusive, exactly one
+  required
+- Plan-mode static scanning — when cloud credentials are present, static scan
+  runs `terraform init`+`plan` and scans the plan JSON for higher-fidelity
+  findings (resolved values, real cloud context). The plan is cached and
+  reused by plan evaluation, so there is no double terraform cost
+
+### Changed
+
+- Static scan default — with cloud credentials present it now scans a
+  terraform plan instead of source files. Workflows without cloud credentials
+  (e.g. PR/preview without `id-token: write`) automatically fall back to
+  source-mode, and any plan-preparation failure also falls back, so the scan
+  never aborts on this change
+- **Breaking:** cloud credentials must now be configured by the calling job
+  (via `resolve-credentials` or `aws-actions/configure-aws-credentials`)
+  before the root/scan/evaluate/deploy actions run
+
+### Removed
+
+- **Breaking:** built-in per-stack OIDC token minting and AWS env-var rotation
+  from the pipeline. Credentials are configured once per job and shared by all
+  stacks in the run, matching the per-(workspace, environment) binding model
+
 ## [1.4.0] - 2026-04-23
 
 ### Added

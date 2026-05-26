@@ -10,3 +10,14 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore"
+    # The same third-party action SHAs are inlined across multiple composite
+    # entry points (deploy/, evaluate/, monitor/, scan/, ...). Group bumps
+    # into one PR so the inlined copies stay in lockstep.
+    groups:
+      aws-auth:
+        patterns:
+          - "aws-actions/configure-aws-credentials"
+      github-actions:
+        patterns:
+          - "actions/*"
+          - "github/*"

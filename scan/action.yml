@@ -95,6 +95,10 @@ runs:
     # -------------------------------------------------------------------------
     # Run Static Analysis (using shared library)
     # -------------------------------------------------------------------------
+    # NOTE: Cloud credentials are not configured by this action. If a
+    # plan-mode scan needs cloud access, configure credentials at the
+    # job level via `ilterohq/iltero-actions/resolve-credentials@v1` or
+    # a hand-written `aws-actions/configure-aws-credentials` block.
     - name: Run Static Analysis
       id: scan
       shell: bash
