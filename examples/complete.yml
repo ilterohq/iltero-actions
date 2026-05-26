@@ -42,14 +42,12 @@ on:
         required: false
         type: choice
         options: ['', 'development', 'staging', 'production']
-      dry_run:
-        description: 'Skip deployment'
-        type: boolean
-        default: false
-      skip_compliance:
-        description: 'Skip compliance (emergency only)'
-        type: boolean
-        default: false
+      mode:
+        description: 'Pipeline mode'
+        required: false
+        type: choice
+        options: ['full', 'scan_evaluate', 'scan', 'evaluate', 'deploy']
+        default: 'full'
 
 # Concurrency: cancel in-progress runs for same branch
 concurrency:
@@ -98,8 +96,7 @@ jobs:
           stacks_path: infra/stacks
           stack: ${{ inputs.stack }}
           environment: ${{ inputs.environment }}
-          dry_run: ${{ inputs.dry_run || github.event_name == 'pull_request' }}
-          skip_compliance: ${{ inputs.skip_compliance }}
+          mode: ${{ github.event_name == 'pull_request' && 'scan_evaluate' || inputs.mode }}
           oidc: 'true'
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:
@@ -136,7 +133,7 @@ jobs:
             | **Plan Evaluation** | ${evaluation ? '✅ Passed' : '❌ Failed'} |
             | **Overall** | ${status} |
 
-            > This is a dry-run. Deployment will occur on merge to the target branch.
+            > This is a compliance-only run. Deployment will occur on merge to the target branch.
             `;
 
             github.rest.issues.createComment({

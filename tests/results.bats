@@ -6,51 +6,76 @@
 load 'test_helper'
 
 setup() {
-    mkdir -p "$TEST_TEMP"
+    mkdir -p "${TEST_TEMP}"
     export GITHUB_OUTPUT="${TEST_TEMP}/github_output"
     export GITHUB_STEP_SUMMARY="${TEST_TEMP}/github_summary"
-    touch "$GITHUB_OUTPUT"
-    touch "$GITHUB_STEP_SUMMARY"
+    touch "${GITHUB_OUTPUT}"
+    touch "${GITHUB_STEP_SUMMARY}"
 
-    # Change to temp dir so .iltero/ is created there
-    cd "$TEST_TEMP"
+    # Reset sourcing flag so module re-sources cleanly per test
+    unset ILTERO_RESULTS_SOURCED
+    unset ILTERO_RESULTS_BASE
+
+    # STACKS_CONFIG drives artefact paths — greenfield default
+    export STACKS_CONFIG=".iltero/stacks"
+
+    # Change to temp dir so artefacts are created there
+    cd "${TEST_TEMP}"
 
     source_iltero_core "results.sh"
 }
 
 teardown() {
-    rm -rf "$TEST_TEMP"
+    rm -rf "${TEST_TEMP}"
 }
 
 # =============================================================================
 # init_stack_results
 # =============================================================================
 
-@test "init_stack_results creates results.json" {
+@test "init_stack_results creates results.json under STACKS_CONFIG" {
     init_stack_results "my-stack"
 
-    [[ -f "${TEST_TEMP}/.iltero/my-stack/results.json" ]]
+    [[ -f "${TEST_TEMP}/.iltero/stacks/my-stack/results.json" ]]
     local content
-    content=$(cat "${TEST_TEMP}/.iltero/my-stack/results.json")
-    [[ "$content" == "[]" ]]
+    content=$(cat "${TEST_TEMP}/.iltero/stacks/my-stack/results.json")
+    [[ "${content}" == "[]" ]]
 }
 
 @test "init_stack_results creates separate files per stack" {
     init_stack_results "stack-a"
     init_stack_results "stack-b"
 
-    [[ -f "${TEST_TEMP}/.iltero/stack-a/results.json" ]]
-    [[ -f "${TEST_TEMP}/.iltero/stack-b/results.json" ]]
+    [[ -f "${TEST_TEMP}/.iltero/stacks/stack-a/results.json" ]]
+    [[ -f "${TEST_TEMP}/.iltero/stacks/stack-b/results.json" ]]
 }
 
 @test "init_stack_results resets existing results" {
     init_stack_results "my-stack"
-    echo '[{"unit":"old"}]' > "${TEST_TEMP}/.iltero/my-stack/results.json"
+    echo '[{"unit":"old"}]' > "${TEST_TEMP}/.iltero/stacks/my-stack/results.json"
     init_stack_results "my-stack"
 
     local content
+    content=$(cat "${TEST_TEMP}/.iltero/stacks/my-stack/results.json")
+    [[ "${content}" == "[]" ]]
+}
+
+@test "init_stack_results works with brownfield STACKS_CONFIG" {
+    export STACKS_CONFIG=".iltero"
+    init_stack_results "my-stack"
+
+    [[ -f "${TEST_TEMP}/.iltero/my-stack/results.json" ]]
+    local content
     content=$(cat "${TEST_TEMP}/.iltero/my-stack/results.json")
-    [[ "$content" == "[]" ]]
+    [[ "${content}" == "[]" ]]
+
+    # Verify full cycle under brownfield path
+    append_unit_result "my-stack" "vpc" '{"passed": true, "violations": 0}' "null" "null"
+    local results
+    results=$(get_stack_results "my-stack")
+    local count
+    count=$(echo "${results}" | jq 'length')
+    [[ "${count}" -eq 1 ]]
 }
 
 # =============================================================================
@@ -63,15 +88,15 @@ teardown() {
     local scan_json='{"passed": true, "violations": 0}'
     local eval_json='{"passed": true, "violations": 0, "eval_mode": "full"}'
 
-    append_unit_result "my-stack" "vpc" "$scan_json" "$eval_json" "null"
+    append_unit_result "my-stack" "vpc" "${scan_json}" "${eval_json}" "null"
 
     local count
-    count=$(jq 'length' "${TEST_TEMP}/.iltero/my-stack/results.json")
-    [[ "$count" -eq 1 ]]
+    count=$(jq 'length' "${TEST_TEMP}/.iltero/stacks/my-stack/results.json")
+    [[ "${count}" -eq 1 ]]
 
     local unit
-    unit=$(jq -r '.[0].unit' "${TEST_TEMP}/.iltero/my-stack/results.json")
-    [[ "$unit" == "vpc" ]]
+    unit=$(jq -r '.[0].unit' "${TEST_TEMP}/.iltero/stacks/my-stack/results.json")
+    [[ "${unit}" == "vpc" ]]
 }
 
 @test "append_unit_result accumulates multiple units" {
@@ -82,13 +107,13 @@ teardown() {
     append_unit_result "my-stack" "app" '{"passed": true, "violations": 0}' "null" "null"
 
     local count
-    count=$(jq 'length' "${TEST_TEMP}/.iltero/my-stack/results.json")
-    [[ "$count" -eq 3 ]]
+    count=$(jq 'length' "${TEST_TEMP}/.iltero/stacks/my-stack/results.json")
+    [[ "${count}" -eq 3 ]]
 
     # Check second unit has violations
     local violations
-    violations=$(jq '.[1].scan.violations' "${TEST_TEMP}/.iltero/my-stack/results.json")
-    [[ "$violations" -eq 3 ]]
+    violations=$(jq '.[1].scan.violations' "${TEST_TEMP}/.iltero/stacks/my-stack/results.json")
+    [[ "${violations}" -eq 3 ]]
 }
 
 @test "append_unit_result handles empty strings as null" {
@@ -97,19 +122,19 @@ teardown() {
     append_unit_result "my-stack" "vpc" "" "" ""
 
     local scan_val
-    scan_val=$(jq '.[0].scan' "${TEST_TEMP}/.iltero/my-stack/results.json")
-    [[ "$scan_val" == "null" ]]
+    scan_val=$(jq '.[0].scan' "${TEST_TEMP}/.iltero/stacks/my-stack/results.json")
+    [[ "${scan_val}" == "null" ]]
 }
 
 @test "append_unit_result preserves eval_mode field" {
     init_stack_results "my-stack"
 
     local eval_json='{"passed": true, "violations": 0, "eval_mode": "best_effort"}'
-    append_unit_result "my-stack" "app" "null" "$eval_json" "null"
+    append_unit_result "my-stack" "app" "null" "${eval_json}" "null"
 
     local eval_mode
-    eval_mode=$(jq -r '.[0].evaluation.eval_mode' "${TEST_TEMP}/.iltero/my-stack/results.json")
-    [[ "$eval_mode" == "best_effort" ]]
+    eval_mode=$(jq -r '.[0].evaluation.eval_mode' "${TEST_TEMP}/.iltero/stacks/my-stack/results.json")
+    [[ "${eval_mode}" == "best_effort" ]]
 }
 
 # =============================================================================
@@ -125,8 +150,8 @@ teardown() {
     results=$(get_stack_results "my-stack")
 
     local count
-    count=$(echo "$results" | jq 'length')
-    [[ "$count" -eq 2 ]]
+    count=$(echo "${results}" | jq 'length')
+    [[ "${count}" -eq 2 ]]
 }
 
 @test "get_stack_results returns empty array for missing stack" {
@@ -135,7 +160,7 @@ teardown() {
     local results
     results=$(get_stack_results "nonexistent")
 
-    [[ "$results" == "[]" ]]
+    [[ "${results}" == "[]" ]]
 }
 
 # =============================================================================
@@ -154,8 +179,8 @@ teardown() {
     results=$(get_all_results)
 
     local count
-    count=$(echo "$results" | jq 'length')
-    [[ "$count" -eq 3 ]]
+    count=$(echo "${results}" | jq 'length')
+    [[ "${count}" -eq 3 ]]
 }
 
 @test "get_all_results returns empty array when no results" {
@@ -165,5 +190,5 @@ teardown() {
     local results
     results=$(get_all_results)
 
-    [[ "$results" == "[]" ]]
+    [[ "${results}" == "[]" ]]
 }

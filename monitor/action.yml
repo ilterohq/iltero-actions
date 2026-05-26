@@ -221,6 +221,11 @@ runs:
     # -------------------------------------------------------------------------
     # Terraform Init
     # -------------------------------------------------------------------------
+    # NOTE: Cloud credentials are not configured by this action. Drift
+    # detection requires reading remote state, so configure credentials
+    # at the job level via `ilterohq/iltero-actions/resolve-credentials@v1`
+    # or a hand-written `aws-actions/configure-aws-credentials` block.
+    # terraform init/refresh will fail without valid AWS_* env vars.
     - name: Terraform Init
       id: init
       shell: bash

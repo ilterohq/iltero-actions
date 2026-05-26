@@ -5,7 +5,7 @@
 #
 # NOTE: This is a low-level single-unit deployment action. For production
 # deployments with compliance checks and authorization, use:
-#   ilterohq/iltero-actions@v1 with deploy_only: true
+#   ilterohq/iltero-actions@v1 with mode: deploy
 #
 # This action:
 #   1. Validates self-contained unit structure
@@ -33,7 +33,7 @@
 #       path: infra/stacks/my-stack
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
 #       environment: production
-#       deploy_only: true
+#       mode: deploy
 #       run-id: ${{ needs.compliance.outputs.run-id }}
 #
 # Usage (direct - no authorization):
@@ -125,6 +125,12 @@ runs:
     # -------------------------------------------------------------------------
     # Deploy Infrastructure (using shared library)
     # -------------------------------------------------------------------------
+    # NOTE: Cloud credentials are not configured by this action. Configure
+    # them at the job level before invoking — either via
+    # `ilterohq/iltero-actions/resolve-credentials@v1` (recommended; looks
+    # up the role bound to the stack/environment) or a hand-written
+    # `aws-actions/configure-aws-credentials` block. terraform
+    # init/plan/apply read AWS_* from the job env.
     - name: Deploy Infrastructure
       id: apply
       shell: bash
@@ -142,22 +148,22 @@ runs:
         source "${ACTION_DIR}/../scripts/lib/iltero-core/index.sh"
 
         # Validate structure (brownfield uses relaxed validation)
-        if [[ "${PIPELINE_MODE:-}" == "brownfield" ]] || [[ -f ".iltero/config.yml" && "$UNIT_NAME" == "default" ]]; then
-          validate_brownfield_structure "$DEPLOY_PATH"
+        if [[ "${PIPELINE_MODE:-}" == "brownfield" ]] || [[ -f ".iltero/config.yml" && "${UNIT_NAME}" == "default" ]]; then
+          validate_brownfield_structure "${DEPLOY_PATH}"
         else
-          validate_unit_structure "$DEPLOY_PATH"
+          validate_unit_structure "${DEPLOY_PATH}"
         fi
 
         # Run deployment
         set +e
-        run_deployment "$DEPLOY_PATH" "$UNIT_NAME" "$ENVIRONMENT" "$RUN_ID"
+        run_deployment "${DEPLOY_PATH}" "${UNIT_NAME}" "${ENVIRONMENT}" "${RUN_ID}"
         EXIT_CODE=$?
         set -e
 
         # Set outputs using helper
         set_deploy_outputs
-        echo "outputs-file=${OUTPUTS_FILE:-}" >> $GITHUB_OUTPUT
-        echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+        echo "outputs-file=${OUTPUTS_FILE:-}" >> "${GITHUB_OUTPUT}"
+        echo "exit_code=${EXIT_CODE}" >> "${GITHUB_OUTPUT}"
 
     # -------------------------------------------------------------------------
     # Create GitHub Deployment

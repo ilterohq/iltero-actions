@@ -185,7 +185,29 @@ runs:
           pip install --quiet "iltero-cli==${INPUT_VERSION}" 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
         fi
 
-        echo "✅ Iltero CLI installed"
+        # Capture the absolute path of the just-installed CLI so downstream
+        # steps invoke it directly rather than via PATH lookup.
+        ILTERO_CLI_BIN_PATH=$(command -v iltero || true)
+        if [ -z "${ILTERO_CLI_BIN_PATH}" ] || [ ! -x "${ILTERO_CLI_BIN_PATH}" ]; then
+          echo "::error::Iltero CLI install reported success but binary is not on PATH"
+          exit 1
+        fi
+
+        # Assert the resolved path is under the Python install prefix
+        # exported by actions/setup-python, so downstream steps invoke the
+        # CLI that was just installed.
+        if [ -n "${pythonLocation:-}" ] && [[ "${ILTERO_CLI_BIN_PATH}" != "${pythonLocation}"/* ]]; then
+          echo "::error::Iltero CLI binary ${ILTERO_CLI_BIN_PATH} is outside the expected Python prefix ${pythonLocation}"
+          exit 1
+        fi
+
+        {
+          echo "ILTERO_CLI_BIN<<GHEOF"
+          echo "${ILTERO_CLI_BIN_PATH}"
+          echo "GHEOF"
+        } >> "$GITHUB_ENV"
+
+        echo "✅ Iltero CLI installed at ${ILTERO_CLI_BIN_PATH}"
 
     # -------------------------------------------------------------------------
     # Install Checkov (optional)

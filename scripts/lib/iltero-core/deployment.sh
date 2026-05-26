@@ -17,10 +17,16 @@
 # Args: $1=path $2=unit $3=environment $4=run_id (optional) $5=scan_id (optional)
 # Sets: DEPLOY_SUCCESS, RESOURCES_COUNT, OUTPUTS_FILE, TERRAFORM_STATE_FILE
 run_deployment() {
+    # Hard assertion: deployment must never run in preview mode
+    if [[ "${PREVIEW_MODE:-false}" == "true" ]]; then
+        log_error "BUG: run_deployment called in preview mode"
+        return "${EXIT_ERROR}"
+    fi
+
     local deploy_path
-    deploy_path="$(cd "$1" && pwd)"
-    local unit_name="$2"
-    local environment="$3"
+    deploy_path="$(cd "${1}" && pwd)"
+    local unit_name="${2}"
+    local environment="${3}"
     local run_id="${4:-}"
     local scan_id="${5:-${ILTERO_SCAN_ID:-}}"
 
@@ -38,13 +44,28 @@ run_deployment() {
     check_env_config "${deploy_path}" "${environment}"
 
     # Initialize Terraform with backend
+    local init_log
+    init_log="$(mktemp)"
+    set +e
     if [[ -n "${BACKEND_HCL}" ]]; then
         log_info "Initializing with backend config: ${BACKEND_HCL}"
-        terraform init -backend-config="${BACKEND_HCL}" -reconfigure -input=false
+        terraform init -backend-config="${BACKEND_HCL}" -reconfigure -input=false 2>&1 | tee "${init_log}"
     else
         log_info "Initializing without backend config"
-        terraform init -input=false
+        terraform init -input=false 2>&1 | tee "${init_log}"
     fi
+    local init_exit=${PIPESTATUS[0]}
+    set -e
+
+    if [[ ${init_exit} -ne 0 ]]; then
+        emit_cloud_credentials_hint_if_needed "$(<"${init_log}")"
+        rm -f "${init_log}"
+        popd > /dev/null
+        log_group_end
+        log_error "Deployment failed: terraform init error for ${unit_name}"
+        return 1
+    fi
+    rm -f "${init_log}"
 
     # Create plan
     local plan_file="${unit_name}.tfplan"
@@ -55,10 +76,17 @@ run_deployment() {
     fi
 
     # Apply
+    local apply_log
+    apply_log="$(mktemp)"
     set +e
-    terraform apply -auto-approve "${plan_file}"
-    local apply_exit=$?
+    terraform apply -auto-approve "${plan_file}" 2>&1 | tee "${apply_log}"
+    local apply_exit=${PIPESTATUS[0]}
     set -e
+
+    if [[ ${apply_exit} -ne 0 ]]; then
+        emit_cloud_credentials_hint_if_needed "$(<"${apply_log}")"
+    fi
+    rm -f "${apply_log}"
 
     if [[ ${apply_exit} -eq 0 ]]; then
         DEPLOY_SUCCESS="true"

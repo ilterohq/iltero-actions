@@ -40,10 +40,8 @@ Complete reference for every action in this toolkit. For an overview and quick s
 | `oidc` | No | `false` | Enable OIDC authentication (recommended) |
 | `org_id` | No | — | Iltero Organization ID (required when `oidc` is `true`) |
 | `registry_host` | No | `registry.iltero.io` | Private module registry |
-| `dry_run` | No | `false` | Skip deployment |
-| `skip_compliance` | No | `false` | Skip compliance scans |
-| `deploy_only` | No | `false` | Skip compliance, deploy only (requires `run_id`) |
-| `run_id` | No | — | Chain to a previous compliance run |
+| `mode` | No | `full` | Pipeline mode: `full`, `preview`, `scan`, `evaluate`, `scan_evaluate`, `deploy` |
+| `run_id` | No | — | Chain to a previous compliance run (required when `mode` is `deploy`) |
 | `verify_authorization` | No | `true` | Verify deployment authorization via Iltero |
 | `debug` | No | `false` | Enable debug output |
 
@@ -55,7 +53,7 @@ Complete reference for every action in this toolkit. For an overview and quick s
 | `stacks_processed` | JSON array of processed stacks |
 | `static_scan_passed` | Whether static analysis passed |
 | `evaluation_passed` | Whether plan evaluation passed |
-| `compliance_only` | `true` when running on a pull request (no deployment) |
+| `compliance_only` | `true` when mode is `preview`, `scan`, `evaluate`, or `scan_evaluate`, and for PR events |
 | `authorization_passed` | Whether authorization passed (deploy mode) |
 | `environment` | Detected/used environment |
 | `run_id` | Iltero run ID for chaining |

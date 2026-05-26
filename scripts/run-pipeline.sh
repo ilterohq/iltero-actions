@@ -11,37 +11,41 @@
 #   run-pipeline.sh [OPTIONS]
 #
 # Modes:
-#   --scan-only         Run static scan only
-#   --evaluate-only     Run plan evaluation only
-#   --deploy-only       Run deployment only (requires --run-id)
-#   (default)           Run full pipeline
+#   --preview             PR-preview: scan + evaluate locally, no submission, no deploy
+#   --scan-only           Run static scan only
+#   --evaluate-only       Run plan evaluation only
+#   --scan-evaluate-only  Run scan + evaluate, submit results, no deploy
+#   --deploy-only         Run deployment only (requires --run-id)
+#   (default)             Run full pipeline (scan + evaluate + submit + deploy)
 #
 # Options:
-#   --stacks-path PATH  Path to stacks directory (required unless env STACKS_PATH set)
-#   --stack NAME        Process specific stack
+#   --stacks-path PATH    Path to stacks code directory (required unless env STACKS_PATH set)
+#   --stacks-config PATH  Path to stacks metadata directory (default: .iltero/stacks)
+#   --stack NAME          Process specific stack
 #   --unit NAME         Process specific unit within stack
 #   --environment ENV   Override environment detection
 #   --run-id ID         Chain to existing Iltero run
-#   --dry-run           Skip deployment phase
-#   --skip-compliance  Skip compliance scanning
 #   --verify-auth       Verify deployment authorization (default: true)
 #   --no-verify-auth    Skip authorization verification
 #   --debug             Enable debug output
 #   -h, --help          Show help
 #
-# Environment Variables (backward compatible with action.yml):
-#   STACKS_PATH          - Path to stacks directory
+# Environment Variables:
+#   MODE                 - Pipeline mode (full|preview|scan|evaluate|scan_evaluate|deploy)
+#   STACKS_PATH          - Path to stacks code directory
+#   STACKS_CONFIG        - Path to stacks metadata directory
 #   ENVIRONMENT_OVERRIDE - Optional environment override
 #   MANUAL_STACK         - Optional specific stack to process
-#   DRY_RUN              - Skip deployment if true
-#   SKIP_COMPLIANCE      - Skip compliance scanning if true
-#   DEPLOY_ONLY          - Skip compliance, run deployment only
 #   RUN_ID               - Existing run ID
 #   VERIFY_AUTHORIZATION - Verify deployment authorization
 #   DEBUG                - Enable debug output
 #   REGISTRY_HOST        - Hostname for private module registry
 #   ILTERO_REGISTRY_TOKEN - Token for private module authentication
 #   GITHUB_*             - GitHub Actions context variables
+#   AWS_*                - Cloud credentials must be configured by the caller
+#                          before invocation (this script does not resolve or
+#                          rotate cloud credentials). See resolve-credentials/
+#                          action.yml for the recommended setup.
 # =============================================================================
 
 set -euo pipefail
@@ -65,30 +69,31 @@ Usage: run-pipeline.sh [OPTIONS]
 Iltero Infrastructure Compliance Pipeline
 
 Modes:
-  --scan-only         Run static scan only
-  --evaluate-only     Run plan evaluation only
-  --deploy-only       Run deployment only (requires --run-id)
-  (default)           Run full pipeline
+  --preview             PR-preview: scan + evaluate locally, no submission, no deploy
+  --scan-only           Run static scan only
+  --evaluate-only       Run plan evaluation only
+  --scan-evaluate-only  Run scan + evaluate, submit results, no deploy
+  --deploy-only         Run deployment only (requires --run-id)
+  (default)             Run full pipeline (scan + evaluate + submit + deploy)
 
 Options:
-  --stacks-path PATH  Path to stacks directory (required)
-  --stack NAME        Process specific stack
-  --unit NAME         Process specific unit within stack
-  --environment ENV   Override environment detection
-  --run-id ID         Chain to existing Iltero run
-  --dry-run           Skip deployment phase
-  --skip-compliance   Skip compliance scanning
-  --verify-auth       Verify deployment authorization (default)
-  --no-verify-auth    Skip authorization verification
-  --debug             Enable debug output
-  -h, --help          Show this help
+  --stacks-path PATH    Path to stacks code directory (required for greenfield)
+  --stacks-config PATH  Path to stacks metadata directory (default: .iltero/stacks)
+  --stack NAME          Process specific stack
+  --unit NAME           Process specific unit within stack
+  --environment ENV     Override environment detection
+  --run-id ID           Chain to existing Iltero run
+  --verify-auth         Verify deployment authorization (default)
+  --no-verify-auth      Skip authorization verification
+  --debug               Enable debug output
+  -h, --help            Show this help
 
 Examples:
   # Full pipeline for specific stack
   run-pipeline.sh --stacks-path infra/stacks --stack my-infra --environment production
 
-  # Scan only (CI check)
-  run-pipeline.sh --scan-only --stacks-path infra/stacks
+  # Scan + evaluate only (CI compliance gate)
+  run-pipeline.sh --scan-evaluate-only --stacks-path infra/stacks
 
   # Deploy after approval
   run-pipeline.sh --deploy-only --run-id abc123 --stacks-path infra/stacks --stack my-infra
@@ -97,10 +102,11 @@ EOF
 }
 
 # =============================================================================
-# Configuration (defaults from environment for backward compatibility)
+# Configuration
 # =============================================================================
-MODE="full"
+MODE="${MODE:-full}"
 STACKS_PATH="${STACKS_PATH:-}"
+STACKS_CONFIG="${STACKS_CONFIG:-}"
 PIPELINE_MODE="${PIPELINE_MODE:-}"
 CONFIG_PATH="${CONFIG_PATH:-.iltero/config.yml}"
 STACK="${MANUAL_STACK:-}"
@@ -108,17 +114,13 @@ UNIT_FILTER=""
 ENVIRONMENT="${ENVIRONMENT_OVERRIDE:-}"
 GLOBAL_RUN_ID="${RUN_ID:-}"
 GLOBAL_SCAN_ID="${SCAN_ID:-}"  # Scan ID from policy resolution (required for apply phase)
-DRY_RUN="${DRY_RUN:-false}"
-SKIP_COMPLIANCE="${SKIP_COMPLIANCE:-false}"
 VERIFY_AUTHORIZATION="${VERIFY_AUTHORIZATION:-true}"
 DEBUG="${DEBUG:-false}"
 
-# Handle DEPLOY_ONLY env var for backward compatibility
-if [[ "${DEPLOY_ONLY:-false}" == "true" ]]; then
-    MODE="deploy"
-fi
+# Preview mode flag — exported for downstream lib modules (scanning.sh, evaluation.sh)
+PREVIEW_MODE="false"
 
-# Compliance-only mode: PRs validate against the target environment but never deploy
+# Compliance-only mode: no deployment
 COMPLIANCE_ONLY="false"
 
 # Pipeline state
@@ -137,7 +139,11 @@ declare -A FAILED_UNITS  # Track failed units for dependency checking
 # =============================================================================
 parse_args() {
     while [[ $# -gt 0 ]]; do
-        case $1 in
+        case "${1}" in
+            --preview)
+                MODE="preview"
+                shift
+                ;;
             --scan-only)
                 MODE="scan"
                 shift
@@ -146,37 +152,47 @@ parse_args() {
                 MODE="evaluate"
                 shift
                 ;;
+            --scan-evaluate-only)
+                MODE="scan_evaluate"
+                shift
+                ;;
             --deploy-only)
                 MODE="deploy"
                 shift
                 ;;
             --stacks-path)
-                STACKS_PATH="$2"
+                STACKS_PATH="${2}"
+                shift 2
+                ;;
+            --stacks-config)
+                STACKS_CONFIG="${2}"
+                # Reject absolute paths, traversal, and shell metacharacters
+                case "${STACKS_CONFIG}" in
+                    /*|*..*|*'$'*|*'`'*|*'*'*|*'?'*|*'['*)
+                        log_error "stacks-config must be a simple relative path"
+                        exit 1 ;;
+                esac
+                if [[ ! "${STACKS_CONFIG}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+                    log_error "stacks-config contains disallowed characters"
+                    exit 1
+                fi
                 shift 2
                 ;;
             --stack)
-                STACK="$2"
+                STACK="${2}"
                 shift 2
                 ;;
             --unit)
-                UNIT_FILTER="$2"
+                UNIT_FILTER="${2}"
                 shift 2
                 ;;
             --environment)
-                ENVIRONMENT="$2"
+                ENVIRONMENT="${2}"
                 shift 2
                 ;;
             --run-id)
-                GLOBAL_RUN_ID="$2"
+                GLOBAL_RUN_ID="${2}"
                 shift 2
-                ;;
-            --dry-run)
-                DRY_RUN=true
-                shift
-                ;;
-            --skip-compliance)
-                SKIP_COMPLIANCE=true
-                shift
                 ;;
             --verify-auth)
                 VERIFY_AUTHORIZATION=true
@@ -196,7 +212,7 @@ parse_args() {
                 exit 0
                 ;;
             *)
-                log_error "Unknown option: $1"
+                log_error "Unknown option: ${1}"
                 usage
                 exit 1
                 ;;
@@ -232,6 +248,11 @@ process_unit() {
 
     local full_path="${STACKS_PATH}/${stack}/${unit_path}"
 
+    # Validate unit_path does not escape stacks directory via traversal
+    case "${unit_path}" in
+        /*|*..*) log_error "Unit path is unsafe: ${unit_path}"; return 1 ;;
+    esac
+
     # Skip if unit filter is set and doesn't match
     if [[ -n "$UNIT_FILTER" ]] && [[ "$UNIT_FILTER" != "$unit_name" ]]; then
         log_debug "Skipping unit $unit_name (filter: $UNIT_FILTER)"
@@ -242,6 +263,14 @@ process_unit() {
     local scan_result_json="null"
     local eval_result_json="null"
     local deploy_result_json="null"
+
+    # Per-unit reset of the scan→evaluate plan cache so a previous unit's
+    # plan path can never leak into this unit's evaluation when scan is
+    # skipped (mixed scan_types across stacks).
+    SCAN_PLAN_JSON_FILE=""
+    SCAN_PLAN_STATE_JSON_FILE=""
+    SCAN_PLAN_S3_URL=""
+    SCAN_PLAN_MODE=""
 
     # Check dependency status (warn but never skip — scan everything)
     local dep_has_failures=false
@@ -267,8 +296,8 @@ process_unit() {
     # -------------------------------------------------------------------------
     # Static Scan (if enabled) — always runs regardless of dep failures
     # -------------------------------------------------------------------------
-    if [[ "$MODE" == "scan" ]] || [[ "$MODE" == "full" ]]; then
-        if [[ "$SKIP_COMPLIANCE" != "true" ]] && echo "$scan_types" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
+    if [[ "${MODE}" == "scan" ]] || [[ "${MODE}" == "full" ]] || [[ "${MODE}" == "scan_evaluate" ]] || [[ "${MODE}" == "preview" ]]; then
+        if echo "${scan_types}" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
             set +e
             run_static_scan "$full_path" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
             local scan_exit=$?
@@ -314,10 +343,12 @@ process_unit() {
     # -------------------------------------------------------------------------
     # Plan Evaluation (if enabled) — always runs regardless of dep failures
     # -------------------------------------------------------------------------
-    if [[ "$MODE" == "evaluate" ]] || [[ "$MODE" == "full" ]]; then
-        if [[ "$SKIP_COMPLIANCE" != "true" ]] && echo "$scan_types" | jq -e 'contains(["evaluation"])' > /dev/null 2>&1; then
+    if [[ "${MODE}" == "evaluate" ]] || [[ "${MODE}" == "full" ]] || [[ "${MODE}" == "scan_evaluate" ]] || [[ "${MODE}" == "preview" ]]; then
+        if echo "${scan_types}" | jq -e 'contains(["evaluation"])' > /dev/null 2>&1; then
             set +e
-            run_plan_evaluation "$full_path" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "" "$depends_on" "$frameworks"
+            # Reuse the plan JSON produced by the static scan (when scan ran in
+            # plan-mode) so we don't re-run terraform init+plan per unit.
+            run_plan_evaluation "$full_path" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "${SCAN_PLAN_JSON_FILE:-}" "$depends_on" "$frameworks"
             local eval_exit=$?
             set -e
 
@@ -368,16 +399,15 @@ process_unit() {
     fi
 
     # -------------------------------------------------------------------------
-    # Deployment (if enabled and NO failures anywhere)
+    # Deployment (deploy and full modes only; never in preview/scan/evaluate)
     # -------------------------------------------------------------------------
-    if [[ "$MODE" == "deploy" ]] || [[ "$MODE" == "full" ]]; then
-        if [[ "$DRY_RUN" != "true" ]] && \
-           [[ "$STATIC_SCAN_FAILED" != "true" ]] && \
-           [[ "$EVALUATION_FAILED" != "true" ]]; then
+    if [[ "${MODE}" == "deploy" ]] || [[ "${MODE}" == "full" ]]; then
+        if [[ "${STATIC_SCAN_FAILED}" != "true" ]] && \
+           [[ "${EVALUATION_FAILED}" != "true" ]]; then
 
             # Only deploy in deploy mode or if specifically enabled in full mode
             local should_deploy=false
-            if [[ "$MODE" == "deploy" ]]; then
+            if [[ "${MODE}" == "deploy" ]]; then
                 should_deploy=true
             fi
 
@@ -425,7 +455,7 @@ process_unit() {
 # =============================================================================
 process_stack() {
     local stack="$1"
-    local config_file="${STACKS_PATH}/${stack}/config.yml"
+    local config_file="${STACKS_CONFIG}/${stack}/config.yml"
 
     if [[ ! -f "$config_file" ]]; then
         log_error "Config file not found: $config_file"
@@ -633,6 +663,14 @@ process_brownfield_unit() {
     local eval_result_json="null"
     local deploy_result_json="null"
 
+    # Per-unit reset of the scan→evaluate plan cache so a previous unit's
+    # plan path can never leak into this unit's evaluation when scan is
+    # skipped.
+    SCAN_PLAN_JSON_FILE=""
+    SCAN_PLAN_STATE_JSON_FILE=""
+    SCAN_PLAN_S3_URL=""
+    SCAN_PLAN_MODE=""
+
     # Validate brownfield structure (relaxed — only check .tf files exist)
     if ! validate_brownfield_structure "$tf_dir"; then
         scan_result_json=$(jq -n '{passed: false, skipped: false, violations: 0, error: "validation_failed"}')
@@ -643,8 +681,8 @@ process_brownfield_unit() {
     # -------------------------------------------------------------------------
     # Compliance Scan (if enabled)
     # -------------------------------------------------------------------------
-    if [[ "$MODE" == "scan" ]] || [[ "$MODE" == "full" ]]; then
-        if [[ "$SKIP_COMPLIANCE" != "true" ]] && echo "$scan_types" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
+    if [[ "${MODE}" == "scan" ]] || [[ "${MODE}" == "full" ]] || [[ "${MODE}" == "scan_evaluate" ]] || [[ "${MODE}" == "preview" ]]; then
+        if echo "${scan_types}" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
             set +e
             run_static_scan "$tf_dir" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
             local scan_exit=$?
@@ -684,10 +722,10 @@ process_brownfield_unit() {
     # -------------------------------------------------------------------------
     # Plan Evaluation (if enabled)
     # -------------------------------------------------------------------------
-    if [[ "$MODE" == "evaluate" ]] || [[ "$MODE" == "full" ]]; then
-        if [[ "$SKIP_COMPLIANCE" != "true" ]] && echo "$scan_types" | jq -e 'contains(["evaluation"])' > /dev/null 2>&1; then
+    if [[ "${MODE}" == "evaluate" ]] || [[ "${MODE}" == "full" ]] || [[ "${MODE}" == "scan_evaluate" ]] || [[ "${MODE}" == "preview" ]]; then
+        if echo "${scan_types}" | jq -e 'contains(["evaluation"])' > /dev/null 2>&1; then
             set +e
-            run_plan_evaluation "$tf_dir" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "" "[]" "$frameworks"
+            run_plan_evaluation "$tf_dir" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "${SCAN_PLAN_JSON_FILE:-}" "[]" "$frameworks"
             local eval_exit=$?
             set -e
 
@@ -729,15 +767,14 @@ process_brownfield_unit() {
     fi
 
     # -------------------------------------------------------------------------
-    # Deployment (if enabled and conditions met)
+    # Deployment (deploy and full modes only)
     # -------------------------------------------------------------------------
-    if [[ "$MODE" == "deploy" ]] || [[ "$MODE" == "full" ]]; then
-        if [[ "$DRY_RUN" != "true" ]] && \
-           [[ "$STATIC_SCAN_FAILED" != "true" ]] && \
-           [[ "$EVALUATION_FAILED" != "true" ]]; then
+    if [[ "${MODE}" == "deploy" ]] || [[ "${MODE}" == "full" ]]; then
+        if [[ "${STATIC_SCAN_FAILED}" != "true" ]] && \
+           [[ "${EVALUATION_FAILED}" != "true" ]]; then
 
             local should_deploy=false
-            if [[ "$MODE" == "deploy" ]]; then
+            if [[ "${MODE}" == "deploy" ]]; then
                 should_deploy=true
             fi
 
@@ -904,18 +941,72 @@ main() {
     # Parse CLI arguments (if any)
     parse_args "$@"
 
-    # Compliance-only mode: PRs run scan/evaluate but never deploy
+    # -------------------------------------------------------------------------
+    # Validate mode
+    # -------------------------------------------------------------------------
+    case "${MODE}" in
+        full|preview|scan|evaluate|scan_evaluate|deploy) ;;
+        *)
+            log_error "Invalid mode: ${MODE}. Must be one of: full, preview, scan, evaluate, scan_evaluate, deploy"
+            exit 1
+            ;;
+    esac
+
+    # Preview mode is bearer-only; OIDC is structurally incompatible
+    if [[ "${MODE}" == "preview" ]] && [[ "${OIDC_ENABLED:-false}" == "true" ]]; then
+        log_error "mode=preview cannot be used with OIDC (preview uses bearer auth)"
+        exit 1
+    fi
+
+    # Preview mode: verify bearer token is available
+    if [[ "${MODE}" == "preview" ]] && [[ -z "${ILTERO_TOKEN:-}" ]]; then
+        log_error "mode=preview requires ILTERO_TOKEN (bearer auth)"
+        exit 1
+    fi
+
+    # Set PREVIEW_MODE for downstream lib modules (scanning.sh, evaluation.sh)
+    if [[ "${MODE}" == "preview" ]]; then
+        PREVIEW_MODE="true"
+    fi
+    export PREVIEW_MODE
+
+    # Compliance-only: modes that don't deploy, plus PR events
+    if [[ "${MODE}" == "preview" ]] || [[ "${MODE}" == "scan" ]] || \
+       [[ "${MODE}" == "evaluate" ]] || [[ "${MODE}" == "scan_evaluate" ]]; then
+        COMPLIANCE_ONLY="true"
+    fi
+
+    # PRs always run compliance-only regardless of mode
     if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request" ]] || [[ "${GITHUB_EVENT_NAME:-}" == "pull_request_target" ]]; then
         COMPLIANCE_ONLY="true"
-        if [[ "$MODE" == "deploy" ]]; then
+        if [[ "${MODE}" == "deploy" ]]; then
             log_error "Deploy mode is not allowed on pull_request events"
             exit 1
         fi
-        DRY_RUN="true"
+        # pull_request_target is rejected at action.yml; defense-in-depth here
+        if [[ "${GITHUB_EVENT_NAME:-}" == "pull_request_target" ]]; then
+            log_error "pull_request_target is not supported"
+            exit 1
+        fi
         log_info "Pull request detected — running in compliance-only mode (no deployment)"
     fi
 
-    set_output "compliance_only" "$COMPLIANCE_ONLY"
+    set_output "compliance_only" "${COMPLIANCE_ONLY}"
+
+    # -------------------------------------------------------------------------
+    # Resolve STACKS_CONFIG once — all downstream modules read the exported var
+    # -------------------------------------------------------------------------
+    if [[ "${PIPELINE_MODE}" == "brownfield" ]]; then
+        # Brownfield artefacts live directly under .iltero/<slug>/
+        if [[ -n "${STACKS_CONFIG}" ]] && [[ "${STACKS_CONFIG}" != ".iltero" ]]; then
+            log_warning "Brownfield mode ignores --stacks-config; using .iltero"
+        fi
+        STACKS_CONFIG=".iltero"
+    else
+        # Greenfield default: .iltero/stacks (matches action.yml default)
+        STACKS_CONFIG="${STACKS_CONFIG:-.iltero/stacks}"
+    fi
+    export STACKS_CONFIG
 
     log_banner "Iltero Pipeline | Mode: $MODE"
 
@@ -951,9 +1042,9 @@ main() {
         # Brownfield always processes the single config file
         process_brownfield_stack "${CONFIG_PATH}" || STACK_ERROR=true
     else
-        # Greenfield: stacks directory with infrastructure units
+        # Greenfield: stacks code directory with infrastructure units
         if [[ ! -d "$STACKS_PATH" ]]; then
-            log_info "Stacks directory not found: $STACKS_PATH — no stacks to process"
+            log_info "Stacks code directory not found: $STACKS_PATH — no stacks to process"
             set_output "stacks_processed" "[]"
             set_output "overall_status" "skipped"
             set_output "static_scan_passed" "true"
@@ -1096,7 +1187,11 @@ main() {
     else
         set_output "overall_status" "success"
         set_output "authorization_passed" "true"
-        set_output "deployment_ready" "true"
+        if [[ "${COMPLIANCE_ONLY}" == "true" ]]; then
+            set_output "deployment_ready" "false"
+        else
+            set_output "deployment_ready" "true"
+        fi
         echo "Result: PASSED"
         echo ""
         echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"

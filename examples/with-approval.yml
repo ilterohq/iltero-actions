@@ -78,7 +78,7 @@ jobs:
         id: pipeline
         with:
           stacks_path: infra/stacks
-          dry_run: 'true'  # Compliance only, no deployment
+          mode: scan_evaluate  # Compliance only, no deployment
           oidc: 'true'
           org_id: ${{ vars.ILTERO_ORG_ID }}
         env:

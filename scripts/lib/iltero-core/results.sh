@@ -3,9 +3,9 @@
 # Iltero Core - Per-Stack Results Tracking
 # =============================================================================
 # File-based accumulation of per-unit scan/eval/deploy results for each stack.
-# Uses .iltero/{stack}/results.json to avoid shell quoting issues with complex
-# JSON. Consistent with existing .iltero/{stack}/ convention (state-status/,
-# static/, evaluation/).
+# Uses ${STACKS_CONFIG}/{stack}/results.json to avoid shell quoting issues with
+# complex JSON. STACKS_CONFIG is exported by the pipeline before this module is
+# sourced.
 #
 # Usage:
 #   init_stack_results "my-stack"
@@ -25,12 +25,12 @@ export ILTERO_RESULTS_SOURCED=1
 ILTERO_RESULTS_BASE=""
 
 # Initialize results tracking for a stack
-# Creates .iltero/{stack}/results.json as an empty JSON array
+# Creates ${STACKS_CONFIG}/{stack}/results.json as an empty JSON array
 # Args: $1=stack_name
 init_stack_results() {
     local stack_name="${1:?Stack name is required}"
 
-    ILTERO_RESULTS_BASE="$(pwd)/.iltero"
+    ILTERO_RESULTS_BASE="$(pwd)/${STACKS_CONFIG:?STACKS_CONFIG must be set}"
     local results_dir="${ILTERO_RESULTS_BASE}/${stack_name}"
     local results_file="${results_dir}/results.json"
 

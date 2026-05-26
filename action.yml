@@ -10,22 +10,23 @@
 #   - Static scanning (Checkov) and plan evaluation (OPA)
 #   - Result submission to Iltero
 #
-# Usage:
+# Usage (OIDC — recommended for push/deploy):
 #   - uses: ilterohq/iltero-actions@v1
 #     with:
 #       stacks_path: infra/stacks
-#     env:
-#       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
-#       ILTERO_REGISTRY_TOKEN: ${{ secrets.ILTERO_REGISTRY_TOKEN }}
-#       # ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
-#
-# OIDC Usage (no secrets required):
-#   - uses: ilterohq/iltero-actions@v1
-#     with:
-#       stacks_path: infra/stacks
+#       stacks_config: .iltero/stacks
 #       oidc: 'true'
 #       org_id: ${{ vars.ILTERO_ORG_ID }}
-#       # ILTERO_API_URL defaults to https://api.iltero.io
+#
+# PR-Preview (bearer — advisory scan on pull requests):
+#   - uses: ilterohq/iltero-actions@v1
+#     with:
+#       mode: preview
+#       stacks_path: infra/stacks
+#       stacks_config: .iltero/stacks
+#       org_id: ${{ vars.ILTERO_ORG_ID }}
+#     env:
+#       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
 #
 # For granular control, use individual actions:
 #   - ilterohq/iltero-actions/setup@v1
@@ -45,11 +46,21 @@ branding:
 inputs:
   stacks_path:
     description: |
-      Path to stacks directory (greenfield stacks).
+      Path to stacks code directory (greenfield stacks).
+      Contains user-authored Terraform units: <stacks_path>/<slug>/units/...
       If not provided, the action checks for .iltero/config.yml (brownfield).
       Example: 'infra/stacks'
     required: false
     default: ''
+
+  stacks_config:
+    description: |
+      Path to stacks metadata directory (greenfield stacks).
+      Contains tool-owned per-stack config and runtime artefacts:
+      <stacks_config>/<slug>/{config.yml, results.json, state-status/}
+      Example: '.iltero/stacks'
+    required: false
+    default: '.iltero/stacks'
 
   config_path:
     description: |
@@ -75,32 +86,23 @@ inputs:
     required: false
     default: ''
 
-  dry_run:
+  mode:
     description: |
-      If true, only run compliance scans without deployment.
-      Useful for PR validation.
+      Pipeline mode:
+        full           — scan + evaluate + submit + deploy (default)
+        preview        — PR-preview: scan + evaluate locally, NO submission,
+                         NO deploy. Uses ILTERO_TOKEN bearer; OIDC is not used.
+        scan           — static scan only, submit results, no deploy
+        evaluate       — plan evaluation only, submit results, no deploy
+        scan_evaluate  — scan + evaluate + submit, no deploy
+        deploy         — deploy only (requires run_id from prior compliance job)
     required: false
-    default: 'false'
-
-  skip_compliance:
-    description: |
-      If true, skip compliance scanning (useful for emergency deployments).
-      Note: This should be used sparingly and may be blocked by policy.
-    required: false
-    default: 'false'
-
-  deploy_only:
-    description: |
-      If true, skip compliance scanning and only run deployments.
-      Requires run_id from a previous compliance job.
-      Use this in deployment jobs that run after approval.
-    required: false
-    default: 'false'
+    default: 'full'
 
   run_id:
     description: |
       Existing Iltero run ID to chain to (from compliance job).
-      Required when deploy_only is true.
+      Required when mode is 'deploy'.
     required: false
     default: ''
 
@@ -186,8 +188,8 @@ outputs:
   compliance_only:
     description: |
       Whether the pipeline ran in compliance-only mode (no deployment).
-      True for pull_request events — scan and evaluate run against
-      the target environment's policies, but deployment is blocked.
+      True when mode is preview, scan, evaluate, or scan_evaluate,
+      and also for pull_request events regardless of mode.
     value: ${{ steps.pipeline.outputs.compliance_only }}
 
   deployment_ready:
@@ -207,15 +209,18 @@ runs:
   using: composite
   steps:
     # -------------------------------------------------------------------------
-    # Validate inputs. Every subsequent step assumes these are well-formed.
+    # Sanitize inputs. Every subsequent step assumes these are well-formed.
     # -------------------------------------------------------------------------
-    - name: Validate Inputs
+    - name: Sanitize Inputs
       shell: bash
       env:
         INPUT_ORG_ID: ${{ inputs.org_id }}
         INPUT_ENVIRONMENT: ${{ inputs.environment }}
         INPUT_STACK: ${{ inputs.stack }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_OIDC: ${{ inputs.oidc }}
         INPUT_STACKS_PATH: ${{ inputs.stacks_path }}
+        INPUT_STACKS_CONFIG: ${{ inputs.stacks_config }}
         INPUT_CONFIG_PATH: ${{ inputs.config_path }}
         INPUT_RUN_ID: ${{ inputs.run_id }}
         EVENT_NAME: ${{ github.event_name }}
@@ -236,6 +241,17 @@ runs:
           echo "::error::Invalid input: $1"
           exit 1
         }
+
+        # Mode enum validation
+        case "${INPUT_MODE}" in
+          full|preview|scan|evaluate|scan_evaluate|deploy) ;;
+          *) fail "mode must be one of: full, preview, scan, evaluate, scan_evaluate, deploy" ;;
+        esac
+
+        # preview mode is bearer-only; OIDC is structurally incompatible
+        if [[ "${INPUT_MODE}" == "preview" && "${INPUT_OIDC}" == "true" ]]; then
+          fail "mode=preview cannot be used with oidc=true (preview uses bearer auth)"
+        fi
 
         # Optional UUID fields (empty = unset → OK)
         uuid_re='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
@@ -271,6 +287,7 @@ runs:
           fi
         }
         reject_path stacks_path "${INPUT_STACKS_PATH:-}"
+        reject_path stacks_config "${INPUT_STACKS_CONFIG:-}"
         reject_path config_path "${INPUT_CONFIG_PATH:-}"
 
     # =========================================================================
@@ -509,18 +526,20 @@ runs:
         fi
 
     # -------------------------------------------------------------------------
-    # Step 3: Validate Inputs
+    # Step 3: Detect Pipeline Mode
     # -------------------------------------------------------------------------
-    - name: Validate Inputs
+    - name: Detect Pipeline Mode
       id: validate
       shell: bash
       env:
         INPUT_STACKS_PATH: ${{ inputs.stacks_path }}
+        INPUT_STACKS_CONFIG: ${{ inputs.stacks_config }}
         INPUT_CONFIG_PATH: ${{ inputs.config_path }}
       run: |
         set -euo pipefail
 
         STACKS_PATH="$INPUT_STACKS_PATH"
+        STACKS_CONFIG="$INPUT_STACKS_CONFIG"
         CONFIG_PATH="$INPUT_CONFIG_PATH"
 
         # Detect pipeline mode
@@ -530,10 +549,12 @@ runs:
           echo "config_path=" >> "$GITHUB_OUTPUT"
           if [[ -d "$STACKS_PATH" ]]; then
             echo "  Inputs validated (greenfield)"
-            echo "   Stacks path: $STACKS_PATH"
+            echo "   Stacks code path: $STACKS_PATH"
+            echo "   Stacks config path: $STACKS_CONFIG"
           else
             echo "  Inputs validated (greenfield — stacks directory not yet present, no stacks to process)"
-            echo "   Stacks path: $STACKS_PATH"
+            echo "   Stacks code path: $STACKS_PATH"
+            echo "   Stacks config path: $STACKS_CONFIG"
           fi
         elif [[ -f "$CONFIG_PATH" ]]; then
           PIPELINE_MODE="brownfield"
@@ -549,18 +570,22 @@ runs:
     # -------------------------------------------------------------------------
     # Step 4: Run Pipeline
     # -------------------------------------------------------------------------
+    # Cloud credentials must be configured by the calling job before this
+    # step runs (e.g. via ilterohq/iltero-actions/resolve-credentials@v1
+    # or a hand-written aws-actions/configure-aws-credentials block). The
+    # pipeline does not resolve or rotate cloud credentials itself —
+    # workflow-topology decisions live in the workflow YAML.
     - name: Run Iltero Pipeline
       id: pipeline
       shell: bash
       env:
         STACKS_PATH: ${{ inputs.stacks_path }}
+        STACKS_CONFIG: ${{ inputs.stacks_config }}
         PIPELINE_MODE: ${{ steps.validate.outputs.pipeline_mode }}
         CONFIG_PATH: ${{ steps.validate.outputs.config_path }}
         ENVIRONMENT_OVERRIDE: ${{ inputs.environment }}
         MANUAL_STACK: ${{ inputs.stack }}
-        DRY_RUN: ${{ inputs.dry_run }}
-        SKIP_COMPLIANCE: ${{ inputs.skip_compliance }}
-        DEPLOY_ONLY: ${{ inputs.deploy_only }}
+        MODE: ${{ inputs.mode }}
         RUN_ID: ${{ inputs.run_id }}
         VERIFY_AUTHORIZATION: ${{ inputs.verify_authorization }}
         DEBUG: ${{ inputs.debug }}

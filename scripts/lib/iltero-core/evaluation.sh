@@ -45,7 +45,7 @@ run_plan_evaluation() {
 
     local results_file
     local results_dir
-    results_dir="$(pwd)/.iltero/${ILTERO_STACK_NAME:?ILTERO_STACK_NAME not set}/evaluation"
+    results_dir="$(pwd)/${STACKS_CONFIG:?STACKS_CONFIG must be set}/${ILTERO_STACK_NAME:?ILTERO_STACK_NAME not set}/evaluation"
     mkdir -p "${results_dir}"
     results_file="${results_dir}/evaluation-${unit_name}-$(date +%s).json"
 
@@ -62,197 +62,40 @@ run_plan_evaluation() {
 
     log_group "Plan Evaluation: ${unit_name}"
 
-    # Use existing plan or generate one
+    # Use existing plan or generate one via the shared terraform-prep helper.
+    # When `existing_plan` is set, also pick up the prep-state side-channels
+    # (SCAN_PLAN_*) populated by run_static_scan in the same unit so the
+    # full audit trail (S3 URL, pre-plan state JSON, best-effort mode)
+    # carries through. Defaults preserve prior behaviour when the caller
+    # didn't run scan in plan-mode.
+    local plan_s3_url=""
+    local state_json_file=""
     if [[ -n "${existing_plan}" ]] && [[ -f "${existing_plan}" ]]; then
         log_info "Using existing plan file: ${existing_plan}"
         PLAN_JSON_FILE="${existing_plan}"
+        EVAL_MODE="${SCAN_PLAN_MODE:-full}"
+        plan_s3_url="${SCAN_PLAN_S3_URL:-}"
+        state_json_file="${SCAN_PLAN_STATE_JSON_FILE:-}"
     else
-        # Work in unit directory
-        pushd "${eval_path}" > /dev/null
-
-        # =====================================================================
-        # Step 1: Check dependency status to determine if remote state refs are available
-        # =====================================================================
-        local dep_state_status
-        dep_state_status=$(check_dependency_remote_state "${depends_on}")
-        log_info "Dependency remote state check: ${dep_state_status}"
-        
-        if [[ "${dep_state_status}" == "unavailable" ]]; then
-            # One or more dependencies don't have remote state available
-            if [[ -n "${DEP_CHECK_DETAILS:-}" ]]; then
-                log_warning "Dependencies missing remote state: ${DEP_CHECK_DETAILS}"
-            fi
-            log_info "Will disable remote state dependencies in plan"
-            EVAL_MODE="best_effort"
-        fi
-
-        # =====================================================================
-        # Step 2: Initialize terraform (always with backend for this unit's state)
-        # =====================================================================
-        # Resolve backend config before init (partial backend configs need -backend-config)
-        log_info "Working directory: $(pwd)"
-        check_env_config "${eval_path}" "${environment}"
-        log_info "Resolved: BACKEND_HCL=${BACKEND_HCL:-<empty>} TFVARS_FILE=${TFVARS_FILE:-<empty>}"
-
-        local init_args=(-input=false)
-        if [[ -n "${BACKEND_HCL}" ]]; then
-            init_args+=(-backend-config="${BACKEND_HCL}")
-        fi
-
-        log_info "Running: terraform init ${init_args[*]}"
-        local init_output
         set +e
-        init_output=$(terraform init "${init_args[@]}" 2>&1)
-        local init_exit=$?
+        prepare_terraform_plan "${eval_path}" "${unit_name}" "${environment}" "${depends_on}" "${chain_run_id}"
+        local prep_exit=$?
         set -e
 
-        if [[ ${init_exit} -ne 0 ]]; then
-            log_step "terraform init" "FAILED"
-            echo ""
-            echo "${init_output}" | grep -A 5 "Error:" | head -30 || echo "${init_output}" | tail -20
-            log_result "FAIL" "Plan evaluation aborted: terraform init failed for ${unit_name}"
-            update_unit_remote_state_status "${unit_name}" "unavailable" "init_failed"
-            popd > /dev/null
+        if [[ ${prep_exit} -ne 0 ]]; then
+            local failure_step="terraform init"
+            [[ ${prep_exit} -eq 2 ]] && failure_step="terraform plan"
+            log_result "FAIL" "Plan evaluation aborted: ${failure_step} failed for ${unit_name}"
             log_group_end
             EVAL_EXIT_CODE=2
-            return 1
-        fi
-
-        log_step "terraform init" "ok"
-
-        # Extract S3 backend config from terraform's local state (works for all stack types)
-        local s3_bucket="" s3_key_prefix="" s3_region=""
-        local tf_backend_state=".terraform/terraform.tfstate"
-        if [[ -f "${tf_backend_state}" ]]; then
-            local backend_type
-            backend_type=$(jq -r '.backend.type // empty' "${tf_backend_state}" 2>/dev/null || echo "")
-            if [[ "${backend_type}" == "s3" ]]; then
-                s3_bucket=$(jq -r '.backend.config.bucket // empty' "${tf_backend_state}")
-                s3_region=$(jq -r '.backend.config.region // empty' "${tf_backend_state}")
-                # Strip the .tfstate filename to get the key prefix
-                local s3_key
-                s3_key=$(jq -r '.backend.config.key // empty' "${tf_backend_state}")
-                s3_key_prefix="${s3_key%/*}"
-            fi
-        fi
-
-        # =====================================================================
-        # Step 2.5: Check if THIS unit has existing state in the backend
-        # This determines if downstream units can reference our remote state
-        # =====================================================================
-        local has_backend_state=false
-        set +e
-        local state_output
-        state_output=$(terraform state list 2>&1)
-        local state_exit=$?
-        set -e
-        
-        if [[ ${state_exit} -eq 0 ]] && [[ -n "${state_output}" ]]; then
-            has_backend_state=true
-            log_info "Unit has existing backend state ($(echo "${state_output}" | wc -l | tr -d ' ') resources)"
-            update_unit_remote_state_status "${unit_name}" "available" "has_backend_state"
-        else
-            log_info "Unit has no backend state yet (not deployed)"
-            update_unit_remote_state_status "${unit_name}" "unavailable" "no_backend_state"
-        fi
-
-        # =====================================================================
-        # Step 3: Build and run terraform plan
-        # =====================================================================
-        local plan_args=(-out=tfplan -input=false)
-
-        # If dependencies are unavailable, disable remote state loading in terraform
-        # This allows plan to succeed for policy evaluation even when deps aren't deployed
-        if [[ "${EVAL_MODE}" == "best_effort" ]]; then
-            plan_args+=(-var="enable_remote_state_dependencies=false")
-            log_info "Disabling remote state dependencies (dependencies not yet deployed)"
-        fi
-
-        # Use tfvars resolved earlier by check_env_config
-        if [[ -n "${TFVARS_FILE}" ]]; then
-            plan_args+=(-var-file="${TFVARS_FILE}")
-            log_info "Using tfvars: ${TFVARS_FILE}"
-        else
-            log_warning "No tfvars file found for environment: ${environment}"
-        fi
-
-        # Run terraform plan
-        log_info "Running: terraform plan ${plan_args[*]}"
-        local plan_output
-        set +e
-        plan_output=$(terraform plan "${plan_args[@]}" 2>&1)
-        local plan_exit=$?
-        set -e
-
-        if [[ ${plan_exit} -ne 0 ]] || [[ ! -f "tfplan" ]]; then
-            # Check if this is a remote state reference error
-            if echo "${plan_output}" | grep -qE "Unable to find remote state|No stored state was found|Error loading state"; then
-                log_warning "Remote state unavailable for ${unit_name} (upstream dependency not deployed)"
-                update_unit_remote_state_status "${unit_name}" "unavailable" "remote_state_reference_error"
-            else
-                update_unit_remote_state_status "${unit_name}" "unavailable" "plan_failed"
-            fi
-
-            log_step "terraform plan" "FAILED"
-            echo ""
-            echo "${plan_output}" | grep -A 5 "Error:" | head -50 || echo "${plan_output}" | tail -30
-            
-            log_result "FAIL" "Plan evaluation aborted: terraform plan failed for ${unit_name}"
-            popd > /dev/null
-            log_group_end
-            EVAL_EXIT_CODE=2  # Infrastructure error (not policy violation)
             EVAL_PASSED="false"
             return 1
         fi
 
-        local resource_count
-        resource_count=$(echo "${state_output}" 2>/dev/null | wc -l | tr -d ' ')
-        if [[ "${has_backend_state}" == "true" ]]; then
-            log_step "terraform plan" "ok" "${resource_count} existing resources"
-        else
-            log_step "terraform plan" "ok" "no existing state"
-        fi
-        
-        # Note: Unit state availability was already determined by `terraform state list`
-        # after init - we don't update it here based on plan success
-
-        # Convert plan to JSON (full terraform plan JSON for policy evaluation)
-        terraform show -json tfplan > tfplan.json 2>/dev/null
-        PLAN_JSON_FILE="$(pwd)/tfplan.json"
-
-        # Upload plan JSON to S3 alongside the state file
-        local plan_s3_url=""
-        if [[ -n "${s3_bucket}" ]] && [[ -n "${s3_key_prefix}" ]]; then
-            local plan_s3_key="${s3_key_prefix}/plans/${chain_run_id:-$(date +%s)}-tfplan.json"
-            log_info "Uploading plan JSON to s3://${s3_bucket}/${plan_s3_key}"
-            if aws s3 cp "${PLAN_JSON_FILE}" "s3://${s3_bucket}/${plan_s3_key}" \
-                --region "${s3_region:-us-east-1}" 2>&1 | tail -1; then
-                plan_s3_url="s3://${s3_bucket}/${plan_s3_key}"
-                log_info "Plan uploaded successfully"
-            else
-                log_warning "Failed to upload plan to S3 (non-fatal, continuing)"
-            fi
-        fi
-
-        # Export current STATE (not plan) for audit trail and drift detection baseline
-        # Note: `terraform show -json` (no args) shows the current state from the backend,
-        # NOT the plan. This will be empty/minimal if the unit hasn't been deployed yet.
-        # The plan JSON above contains the planned changes; this is the pre-existing state.
-        local state_json_file
-        state_json_file="$(pwd)/tfstate-before-plan.json"
-        set +e
-        terraform show -json > "${state_json_file}" 2>/dev/null
-        local state_export_exit=$?
-        set -e
-
-        if [[ ${state_export_exit} -ne 0 ]] || [[ ! -s "${state_json_file}" ]]; then
-            log_info "No existing state to export (unit not yet deployed or state is empty)"
-            state_json_file=""
-        else
-            log_info "Exported current state to: ${state_json_file}"
-        fi
-
-        popd > /dev/null
+        PLAN_JSON_FILE="${TF_PLAN_JSON_FILE}"
+        EVAL_MODE="${TF_PLAN_MODE}"
+        plan_s3_url="${TF_PLAN_S3_URL}"
+        state_json_file="${TF_STATE_JSON_FILE}"
     fi
 
     # Ensure OPA policy directory exists (policies will be resolved from Iltero backend)
@@ -284,8 +127,15 @@ run_plan_evaluation() {
         --output json
         --output-file "${results_file}"
         --opa-policy-dir "${opa_policy_dir}"
-        --resolve-policies
     )
+
+    # Preview mode: pass --preview to the CLI (read-only policy resolution,
+    # no submission). Otherwise: --resolve-policies (writeful resolution).
+    if [[ "${PREVIEW_MODE:-false}" == "true" ]]; then
+        cmd+=(--preview)
+    else
+        cmd+=(--resolve-policies)
+    fi
 
     # Pass source map for accurate violation file paths
     if [[ -n "${source_map_file}" ]] && [[ -f "${source_map_file}" ]]; then
