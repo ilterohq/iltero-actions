@@ -142,6 +142,14 @@ inputs:
     required: false
     default: ''
 
+  comment_on_pr:
+    description: |
+      Post an advisory comment summarizing the result on pull_request runs.
+      Requires the job to grant 'pull-requests: write'. Set to 'false' if you
+      post your own comment from a separate job to avoid a duplicate comment.
+    required: false
+    default: 'true'
+
 outputs:
   stacks_processed:
     description: JSON array of stacks that were processed
@@ -624,7 +632,7 @@ runs:
     # Step 6: Comment on PR
     # -------------------------------------------------------------------------
     - name: Comment on PR
-      if: github.event_name == 'pull_request' && always()
+      if: always() && github.event_name == 'pull_request' && inputs.comment_on_pr == 'true'
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
         OVERALL_STATUS: ${{ steps.pipeline.outputs.overall_status }}
@@ -680,30 +688,44 @@ runs:
           body += `\n---\n`;
           body += `<sub>Powered by [Iltero](https://iltero.io)</sub>`;
 
-          // Update existing comment or create new one
-          const { data: comments } = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-
-          const existing = comments.find(c =>
-            c.body.includes('Iltero Infrastructure Pipeline') &&
-            c.body.includes('Powered by [Iltero]')
-          );
-
-          if (existing) {
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: existing.id,
-              body: body,
-            });
-          } else {
-            await github.rest.issues.createComment({
+          // The advisory comment is operator UX, not an evidence-chain artifact,
+          // so a failure to post it must never fail the pipeline — degrade to a
+          // warning. Posting requires the job to grant `pull-requests: write`; a
+          // missing scope or a fork PR's read-only token lands in the catch.
+          try {
+            // Update existing comment or create new one
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: body,
             });
+
+            const existing = comments.find(c =>
+              c.body &&
+              c.body.includes('Iltero Infrastructure Pipeline') &&
+              c.body.includes('Powered by [Iltero]')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }
+          } catch (error) {
+            const status = error.status ? ` (HTTP ${error.status})` : '';
+            core.warning(
+              `Could not post the advisory PR comment${status}: ${error.message}. ` +
+              `This does not affect the compliance result. Grant the job ` +
+              `'pull-requests: write' if you want the summary comment.`
+            );
           }
