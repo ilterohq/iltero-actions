@@ -136,6 +136,14 @@ jobs:
           done
           echo "::endgroup::"
 
+      - name: Guard against PR review/merge API calls (best-effort)
+        run: |
+          # The 'pull-requests: write' grant exists only so the action can post
+          # an advisory PR comment. Fail if any action reaches for the PR
+          # review/approve/merge/base-edit surface that scope also permits.
+          # Best-effort static check against first-party YAML (see script header).
+          ./scripts/check-comment-api-scope.sh
+
   # ===========================================================================
   # Security: Secrets detection, dependency review
   # ===========================================================================

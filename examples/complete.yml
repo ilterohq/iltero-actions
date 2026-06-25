@@ -99,6 +99,7 @@ jobs:
           mode: ${{ github.event_name == 'pull_request' && 'scan_evaluate' || inputs.mode }}
           oidc: 'true'
           org_id: ${{ vars.ILTERO_ORG_ID }}
+          comment_on_pr: 'false'  # The dedicated pr-comment job posts the comment
         env:
           ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}
 

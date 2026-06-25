@@ -40,6 +40,7 @@ Complete reference for every action in this toolkit. For an overview and quick s
 | `oidc` | No | `false` | Enable OIDC authentication (recommended) |
 | `org_id` | No | — | Iltero Organization ID (required when `oidc` is `true`) |
 | `registry_host` | No | `registry.iltero.io` | Private module registry |
+| `comment_on_pr` | No | `true` | Post an advisory result comment on `pull_request` runs (needs `pull-requests: write`). Set `false` if you post your own comment from a separate job |
 | `mode` | No | `full` | Pipeline mode: `full`, `preview`, `scan`, `evaluate`, `scan_evaluate`, `deploy` |
 | `run_id` | No | — | Chain to a previous compliance run (required when `mode` is `deploy`) |
 | `verify_authorization` | No | `true` | Verify deployment authorization via Iltero |
