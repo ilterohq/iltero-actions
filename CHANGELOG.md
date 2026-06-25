@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-06-24
+
+### Added
+
+- `comment_on_pr` input on the root action (default `true`). Set it to `false`
+  to suppress the built-in advisory PR comment when you post your own from a
+  separate job, avoiding a duplicate comment
+
+### Fixed
+
+- Advisory PR comment now works under `pull-requests: write`. The issues
+  comments endpoint authorizes against the pull_requests scope for pull request
+  objects, so a job granting only `issues: write` received a 403 on every run.
+  The comment step is now also fail-soft — a permission failure (or a fork PR's
+  read-only token) degrades to a warning instead of failing the pipeline, so an
+  advisory comment can never red-X an otherwise-passing run
+
+### Changed
+
+- Bumped pinned action dependencies used by the root action:
+  `actions/github-script` v7 → v9.0.0 and `hashicorp/setup-terraform`
+  v4.0.0 → v4.0.1
+
 ## [1.5.0] - 2026-05-25
 
 ### Added
