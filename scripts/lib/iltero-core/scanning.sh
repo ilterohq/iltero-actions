@@ -23,6 +23,8 @@
 #   SCAN_PLAN_STATE_JSON_FILE - pre-plan state JSON (plan-mode), or empty
 #   SCAN_PLAN_S3_URL          - s3:// URL of uploaded plan (plan-mode), or empty
 #   SCAN_PLAN_MODE            - "full" | "best_effort" (plan-mode), or empty
+#   SCAN_PLAN_DIGEST          - canonical plan digest (provenance), or empty
+#   SCAN_PLAN_CANON_VERSION   - canonicalization spec version, or empty
 # All SCAN_PLAN_* are empty when source-mode is used.
 # =============================================================================
 
@@ -55,6 +57,8 @@ run_static_scan() {
     SCAN_PLAN_STATE_JSON_FILE=""
     SCAN_PLAN_S3_URL=""
     SCAN_PLAN_MODE=""
+    SCAN_PLAN_DIGEST=""
+    SCAN_PLAN_CANON_VERSION=""
 
     log_group "Static Analysis: ${unit_name}"
 
@@ -80,6 +84,8 @@ run_static_scan() {
             SCAN_PLAN_STATE_JSON_FILE="${TF_STATE_JSON_FILE}"
             SCAN_PLAN_S3_URL="${TF_PLAN_S3_URL}"
             SCAN_PLAN_MODE="${TF_PLAN_MODE}"
+            SCAN_PLAN_DIGEST="${TF_PLAN_DIGEST}"
+            SCAN_PLAN_CANON_VERSION="${TF_CANON_VERSION}"
             log_info "Plan-mode scan input: ${TF_PLAN_JSON_FILE}"
         else
             log_warning "Plan-mode prep failed (exit ${prep_exit}); falling back to source-mode scan"

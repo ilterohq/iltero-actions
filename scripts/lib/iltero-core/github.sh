@@ -13,29 +13,29 @@ set_output() {
     local value="$2"
 
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-        echo "${name}=${value}" >> "$GITHUB_OUTPUT"
+        echo "${name}=${value}" >> "${GITHUB_OUTPUT}"
     fi
 }
 
 # Set multiple outputs from scan results
 set_scan_outputs() {
-    set_output "passed" "$SCAN_PASSED"
-    set_output "run-id" "$SCAN_RUN_ID"
-    set_output "violations" "$SCAN_VIOLATIONS"
+    set_output "passed" "${SCAN_PASSED}"
+    set_output "run-id" "${SCAN_RUN_ID}"
+    set_output "violations" "${SCAN_VIOLATIONS}"
 }
 
 # Set multiple outputs from evaluation results
 set_eval_outputs() {
-    set_output "passed" "$EVAL_PASSED"
-    set_output "run-id" "$EVAL_RUN_ID"
-    set_output "violations" "$EVAL_VIOLATIONS"
-    set_output "approval-id" "$APPROVAL_ID"
+    set_output "passed" "${EVAL_PASSED}"
+    set_output "run-id" "${EVAL_RUN_ID}"
+    set_output "violations" "${EVAL_VIOLATIONS}"
+    set_output "approval-id" "${APPROVAL_ID}"
 }
 
 # Set multiple outputs from deployment results
 set_deploy_outputs() {
-    set_output "success" "$DEPLOY_SUCCESS"
-    set_output "resources-count" "$RESOURCES_COUNT"
+    set_output "success" "${DEPLOY_SUCCESS}"
+    set_output "resources-count" "${RESOURCES_COUNT}"
 }
 
 # Write content to GitHub Actions step summary
@@ -44,7 +44,7 @@ write_summary() {
     local content="$1"
     
     if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-        echo "$content" >> "$GITHUB_STEP_SUMMARY"
+        echo "${content}" >> "${GITHUB_STEP_SUMMARY}"
     fi
 }
 
@@ -57,28 +57,28 @@ write_scan_summary() {
     [[ -z "${GITHUB_STEP_SUMMARY:-}" ]] && return 0
     
     local summary=""
-    summary+="## $title\n\n"
+    summary+="## ${title}\n\n"
     summary+="| Unit | Status | High | Medium | Low | Scan ID |\n"
     summary+="|------|--------|------|--------|-----|----------|\n"
     
     # Parse each result and add row
     local rows
-    rows=$(echo "$results_json" | jq -r '.[] | 
+    rows=$(echo "${results_json}" | jq -r '.[] | 
         "\(.unit_name // "unknown") | \(if .passed then "Pass" else "Fail" end) | \(.high // 0) | \(.medium // 0) | \(.low // 0) | `\(.scan_id // "N/A")`"')
     
     while IFS= read -r row; do
-        summary+="| $row |\n"
-    done <<< "$rows"
+        summary+="| ${row} |\n"
+    done <<< "${rows}"
     
     # Add totals
     local total_high total_medium total_low
-    total_high=$(echo "$results_json" | jq '[.[].high // 0] | add // 0')
-    total_medium=$(echo "$results_json" | jq '[.[].medium // 0] | add // 0')
-    total_low=$(echo "$results_json" | jq '[.[].low // 0] | add // 0')
+    total_high=$(echo "${results_json}" | jq '[.[].high // 0] | add // 0')
+    total_medium=$(echo "${results_json}" | jq '[.[].medium // 0] | add // 0')
+    total_low=$(echo "${results_json}" | jq '[.[].low // 0] | add // 0')
     
-    summary+="\n**Total Violations:** $total_high high, $total_medium medium, $total_low low\n"
+    summary+="\n**Total Violations:** ${total_high} high, ${total_medium} medium, ${total_low} low\n"
     
-    echo -e "$summary" >> "$GITHUB_STEP_SUMMARY"
+    echo -e "${summary}" >> "${GITHUB_STEP_SUMMARY}"
 }
 
 # Generate and write an evaluation summary table
@@ -90,19 +90,19 @@ write_evaluation_summary() {
     [[ -z "${GITHUB_STEP_SUMMARY:-}" ]] && return 0
     
     local summary=""
-    summary+="## $title\n\n"
+    summary+="## ${title}\n\n"
     summary+="| Unit | Status | Resources | Violations | Approval ID |\n"
     summary+="|------|--------|-----------|------------|-------------|\n"
     
     local rows
-    rows=$(echo "$results_json" | jq -r '.[] | 
+    rows=$(echo "${results_json}" | jq -r '.[] | 
         "\(.unit_name // "unknown") | \(if .passed then "Pass" else "Fail" end) | +\(.additions // 0)/-\(.deletions // 0)/~\(.changes // 0) | \(.violations // 0) | `\(.approval_id // "N/A")`"')
     
     while IFS= read -r row; do
-        summary+="| $row |\n"
-    done <<< "$rows"
+        summary+="| ${row} |\n"
+    done <<< "${rows}"
     
-    echo -e "$summary" >> "$GITHUB_STEP_SUMMARY"
+    echo -e "${summary}" >> "${GITHUB_STEP_SUMMARY}"
 }
 
 # Generate and write a deployment summary table
@@ -114,19 +114,19 @@ write_deployment_summary() {
     [[ -z "${GITHUB_STEP_SUMMARY:-}" ]] && return 0
     
     local summary=""
-    summary+="## $title\n\n"
+    summary+="## ${title}\n\n"
     summary+="| Unit | Status | Resources | Duration |\n"
     summary+="|------|--------|-----------|----------|\n"
     
     local rows
-    rows=$(echo "$results_json" | jq -r '.[] | 
+    rows=$(echo "${results_json}" | jq -r '.[] | 
         "\(.unit_name // "unknown") | \(if .success then "Pass" else "Fail" end) | \(.resource_count // 0) | \(.duration // "N/A")"')
     
     while IFS= read -r row; do
-        summary+="| $row |\n"
-    done <<< "$rows"
+        summary+="| ${row} |\n"
+    done <<< "${rows}"
     
-    echo -e "$summary" >> "$GITHUB_STEP_SUMMARY"
+    echo -e "${summary}" >> "${GITHUB_STEP_SUMMARY}"
 }
 
 # Generate a consolidated pipeline summary
@@ -144,12 +144,12 @@ write_pipeline_summary() {
 
     # Detect format: new format has "unit_results", legacy has "units"
     local is_new_format
-    is_new_format=$(echo "$results_json" | jq 'has("unit_results")' 2>/dev/null || echo "false")
+    is_new_format=$(echo "${results_json}" | jq 'has("unit_results")' 2>/dev/null || echo "false")
 
-    if [[ "$is_new_format" == "true" ]]; then
-        _write_pipeline_summary_v2 "$results_json"
+    if [[ "${is_new_format}" == "true" ]]; then
+        _write_pipeline_summary_v2 "${results_json}"
     else
-        _write_pipeline_summary_v1 "$results_json"
+        _write_pipeline_summary_v1 "${results_json}"
     fi
 }
 
@@ -158,22 +158,22 @@ _write_pipeline_summary_v1() {
     local results_json="$1"
 
     local failed_count
-    failed_count=$(echo "$results_json" | jq '[.units[] | select(.passed == false or .success == false)] | length')
+    failed_count=$(echo "${results_json}" | jq '[.units[] | select(.passed == false or .success == false)] | length')
 
     local overall_status
     local environment
-    environment=$(echo "$results_json" | jq -r '.environment // "unknown"')
+    environment=$(echo "${results_json}" | jq -r '.environment // "unknown"')
 
-    if [[ "$failed_count" -eq 0 ]]; then
+    if [[ "${failed_count}" -eq 0 ]]; then
         overall_status="Passed"
     else
         overall_status="Failed"
     fi
 
     local stack_name
-    stack_name=$(echo "$results_json" | jq -r '.stack // "unknown"')
+    stack_name=$(echo "${results_json}" | jq -r '.stack // "unknown"')
     local unit_count
-    unit_count=$(echo "$results_json" | jq '.units | length')
+    unit_count=$(echo "${results_json}" | jq '.units | length')
 
     local summary=""
     summary+="# Iltero Pipeline — ${environment}\n\n"
@@ -185,27 +185,27 @@ _write_pipeline_summary_v1() {
     summary+="|------|-----------------|-----------------|--------|\n"
 
     local rows
-    rows=$(echo "$results_json" | jq -r '.units[] |
+    rows=$(echo "${results_json}" | jq -r '.units[] |
         "\(.name) | \(if .scan.passed then "Pass" elif .scan.skipped then "--" else "Fail" end) | \(if .evaluation.passed then "Pass" elif .evaluation.skipped then "--" else "Fail" end) | \(if .deploy.success then "Pass" elif .deploy.skipped then "--" else "Fail" end)"')
 
     while IFS= read -r row; do
-        summary+="| $row |\n"
-    done <<< "$rows"
+        summary+="| ${row} |\n"
+    done <<< "${rows}"
 
     # Violations summary if any
     local total_violations
-    total_violations=$(echo "$results_json" | jq '[.units[].scan.violations // 0, .units[].evaluation.violations // 0] | add // 0')
+    total_violations=$(echo "${results_json}" | jq '[.units[].scan.violations // 0, .units[].evaluation.violations // 0] | add // 0')
 
-    if [[ "$total_violations" -gt 0 ]]; then
+    if [[ "${total_violations}" -gt 0 ]]; then
         summary+="\n### Violations\n\n"
-        summary+="Total violations found: **$total_violations**\n\n"
+        summary+="Total violations found: **${total_violations}**\n\n"
 
         local units_with_violations
-        units_with_violations=$(echo "$results_json" | jq -r '.units[] | select((.scan.violations // 0) > 0 or (.evaluation.violations // 0) > 0) | "- **\(.name)**: \((.scan.violations // 0) + (.evaluation.violations // 0)) violation(s)"')
-        summary+="$units_with_violations\n"
+        units_with_violations=$(echo "${results_json}" | jq -r '.units[] | select((.scan.violations // 0) > 0 or (.evaluation.violations // 0) > 0) | "- **\(.name)**: \((.scan.violations // 0) + (.evaluation.violations // 0)) violation(s)"')
+        summary+="${units_with_violations}\n"
     fi
 
-    echo -e "$summary" >> "$GITHUB_STEP_SUMMARY"
+    echo -e "${summary}" >> "${GITHUB_STEP_SUMMARY}"
 }
 
 # Pipeline summary with eval mode and violation counts (v2 format)
@@ -214,21 +214,21 @@ _write_pipeline_summary_v2() {
     local results_json="$1"
 
     local unit_results
-    unit_results=$(echo "$results_json" | jq -c '.unit_results')
+    unit_results=$(echo "${results_json}" | jq -c '.unit_results')
 
     local unit_count failed_count
-    unit_count=$(echo "$unit_results" | jq 'length')
-    failed_count=$(echo "$unit_results" | jq '[.[] | select(
+    unit_count=$(echo "${unit_results}" | jq 'length')
+    failed_count=$(echo "${unit_results}" | jq '[.[] | select(
         (.scan.passed == false and .scan.skipped != true) or
         (.evaluation.passed == false and .evaluation.skipped != true)
     )] | length')
 
     local environment stacks_csv
-    stacks_csv=$(echo "$results_json" | jq -r '.stacks // [] | join(", ")')
-    environment=$(echo "$results_json" | jq -r '.environment // "unknown"')
+    stacks_csv=$(echo "${results_json}" | jq -r '.stacks // [] | join(", ")')
+    environment=$(echo "${results_json}" | jq -r '.environment // "unknown"')
 
     local overall_status
-    if [[ "$failed_count" -eq 0 ]]; then
+    if [[ "${failed_count}" -eq 0 ]]; then
         overall_status="Passed"
     else
         overall_status="Failed"
@@ -245,7 +245,7 @@ _write_pipeline_summary_v2() {
 
     local has_best_effort=false
     local rows
-    rows=$(echo "$unit_results" | jq -r '.[] |
+    rows=$(echo "${unit_results}" | jq -r '.[] |
         "\(.unit) | \(
             if .scan == null then "--"
             elif .scan.skipped then "Skip"
@@ -272,44 +272,44 @@ _write_pipeline_summary_v2() {
         )"')
 
     while IFS= read -r row; do
-        summary+="| $row |\n"
-        if [[ "$row" == *"best_effort"* ]]; then
+        summary+="| ${row} |\n"
+        if [[ "${row}" == *"best_effort"* ]]; then
             has_best_effort=true
         fi
-    done <<< "$rows"
+    done <<< "${rows}"
 
     # Best-effort note
-    if [[ "$has_best_effort" == "true" ]]; then
+    if [[ "${has_best_effort}" == "true" ]]; then
         summary+="\n> **Note:** Units evaluated in \`best_effort\` mode had unavailable upstream remote state. "
         summary+="Evaluation ran without backend data sources. Results may differ after upstream units deploy.\n"
     fi
 
     # Violations summary
     local total_scan_violations total_eval_violations total_violations
-    total_scan_violations=$(echo "$unit_results" | jq '[.[].scan // {} | .violations // 0] | add // 0')
-    total_eval_violations=$(echo "$unit_results" | jq '[.[].evaluation // {} | .violations // 0] | add // 0')
+    total_scan_violations=$(echo "${unit_results}" | jq '[.[].scan // {} | .violations // 0] | add // 0')
+    total_eval_violations=$(echo "${unit_results}" | jq '[.[].evaluation // {} | .violations // 0] | add // 0')
     total_violations=$((total_scan_violations + total_eval_violations))
 
-    if [[ "$total_violations" -gt 0 ]]; then
+    if [[ "${total_violations}" -gt 0 ]]; then
         summary+="\n### Violations\n\n"
         summary+="| Phase | Violations |\n"
         summary+="|-------|------------|\n"
-        summary+="| Static Analysis | $total_scan_violations |\n"
-        summary+="| Plan Evaluation | $total_eval_violations |\n"
-        summary+="| **Total** | **$total_violations** |\n\n"
+        summary+="| Static Analysis | ${total_scan_violations} |\n"
+        summary+="| Plan Evaluation | ${total_eval_violations} |\n"
+        summary+="| **Total** | **${total_violations}** |\n\n"
 
         # Per-unit breakdown
         local units_with_violations
-        units_with_violations=$(echo "$unit_results" | jq -r '.[] | select(
+        units_with_violations=$(echo "${unit_results}" | jq -r '.[] | select(
             ((.scan // {}).violations // 0) > 0 or ((.evaluation // {}).violations // 0) > 0
         ) | "- **\(.unit)**: \(((.scan // {}).violations // 0) + ((.evaluation // {}).violations // 0)) violation(s) (scan: \((.scan // {}).violations // 0), eval: \((.evaluation // {}).violations // 0))"')
 
-        if [[ -n "$units_with_violations" ]]; then
-            summary+="$units_with_violations\n"
+        if [[ -n "${units_with_violations}" ]]; then
+            summary+="${units_with_violations}\n"
         fi
     fi
 
-    echo -e "$summary" >> "$GITHUB_STEP_SUMMARY"
+    echo -e "${summary}" >> "${GITHUB_STEP_SUMMARY}"
 }
 
 # Add a collapsible details section to summary
@@ -322,13 +322,13 @@ write_summary_details() {
     
     local summary=""
     summary+="<details>\n"
-    summary+="<summary>$title</summary>\n\n"
+    summary+="<summary>${title}</summary>\n\n"
     summary+="\`\`\`\n"
-    summary+="$content\n"
+    summary+="${content}\n"
     summary+="\`\`\`\n\n"
     summary+="</details>\n\n"
     
-    echo -e "$summary" >> "$GITHUB_STEP_SUMMARY"
+    echo -e "${summary}" >> "${GITHUB_STEP_SUMMARY}"
 }
 
 # Topological sort units by depends_on
@@ -337,7 +337,7 @@ write_summary_details() {
 sort_units_by_dependency() {
     local units_json="$1"
 
-    echo "$units_json" | python3 -c '
+    echo "${units_json}" | python3 -c '
 import json
 import sys
 
@@ -370,4 +370,47 @@ for name in graph:
 
 print(json.dumps(result))
 '
+}
+
+# Write a Provenance section to the step summary from the unit_results array.
+# Renders per-unit attestation status and a loud notice when nothing was bound.
+# No-op when there is no provenance data (so it stays invisible unless attestation
+# is in play). Args: $1=unit_results_json
+write_provenance_section() {
+    local unit_results="$1"
+
+    [[ -z "${GITHUB_STEP_SUMMARY:-}" ]] && return 0
+    [[ -n "${unit_results}" ]] || return 0
+    echo "${unit_results}" | jq empty 2>/dev/null || return 0
+
+    local has_prov
+    has_prov=$(echo "${unit_results}" | jq -r \
+        'any(.[]; (.deploy.provenance != null) or ((.evaluation.plan_digest // "") != ""))' \
+        2>/dev/null || echo "false")
+    [[ "${has_prov}" == "true" ]] || return 0
+
+    {
+        echo ""
+        echo "## Provenance"
+        echo ""
+        echo "| Unit | Plan digest | Status |"
+        echo "|------|-------------|--------|"
+        # The unit name is rendered inside a code span with table pipes escaped,
+        # so a crafted unit name cannot break the table or inject markdown.
+        echo "${unit_results}" | jq -r '
+            .[]
+            | (.evaluation.plan_digest // "") as $d
+            | (.evaluation.eval_mode // "") as $mode
+            | (if (.deploy.provenance.bound // false) then "✅ bound (enforced)"
+               elif ($mode == "best_effort") then "— best-effort (not bindable)"
+               else "— not provenance-bound" end) as $s
+            | (.unit | gsub("`"; "") | gsub("[|]"; "\\|")) as $u
+            | "| `\($u)` | \(if $d == "" then "—" else $d[0:12] end) | \($s) |"'
+        echo ""
+        # Loud signal: provenance data exists but nothing was actually bound.
+        if ! echo "${unit_results}" | jq -e 'any(.[]; .deploy.provenance.bound // false)' >/dev/null 2>&1; then
+            echo "> No unit was provenance-bound. If attestation is enabled, the CLI may not support plan-digest yet, or units were checked in best-effort mode."
+            echo ""
+        fi
+    } >> "${GITHUB_STEP_SUMMARY}"
 }

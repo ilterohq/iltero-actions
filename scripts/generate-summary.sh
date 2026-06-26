@@ -45,6 +45,8 @@ if [[ -n "$UNIT_RESULTS_JSON" ]] && echo "$UNIT_RESULTS_JSON" | jq empty 2>/dev/
 
     write_pipeline_summary "$summary_json"
 
+    write_provenance_section "$UNIT_RESULTS_JSON"
+
     # Add timestamp
     cat >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}" << EOF
 

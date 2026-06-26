@@ -113,6 +113,23 @@ inputs:
     required: false
     default: 'true'
 
+  attest:
+    description: |
+      Enable plan-to-apply provenance (on by default). The deploy applies the
+      EXACT evaluated plan and the backend enforces it at the deploy gate
+      (anti-substitution). Units that can't be bound (e.g. non-S3 backend)
+      degrade gracefully and are reported as not bound. Set to 'false' to
+      restore the legacy re-plan-at-apply behaviour. See docs/provenance.md.
+    required: false
+    default: 'true'
+
+  s3_sse:
+    description: |
+      Server-side encryption mode for plan artifacts in the backend bucket
+      (e.g. AES256 or aws:kms). Defaults to the bucket's default encryption.
+    required: false
+    default: ''
+
   debug:
     description: |
       Enable debug output for troubleshooting.
@@ -600,6 +617,10 @@ runs:
         REGISTRY_HOST: ${{ inputs.registry_host }}
         OIDC_ENABLED: ${{ inputs.oidc }}
         ILTERO_ORG_ID: ${{ inputs.org_id }}
+        # Provenance attestation (set explicitly from inputs so an ambient
+        # ILTERO_ATTEST in the caller's env can't silently change behavior).
+        ILTERO_ATTEST: ${{ inputs.attest }}
+        ILTERO_S3_SSE: ${{ inputs.s3_sse }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}
         GITHUB_REF: ${{ github.ref }}
         GITHUB_BASE_REF: ${{ github.base_ref }}

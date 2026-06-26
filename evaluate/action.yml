@@ -77,6 +77,22 @@ inputs:
     required: false
     default: ''
 
+  attest:
+    description: |
+      Enable plan-to-apply provenance (on by default). On evaluate, fingerprints
+      the plan and stores the saved plan for the deploy step. The matching deploy
+      step must use the same setting. Set to 'false' to restore the legacy
+      behaviour. See docs/provenance.md.
+    required: false
+    default: 'true'
+
+  s3-sse:
+    description: |
+      Server-side encryption mode for the stored plan (e.g. AES256 or aws:kms).
+      Defaults to the backend bucket's default encryption.
+    required: false
+    default: ''
+
 outputs:
   passed:
     description: Whether the evaluation passed (true/false)
@@ -117,6 +133,11 @@ runs:
         FAIL_ON: ${{ inputs.fail-on }}
         CHAIN_RUN_ID: ${{ inputs.run-id }}
         EXISTING_PLAN: ${{ inputs.plan-file }}
+        # Provenance (opt-in): the evaluate side fingerprints the plan and stores
+        # the saved plan binary; signing happens on deploy. Set explicitly from
+        # inputs so an ambient ILTERO_ATTEST can't silently change behavior.
+        ILTERO_ATTEST: ${{ inputs.attest }}
+        ILTERO_S3_SSE: ${{ inputs.s3-sse }}
       run: |
         set -euo pipefail
 
@@ -139,8 +160,8 @@ runs:
 
         # Set outputs using helper
         set_eval_outputs
-        echo "plan-file=${PLAN_JSON_FILE:-}" >> $GITHUB_OUTPUT
-        echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+        echo "plan-file=${PLAN_JSON_FILE:-}" >> "${GITHUB_OUTPUT}"
+        echo "exit_code=${EXIT_CODE}" >> "${GITHUB_OUTPUT}"
 
     # -------------------------------------------------------------------------
     # Comment on PR
@@ -219,4 +240,4 @@ runs:
       shell: bash
       env:
         EXIT_CODE: ${{ steps.evaluate.outputs.exit_code || 0 }}
-      run: exit "$EXIT_CODE"
+      run: exit "${EXIT_CODE}"

@@ -110,3 +110,6 @@ temp/
 # =========================
 .act/
 act.secrets
+
+# ADRs contain internal design detail — keep local, do not publish
+docs/adr/

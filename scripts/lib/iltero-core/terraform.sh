@@ -20,6 +20,11 @@
 #   TF_BACKEND_S3_BUCKET     Bucket name when the unit uses an S3 backend
 #   TF_BACKEND_S3_KEY_PREFIX Key prefix derived from the backend key
 #   TF_BACKEND_S3_REGION     Backend region
+#   TF_PLAN_DIGEST           Canonical plan digest (provenance), or "" when
+#                            attestation is disabled / unavailable / unbound
+#   TF_CANON_VERSION         Canonicalization spec version, or ""
+#   TF_PLAN_BINARY_URL       s3:// URL of the persisted plan binary, or "".
+#                            Non-empty only when the unit is provenance-bound.
 # =============================================================================
 
 if [[ -n "${ILTERO_TERRAFORM_SOURCED:-}" ]]; then
@@ -34,6 +39,9 @@ TF_PLAN_S3_URL=""
 TF_BACKEND_S3_BUCKET=""
 TF_BACKEND_S3_KEY_PREFIX=""
 TF_BACKEND_S3_REGION=""
+TF_PLAN_DIGEST=""
+TF_CANON_VERSION=""
+TF_PLAN_BINARY_URL=""
 
 # cloud_credentials_present
 # Returns 0 if any supported cloud has credentials present in the
@@ -67,6 +75,159 @@ cloud_credentials_present() {
     return 1
 }
 
+# extract_s3_backend_config
+# Reads the S3 backend bucket/region/key-prefix from terraform's local state
+# (written by `terraform init`) into the TF_BACKEND_S3_* module vars. Safe to
+# call from any directory that has been `terraform init`-ed; leaves the vars
+# empty for non-S3 backends. Shared by prepare_terraform_plan (evaluate) and the
+# deploy job so both derive the same plan-binary key.
+extract_s3_backend_config() {
+    TF_BACKEND_S3_BUCKET=""
+    TF_BACKEND_S3_REGION=""
+    TF_BACKEND_S3_KEY_PREFIX=""
+    local tf_backend_state=".terraform/terraform.tfstate"
+    [[ -f "${tf_backend_state}" ]] || return 0
+
+    local backend_type
+    backend_type=$(jq -r '.backend.type // empty' "${tf_backend_state}" 2>/dev/null || echo "")
+    if [[ "${backend_type}" == "s3" ]]; then
+        TF_BACKEND_S3_BUCKET=$(jq -r '.backend.config.bucket // empty' "${tf_backend_state}")
+        TF_BACKEND_S3_REGION=$(jq -r '.backend.config.region // empty' "${tf_backend_state}")
+        local s3_key
+        s3_key=$(jq -r '.backend.config.key // empty' "${tf_backend_state}")
+        TF_BACKEND_S3_KEY_PREFIX="${s3_key%/*}"
+    fi
+    return 0
+}
+
+# download_plan_binary
+# Fetches the saved plan binary persisted by upload_plan_binary for this
+# (run_id, unit) into the given local path. The key is reconstructed
+# deterministically from the TF_BACKEND_S3_* config (which the caller must have
+# populated via extract_s3_backend_config after `terraform init`).
+#
+# Returns 0 on success; non-zero on any unmet precondition or download error
+# (e.g. the object does not exist because the unit was never bound). On a
+# download error DOWNLOAD_STDERR holds a short tail of aws's stderr so the
+# caller can tell a genuinely-unbound unit (NoSuchKey) from a misconfig
+# (AccessDenied / wrong region). The caller decides what a failure means
+# (unbound -> re-plan; bound -> the backend authorization, not this function,
+# fails the deploy closed).
+#
+# NOTE: region is REQUIRED here (no us-east-1 default, unlike the plan-JSON
+# upload). The bound artifact's key must resolve to the exact region it was
+# written to; do not add a default that could bind to a guessed region.
+#
+# Args: $1 = run_id   $2 = unit_name   $3 = dest_path
+# Sets: DOWNLOAD_STDERR (on failure)
+download_plan_binary() {
+    local run_id="${1:-}"
+    local unit_name="${2:-}"
+    local dest="${3:-}"
+    DOWNLOAD_STDERR=""
+
+    if [[ -z "${TF_BACKEND_S3_BUCKET}" || -z "${TF_BACKEND_S3_KEY_PREFIX}" \
+          || -z "${TF_BACKEND_S3_REGION}" || -z "${run_id}" || -z "${dest}" ]]; then
+        DOWNLOAD_STDERR="missing S3 backend config or run_id"
+        return 1
+    fi
+
+    local key="${TF_BACKEND_S3_KEY_PREFIX}/plans/${run_id}/${unit_name}.tfplan"
+    local url="s3://${TF_BACKEND_S3_BUCKET}/${key}"
+    log_info "Provenance: fetching saved plan binary from ${url}"
+
+    local err_file
+    err_file="$(mktemp)"
+    set +e
+    aws s3 cp "${url}" "${dest}" --region "${TF_BACKEND_S3_REGION}" > /dev/null 2>"${err_file}"
+    local rc=$?
+    set -e
+    if [[ ${rc} -ne 0 ]]; then
+        DOWNLOAD_STDERR="$(tail -c 300 "${err_file}" 2>/dev/null | tr '\n' ' ')"
+    fi
+    rm -f "${err_file}"
+    return "${rc}"
+}
+
+# s3_cp_with_sse
+# Single home for `aws s3 cp` with optional server-side encryption, so the SSE
+# behaviour cannot drift between the plan-JSON and plan-binary upload paths.
+# Returns aws's own exit code. On failure, S3_CP_STDERR holds a short tail of
+# aws's stderr (e.g. AccessDenied / NoSuchBucket) for the caller to log; stdout
+# is discarded. aws stderr is error text only, never plan contents.
+#
+# Args: $1 = src   $2 = dest (s3:// URL)   $3 = region
+# Sets: S3_CP_STDERR
+s3_cp_with_sse() {
+    local src="$1"
+    local dest="$2"
+    local region="$3"
+    S3_CP_STDERR=""
+
+    local cmd=(aws s3 cp "${src}" "${dest}" --region "${region}")
+    if [[ -n "${ILTERO_S3_SSE:-}" ]]; then
+        cmd+=(--sse "${ILTERO_S3_SSE}")
+    fi
+
+    local err_file
+    err_file="$(mktemp)"
+    set +e
+    "${cmd[@]}" > /dev/null 2>"${err_file}"
+    local rc=$?
+    set -e
+    if [[ ${rc} -ne 0 ]]; then
+        S3_CP_STDERR="$(tail -c 300 "${err_file}" 2>/dev/null | tr '\n' ' ')"
+    fi
+    rm -f "${err_file}"
+    return "${rc}"
+}
+
+# upload_plan_binary
+# Persists the appliable plan binary (tfplan, in the current directory) to the
+# unit's S3 backend bucket under a deterministic (run_id, unit)-keyed path, so
+# the deploy job can reconstruct the key and apply the exact evaluated plan.
+# Server-side encryption follows ILTERO_S3_SSE when set, else S3's default.
+#
+# Returns 0 and sets PLAN_BINARY_URL on success; non-zero (with PLAN_BINARY_URL
+# empty) on any unmet precondition or upload error. The caller treats a failure
+# as "unit not bound", never a hard error.
+#
+# Args: $1 = run_id   $2 = unit_name
+# Sets: PLAN_BINARY_URL
+upload_plan_binary() {
+    local run_id="${1:-}"
+    local unit_name="${2:-}"
+    PLAN_BINARY_URL=""
+
+    if [[ -z "${TF_BACKEND_S3_BUCKET}" || -z "${TF_BACKEND_S3_KEY_PREFIX}" ]]; then
+        log_warning "Provenance: ${unit_name} has no S3 backend; cannot persist plan binary"
+        return 1
+    fi
+    if [[ -z "${run_id}" ]]; then
+        log_warning "Provenance: no run_id; cannot key the plan binary deterministically"
+        return 1
+    fi
+    if [[ -z "${TF_BACKEND_S3_REGION}" ]]; then
+        log_warning "Provenance: no backend region; cannot persist plan binary"
+        return 1
+    fi
+    if [[ ! -f "tfplan" ]]; then
+        log_warning "Provenance: plan binary (tfplan) missing; cannot persist"
+        return 1
+    fi
+
+    local key="${TF_BACKEND_S3_KEY_PREFIX}/plans/${run_id}/${unit_name}.tfplan"
+    local url="s3://${TF_BACKEND_S3_BUCKET}/${key}"
+    log_info "Provenance: uploading plan binary to ${url}"
+
+    if s3_cp_with_sse "tfplan" "${url}" "${TF_BACKEND_S3_REGION}"; then
+        PLAN_BINARY_URL="${url}"
+        return 0
+    fi
+    log_warning "Provenance: failed to upload plan binary for ${unit_name}: ${S3_CP_STDERR:-no error output}"
+    return 1
+}
+
 # prepare_terraform_plan
 # Args:
 #   $1 = eval_path     absolute path to the unit directory
@@ -89,6 +250,9 @@ prepare_terraform_plan() {
     TF_BACKEND_S3_BUCKET=""
     TF_BACKEND_S3_KEY_PREFIX=""
     TF_BACKEND_S3_REGION=""
+    TF_PLAN_DIGEST=""
+    TF_CANON_VERSION=""
+    TF_PLAN_BINARY_URL=""
 
     if [[ -z "${eval_path}" || ! -d "${eval_path}" ]]; then
         log_error "prepare_terraform_plan: invalid eval_path '${eval_path}'"
@@ -146,18 +310,7 @@ prepare_terraform_plan() {
     # -------------------------------------------------------------------------
     # Step 2.5: Extract S3 backend config from terraform's local state
     # -------------------------------------------------------------------------
-    local tf_backend_state=".terraform/terraform.tfstate"
-    if [[ -f "${tf_backend_state}" ]]; then
-        local backend_type
-        backend_type=$(jq -r '.backend.type // empty' "${tf_backend_state}" 2>/dev/null || echo "")
-        if [[ "${backend_type}" == "s3" ]]; then
-            TF_BACKEND_S3_BUCKET=$(jq -r '.backend.config.bucket // empty' "${tf_backend_state}")
-            TF_BACKEND_S3_REGION=$(jq -r '.backend.config.region // empty' "${tf_backend_state}")
-            local s3_key
-            s3_key=$(jq -r '.backend.config.key // empty' "${tf_backend_state}")
-            TF_BACKEND_S3_KEY_PREFIX="${s3_key%/*}"
-        fi
-    fi
+    extract_s3_backend_config
 
     # -------------------------------------------------------------------------
     # Step 2.6: Inspect existing backend state for this unit
@@ -229,16 +382,47 @@ prepare_terraform_plan() {
     terraform show -json tfplan > tfplan.json 2>/dev/null
     TF_PLAN_JSON_FILE="$(pwd)/tfplan.json"
 
-    # Upload plan JSON alongside the state file when an S3 backend is used
+    # Provenance: capture the canonical digest of the evaluated plan via the
+    # CLI (which owns canonicalization). No-op unless ILTERO_ATTEST=true, and
+    # fail-soft otherwise, so existing behaviour is unchanged. A bad or empty
+    # tfplan.json (a failed 'terraform show' above) is tolerated: the CLI exits
+    # non-zero and the digest is simply left unset. Only FULL-mode plans are
+    # eligible — a best-effort plan is deliberately not the deployable plan, so
+    # it is never attested.
+    if [[ "${TF_PLAN_MODE}" == "full" ]]; then
+        compute_plan_digest "${TF_PLAN_JSON_FILE}"
+        TF_PLAN_DIGEST="${PLAN_DIGEST}"
+        TF_CANON_VERSION="${PLAN_CANON_VERSION}"
+    fi
+
+    # Upload plan JSON alongside the state file when an S3 backend is used.
+    # Server-side encryption follows ILTERO_S3_SSE when set, else S3's default.
     if [[ -n "${TF_BACKEND_S3_BUCKET}" ]] && [[ -n "${TF_BACKEND_S3_KEY_PREFIX}" ]]; then
         local plan_s3_key="${TF_BACKEND_S3_KEY_PREFIX}/plans/${chain_run_id:-$(date +%s)}-tfplan.json"
-        log_info "Uploading plan JSON to s3://${TF_BACKEND_S3_BUCKET}/${plan_s3_key}"
-        if aws s3 cp "${TF_PLAN_JSON_FILE}" "s3://${TF_BACKEND_S3_BUCKET}/${plan_s3_key}" \
-            --region "${TF_BACKEND_S3_REGION:-us-east-1}" 2>&1 | tail -1; then
-            TF_PLAN_S3_URL="s3://${TF_BACKEND_S3_BUCKET}/${plan_s3_key}"
+        local plan_s3_dest="s3://${TF_BACKEND_S3_BUCKET}/${plan_s3_key}"
+        log_info "Uploading plan JSON to ${plan_s3_dest}"
+        if s3_cp_with_sse "${TF_PLAN_JSON_FILE}" "${plan_s3_dest}" "${TF_BACKEND_S3_REGION:-us-east-1}"; then
+            TF_PLAN_S3_URL="${plan_s3_dest}"
             log_info "Plan uploaded successfully"
         else
-            log_warning "Failed to upload plan to S3 (non-fatal, continuing)"
+            log_warning "Failed to upload plan JSON to S3 (non-fatal, continuing): ${S3_CP_STDERR:-no error output}"
+        fi
+    fi
+
+    # Provenance: persist the appliable plan binary so the deploy job can apply
+    # the exact evaluated plan. Binding is all-or-nothing: if we have a digest
+    # but cannot store the binary, drop the digest so the unit is treated as
+    # not-bound (the deploy job will re-plan) rather than failing at apply time.
+    # This block must remain the LAST mutation of TF_PLAN_DIGEST in this function
+    # so the invariant "binary uploaded => digest kept" holds (no orphan binds).
+    if [[ -n "${TF_PLAN_DIGEST}" ]]; then
+        if upload_plan_binary "${chain_run_id}" "${unit_name}"; then
+            TF_PLAN_BINARY_URL="${PLAN_BINARY_URL}"
+        else
+            log_warning "Provenance: ${unit_name} will not be provenance-bound (plan binary not persisted)"
+            TF_PLAN_DIGEST=""
+            TF_CANON_VERSION=""
+            TF_PLAN_BINARY_URL=""
         fi
     fi
 
