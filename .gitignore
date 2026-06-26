@@ -111,5 +111,7 @@ temp/
 .act/
 act.secrets
 
-# ADRs contain internal design detail — keep local, do not publish
+# Internal-only docs — this repo is public, so keep these local (do not publish).
+# docs/adr/ = architecture decision records; docs/business_values/ = internal GTM.
 docs/adr/
+docs/business_values/
