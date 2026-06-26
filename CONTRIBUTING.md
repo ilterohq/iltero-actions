@@ -9,6 +9,7 @@ Thank you for your interest in contributing to Iltero Actions! We welcome contri
 - [Development Setup](#development-setup)
 - [Making Changes](#making-changes)
 - [Developer Certificate of Origin](#developer-certificate-of-origin)
+- [Releases & Signing](#releases--signing)
 - [Pull Request Process](#pull-request-process)
 - [Testing](#testing)
 - [Documentation](#documentation)
@@ -169,6 +170,45 @@ git config user.email "your.email@example.com"
 
 **Note:** We use DCO instead of a Contributor License Agreement (CLA) to reduce
 friction for contributors while maintaining legal clarity.
+
+## Releases & Signing
+
+This is a supply-chain-sensitive project. Two policies are enforced by repository
+rulesets.
+
+### Cryptographically signed commits
+
+Commits on `main` must carry a verified signature (separate from the DCO
+`Signed-off-by` line above). Set up SSH commit signing once:
+
+```bash
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global commit.gpgsign true
+```
+
+Then register the **same** key on GitHub as a *Signing Key* (Settings → SSH and
+GPG keys → New SSH key → Key type: Signing Key), or:
+
+```bash
+gh ssh-key add ~/.ssh/id_ed25519.pub --type signing --title "commit signing"
+```
+
+Your commit email must be a verified email on your GitHub account, or commits
+show as "Unverified".
+
+### Pinning and immutable tags
+
+- **No floating major tags.** Pin to an exact version or a commit SHA:
+
+  ```yaml
+  uses: ilterohq/iltero-actions@v0.1.0
+  uses: ilterohq/iltero-actions@<sha>   # v0.1.0
+  ```
+
+- **Published tags are immutable** — a ruleset blocks moving or deleting any tag,
+  so a given version always points at the same commit. Releases are cut by
+  publishing a signed `vX.Y.Z` tag; CI runs automatically on publish.
 
 ## Pull Request Process
 
