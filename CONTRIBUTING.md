@@ -173,8 +173,7 @@ friction for contributors while maintaining legal clarity.
 
 ## Releases & Signing
 
-This is a supply-chain-sensitive project. Two policies are enforced by repository
-rulesets.
+Two policies are enforced by repository rulesets.
 
 ### Cryptographically signed commits
 
