@@ -106,6 +106,15 @@ inputs:
     required: false
     default: ''
 
+  attest:
+    description: |
+      Enable plan-to-apply provenance (on by default). Applies the exact
+      evaluated plan and enforces it at the deploy gate (anti-substitution).
+      The matching evaluate step must use the same setting. Set to 'false' to
+      restore the legacy re-plan-at-apply behaviour. See docs/provenance.md.
+    required: false
+    default: 'true'
+
 outputs:
   success:
     description: Whether the deployment succeeded (true/false)
@@ -140,6 +149,10 @@ runs:
         UNIT_NAME: ${{ inputs.unit }}
         ENVIRONMENT: ${{ inputs.environment }}
         RUN_ID: ${{ inputs.run-id }}
+        # Provenance (opt-in): apply the exact evaluated plan and enforce it at
+        # the deploy gate. Set explicitly from the input so an ambient value
+        # can't change behavior.
+        ILTERO_ATTEST: ${{ inputs.attest }}
       run: |
         set -euo pipefail
 
@@ -154,9 +167,10 @@ runs:
           validate_unit_structure "${DEPLOY_PATH}"
         fi
 
-        # Run deployment
+        # Run deployment. scan_id ($5) falls back to ILTERO_SCAN_ID inside the
+        # function; stack_id ($6) is required by the attested path's authorize.
         set +e
-        run_deployment "${DEPLOY_PATH}" "${UNIT_NAME}" "${ENVIRONMENT}" "${RUN_ID}"
+        run_deployment "${DEPLOY_PATH}" "${UNIT_NAME}" "${ENVIRONMENT}" "${RUN_ID}" "${ILTERO_SCAN_ID:-}" "${STACK_ID}"
         EXIT_CODE=$?
         set -e
 

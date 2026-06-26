@@ -8,13 +8,22 @@
 
 # Verify deployment authorization via the Iltero CLI.
 # Args: $1=run_id $2=stack_id $3=environment (unused, kept for caller compat)
-#       $4=unit (optional)
+#       $4=unit (optional) $5=plan_digest (optional) $6=canonicalization_version (optional)
+# When a plan_digest is supplied, the backend additionally verifies that the
+# digest of the plan about to be applied matches the digest recorded under the
+# run at evaluate time (provenance integrity), denying on mismatch. The backend
+# is the authority for this comparison — the runner only submits the digest.
 # Returns: 0 authorized, 1 denied, 2 error
 verify_authorization() {
     local run_id="$1"
     local stack_id="$2"
+    # shellcheck disable=SC2034  # $3 is intentionally unused. authorize-deployment
+    # exposes no --environment option; forwarding it makes the CLI exit 2 (unknown
+    # option) and fails the gate. Kept in the signature for caller compatibility.
     local _environment="$3"
     local unit_name="$4"
+    local plan_digest="${5:-}"
+    local canon_version="${6:-}"
 
     if [[ -z "${run_id}" ]]; then
         log_error "run-id is required for deployment authorization"
@@ -33,6 +42,12 @@ verify_authorization() {
     )
     if [[ -n "${unit_name}" ]]; then
         cli_args+=(--unit "${unit_name}")
+    fi
+    if [[ -n "${plan_digest}" ]]; then
+        cli_args+=(--plan-digest "${plan_digest}")
+        if [[ -n "${canon_version}" ]]; then
+            cli_args+=(--canonicalization-version "${canon_version}")
+        fi
     fi
 
     set +e

@@ -282,3 +282,62 @@ teardown() {
     assert_file_contains "$GITHUB_STEP_SUMMARY" "Result: Passed"
     assert_file_contains "$GITHUB_STEP_SUMMARY" "my-stack"
 }
+
+# =============================================================================
+# write_provenance_section
+# =============================================================================
+
+@test "write_provenance_section renders each provenance state distinctly" {
+    local ur='[
+      {"unit":"vpc","evaluation":{"plan_digest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},"deploy":{"provenance":{"bound":true}}},
+      {"unit":"leaf","evaluation":{"plan_digest":"","eval_mode":"best_effort"},"deploy":{"provenance":{"bound":false}}},
+      {"unit":"app","evaluation":{"plan_digest":""},"deploy":{"provenance":{"bound":false}}}
+    ]'
+    write_provenance_section "$ur"
+
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "## Provenance"
+    # bound -> enforced
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "bound (enforced)"
+    # best-effort and unbound are reported distinctly
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "best-effort (not bindable)"
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "not provenance-bound"
+    # digest is truncated to 12 chars
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "e3b0c44298fc"
+}
+
+@test "write_provenance_section warns loudly when nothing is bound" {
+    local ur='[{"unit":"app","evaluation":{"plan_digest":""},"deploy":{"provenance":{"bound":false}}}]'
+    write_provenance_section "$ur"
+
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "## Provenance"
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "No unit was provenance-bound"
+}
+
+@test "write_provenance_section is a no-op when there is no provenance data" {
+    local ur='[{"unit":"app","evaluation":{},"deploy":{"success":true}}]'
+    write_provenance_section "$ur"
+
+    run cat "$GITHUB_STEP_SUMMARY"
+    ! grep -q "## Provenance" "$GITHUB_STEP_SUMMARY"
+}
+
+@test "write_provenance_section tolerates invalid JSON (no output)" {
+    write_provenance_section "not json"
+    ! grep -q "## Provenance" "$GITHUB_STEP_SUMMARY"
+}
+
+@test "write_provenance_section shows best-effort distinctly from unbound" {
+    local ur='[{"unit":"leaf","evaluation":{"plan_digest":"","eval_mode":"best_effort"},"deploy":{"provenance":{"bound":false}}}]'
+    write_provenance_section "$ur"
+
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "best-effort (not bindable)"
+}
+
+@test "write_provenance_section escapes a crafted unit name (no table break / injection)" {
+    local ur='[{"unit":"evil|name[x](http://h)","evaluation":{"plan_digest":""},"deploy":{"provenance":{"bound":true}}}]'
+    write_provenance_section "$ur"
+
+    # The pipe is escaped (\|) and the whole name is wrapped in a code span, so
+    # the table is not broken and the link syntax renders literally.
+    grep -qF '`evil\|name[x](http://h)`' "$GITHUB_STEP_SUMMARY"
+}

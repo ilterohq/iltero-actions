@@ -23,6 +23,12 @@ setup() {
         TFVARS_FILE="${MOCK_TFVARS_FILE:-}"
     }
     emit_cloud_credentials_hint_if_needed() { :; }
+    # Stub the attestation helper (defined in attestation.sh, not sourced here).
+    # Mirrors the real contract: sets PLAN_DIGEST / PLAN_CANON_VERSION.
+    compute_plan_digest() {
+        PLAN_DIGEST="${MOCK_PLAN_DIGEST:-}"
+        PLAN_CANON_VERSION="${MOCK_CANON_VERSION:-}"
+    }
 
     # Build a unit directory the function will pushd into.
     UNIT_DIR="${TEST_TEMP}/unit"
@@ -80,6 +86,32 @@ EOF
 
 VALID_ENV="production"
 
+# A valid lowercase 64-char hex SHA-256 (the digest of the empty string).
+HEX_DIGEST="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+# Install a fake `aws` on PATH that records its argv to aws.log and exits with
+# the configured code.
+_mock_aws() {
+    local exit_code="${1:-0}"
+    cat > "${TEST_TEMP}/aws" <<EOF
+#!/bin/bash
+echo "aws \$*" >> "${TEST_TEMP}/aws.log"
+exit ${exit_code}
+EOF
+    chmod +x "${TEST_TEMP}/aws"
+    export PATH="${TEST_TEMP}:${PATH}"
+}
+
+# Pre-create the unit's local terraform state so the S3-backend extraction in
+# prepare_terraform_plan finds an S3 backend (bucket my-bucket, prefix
+# stacks/unit-x).
+_setup_s3_backend() {
+    mkdir -p "${UNIT_DIR}/.terraform"
+    cat > "${UNIT_DIR}/.terraform/terraform.tfstate" <<'EOF'
+{"backend":{"type":"s3","config":{"bucket":"my-bucket","region":"us-west-2","key":"stacks/unit-x/terraform.tfstate"}}}
+EOF
+}
+
 @test "prepare_terraform_plan rejects missing eval_path" {
     run prepare_terraform_plan "" "unit-x" "${VALID_ENV}"
     assert_exit_code 1
@@ -112,6 +144,249 @@ VALID_ENV="production"
     [[ -n "${TF_PLAN_JSON_FILE}" ]]
     [[ -f "${TF_PLAN_JSON_FILE}" ]]
     [[ "${TF_PLAN_MODE}" == "full" ]]
+}
+
+@test "prepare_terraform_plan binds the unit when the plan binary uploads" {
+    _mock_terraform 0 0 true
+    _mock_aws 0
+    _setup_s3_backend
+    export MOCK_PLAN_DIGEST="${HEX_DIGEST}"
+    export MOCK_CANON_VERSION="1"
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}" "" "run-123"
+
+    [[ "${TF_PLAN_DIGEST}" == "${HEX_DIGEST}" ]]
+    [[ "${TF_CANON_VERSION}" == "1" ]]
+    [[ "${TF_PLAN_BINARY_URL}" == "s3://my-bucket/stacks/unit-x/plans/run-123/unit-x.tfplan" ]]
+    grep -q "s3://my-bucket/stacks/unit-x/plans/run-123/unit-x.tfplan" "${TEST_TEMP}/aws.log"
+
+    unset MOCK_PLAN_DIGEST MOCK_CANON_VERSION
+}
+
+@test "prepare_terraform_plan drops the digest when the plan binary cannot be persisted" {
+    _mock_terraform 0 0 true
+    # No S3 backend configured -> upload_plan_binary fails -> unit not bound.
+    export MOCK_PLAN_DIGEST="${HEX_DIGEST}"
+    export MOCK_CANON_VERSION="1"
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}" "" "run-123"
+
+    [[ -z "${TF_PLAN_DIGEST}" ]]
+    [[ -z "${TF_CANON_VERSION}" ]]
+    [[ -z "${TF_PLAN_BINARY_URL}" ]]
+
+    unset MOCK_PLAN_DIGEST MOCK_CANON_VERSION
+}
+
+@test "prepare_terraform_plan does not bind in best-effort mode" {
+    _mock_terraform 0 0 true
+    _mock_aws 0
+    _setup_s3_backend
+    export MOCK_DEP_STATE="unavailable"
+    export MOCK_PLAN_DIGEST="${HEX_DIGEST}"
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}" "upstream" "run-123"
+
+    [[ "${TF_PLAN_MODE}" == "best_effort" ]]
+    [[ -z "${TF_PLAN_DIGEST}" ]]
+    [[ -z "${TF_PLAN_BINARY_URL}" ]]
+
+    unset MOCK_DEP_STATE MOCK_PLAN_DIGEST
+}
+
+@test "prepare_terraform_plan leaves plan digest empty when attestation is off" {
+    _mock_terraform 0 0 true
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}"
+
+    [[ -z "${TF_PLAN_DIGEST}" ]]
+    [[ -z "${TF_CANON_VERSION}" ]]
+    [[ -z "${TF_PLAN_BINARY_URL}" ]]
+}
+
+@test "prepare_terraform_plan leaves plan URL empty when the JSON upload fails" {
+    _mock_terraform 0 0 true
+    _mock_aws 1
+    _setup_s3_backend
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}" "" "run-123"
+
+    # The aws failure must be detected (not masked by a pipe), so no URL is set.
+    [[ -z "${TF_PLAN_S3_URL}" ]]
+}
+
+@test "prepare_terraform_plan passes --sse through the JSON upload when set" {
+    _mock_terraform 0 0 true
+    _mock_aws 0
+    _setup_s3_backend
+    export ILTERO_S3_SSE="AES256"
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}" "" "run-123"
+
+    grep -q -- "--sse AES256" "${TEST_TEMP}/aws.log"
+    unset ILTERO_S3_SSE
+}
+
+# =============================================================================
+# upload_plan_binary
+# =============================================================================
+
+@test "upload_plan_binary uploads to the deterministic key and sets the URL" {
+    _mock_aws 0
+    TF_BACKEND_S3_BUCKET="my-bucket"
+    TF_BACKEND_S3_KEY_PREFIX="stacks/unit-x"
+    TF_BACKEND_S3_REGION="us-west-2"
+    cd "${TEST_TEMP}"
+    echo "binary" > tfplan
+
+    upload_plan_binary "run-123" "unit-x"
+
+    [[ "${PLAN_BINARY_URL}" == "s3://my-bucket/stacks/unit-x/plans/run-123/unit-x.tfplan" ]]
+    grep -q -- "--region us-west-2" "${TEST_TEMP}/aws.log"
+}
+
+@test "upload_plan_binary fails when there is no S3 backend" {
+    _mock_aws 0
+    TF_BACKEND_S3_BUCKET=""
+    TF_BACKEND_S3_KEY_PREFIX=""
+    TF_BACKEND_S3_REGION="us-west-2"
+    cd "${TEST_TEMP}"; echo x > tfplan
+
+    run upload_plan_binary "run-123" "unit-x"
+    assert_exit_code 1
+}
+
+@test "upload_plan_binary fails when run_id is empty" {
+    _mock_aws 0
+    TF_BACKEND_S3_BUCKET="b"; TF_BACKEND_S3_KEY_PREFIX="p"; TF_BACKEND_S3_REGION="r"
+    cd "${TEST_TEMP}"; echo x > tfplan
+
+    run upload_plan_binary "" "unit-x"
+    assert_exit_code 1
+}
+
+@test "upload_plan_binary fails when the region is empty" {
+    _mock_aws 0
+    TF_BACKEND_S3_BUCKET="b"; TF_BACKEND_S3_KEY_PREFIX="p"; TF_BACKEND_S3_REGION=""
+    cd "${TEST_TEMP}"; echo x > tfplan
+
+    run upload_plan_binary "run-123" "unit-x"
+    assert_exit_code 1
+}
+
+@test "upload_plan_binary fails when tfplan is missing" {
+    _mock_aws 0
+    TF_BACKEND_S3_BUCKET="b"; TF_BACKEND_S3_KEY_PREFIX="p"; TF_BACKEND_S3_REGION="r"
+    cd "${TEST_TEMP}"; rm -f tfplan
+
+    run upload_plan_binary "run-123" "unit-x"
+    assert_exit_code 1
+}
+
+@test "upload_plan_binary empties the URL when aws errors" {
+    _mock_aws 1
+    TF_BACKEND_S3_BUCKET="b"; TF_BACKEND_S3_KEY_PREFIX="p"; TF_BACKEND_S3_REGION="r"
+    cd "${TEST_TEMP}"; echo x > tfplan
+
+    run upload_plan_binary "run-123" "unit-x"
+    assert_exit_code 1
+
+    upload_plan_binary "run-123" "unit-x" || true
+    [[ -z "${PLAN_BINARY_URL}" ]]
+}
+
+@test "upload_plan_binary passes --sse when ILTERO_S3_SSE is set" {
+    _mock_aws 0
+    export ILTERO_S3_SSE="aws:kms"
+    TF_BACKEND_S3_BUCKET="b"; TF_BACKEND_S3_KEY_PREFIX="p"; TF_BACKEND_S3_REGION="r"
+    cd "${TEST_TEMP}"; echo x > tfplan
+
+    upload_plan_binary "run-123" "unit-x"
+
+    grep -q -- "--sse aws:kms" "${TEST_TEMP}/aws.log"
+    unset ILTERO_S3_SSE
+}
+
+@test "upload_plan_binary omits --sse when ILTERO_S3_SSE is unset" {
+    _mock_aws 0
+    unset ILTERO_S3_SSE
+    TF_BACKEND_S3_BUCKET="b"; TF_BACKEND_S3_KEY_PREFIX="p"; TF_BACKEND_S3_REGION="r"
+    cd "${TEST_TEMP}"; echo x > tfplan
+
+    upload_plan_binary "run-123" "unit-x"
+
+    ! grep -q -- "--sse" "${TEST_TEMP}/aws.log"
+}
+
+# =============================================================================
+# extract_s3_backend_config
+# =============================================================================
+
+@test "extract_s3_backend_config reads bucket/region/prefix from local state" {
+    cd "${UNIT_DIR}"
+    _setup_s3_backend
+
+    extract_s3_backend_config
+
+    [[ "${TF_BACKEND_S3_BUCKET}" == "my-bucket" ]]
+    [[ "${TF_BACKEND_S3_REGION}" == "us-west-2" ]]
+    [[ "${TF_BACKEND_S3_KEY_PREFIX}" == "stacks/unit-x" ]]
+}
+
+@test "extract_s3_backend_config leaves vars empty for a non-S3 backend" {
+    cd "${UNIT_DIR}"
+    mkdir -p .terraform
+    echo '{"backend":{"type":"local"}}' > .terraform/terraform.tfstate
+
+    extract_s3_backend_config
+
+    [[ -z "${TF_BACKEND_S3_BUCKET}" ]]
+    [[ -z "${TF_BACKEND_S3_KEY_PREFIX}" ]]
+}
+
+@test "extract_s3_backend_config leaves vars empty when no local state exists" {
+    cd "${UNIT_DIR}"
+    rm -rf .terraform
+
+    extract_s3_backend_config
+
+    [[ -z "${TF_BACKEND_S3_BUCKET}" ]]
+}
+
+# =============================================================================
+# download_plan_binary
+# =============================================================================
+
+@test "download_plan_binary fetches the deterministic key on success" {
+    _mock_aws 0
+    TF_BACKEND_S3_BUCKET="my-bucket"
+    TF_BACKEND_S3_KEY_PREFIX="stacks/unit-x"
+    TF_BACKEND_S3_REGION="us-west-2"
+
+    run download_plan_binary "run-123" "unit-x" "${TEST_TEMP}/got.tfplan"
+    assert_exit_code 0
+
+    grep -q "s3://my-bucket/stacks/unit-x/plans/run-123/unit-x.tfplan" "${TEST_TEMP}/aws.log"
+}
+
+@test "download_plan_binary fails when the object is absent (aws error)" {
+    _mock_aws 1
+    TF_BACKEND_S3_BUCKET="my-bucket"
+    TF_BACKEND_S3_KEY_PREFIX="stacks/unit-x"
+    TF_BACKEND_S3_REGION="us-west-2"
+
+    run download_plan_binary "run-123" "unit-x" "${TEST_TEMP}/got.tfplan"
+    assert_exit_code 1
+}
+
+@test "download_plan_binary fails when preconditions are unmet" {
+    _mock_aws 0
+    TF_BACKEND_S3_BUCKET=""
+    TF_BACKEND_S3_KEY_PREFIX=""
+    TF_BACKEND_S3_REGION=""
+
+    run download_plan_binary "run-123" "unit-x" "${TEST_TEMP}/got.tfplan"
+    assert_exit_code 1
 }
 
 @test "prepare_terraform_plan switches to best_effort when deps unavailable" {

@@ -21,7 +21,8 @@
 #
 # Exports after run_plan_evaluation():
 #   EVAL_RUN_ID, EVAL_SCAN_ID, EVAL_PASSED, EVAL_VIOLATIONS, EVAL_EXIT_CODE,
-#   APPROVAL_ID, PLAN_JSON_FILE, PLAN_URL, EVAL_MODE
+#   APPROVAL_ID, PLAN_JSON_FILE, PLAN_URL, EVAL_MODE,
+#   EVAL_PLAN_DIGEST, EVAL_CANON_VERSION  (provenance; "" when disabled)
 #
 # EVAL_MODE values:
 #   "full"        - Full evaluation with backend (remote state available)
@@ -59,6 +60,8 @@ run_plan_evaluation() {
     PLAN_JSON_FILE=""
     PLAN_URL=""
     EVAL_MODE="full"
+    EVAL_PLAN_DIGEST=""
+    EVAL_CANON_VERSION=""
 
     log_group "Plan Evaluation: ${unit_name}"
 
@@ -70,12 +73,16 @@ run_plan_evaluation() {
     # didn't run scan in plan-mode.
     local plan_s3_url=""
     local state_json_file=""
+    local plan_digest=""
+    local canon_version=""
     if [[ -n "${existing_plan}" ]] && [[ -f "${existing_plan}" ]]; then
         log_info "Using existing plan file: ${existing_plan}"
         PLAN_JSON_FILE="${existing_plan}"
         EVAL_MODE="${SCAN_PLAN_MODE:-full}"
         plan_s3_url="${SCAN_PLAN_S3_URL:-}"
         state_json_file="${SCAN_PLAN_STATE_JSON_FILE:-}"
+        plan_digest="${SCAN_PLAN_DIGEST:-}"
+        canon_version="${SCAN_PLAN_CANON_VERSION:-}"
     else
         set +e
         prepare_terraform_plan "${eval_path}" "${unit_name}" "${environment}" "${depends_on}" "${chain_run_id}"
@@ -96,6 +103,8 @@ run_plan_evaluation() {
         EVAL_MODE="${TF_PLAN_MODE}"
         plan_s3_url="${TF_PLAN_S3_URL}"
         state_json_file="${TF_STATE_JSON_FILE}"
+        plan_digest="${TF_PLAN_DIGEST}"
+        canon_version="${TF_CANON_VERSION}"
     fi
 
     # Ensure OPA policy directory exists (policies will be resolved from Iltero backend)
@@ -173,6 +182,14 @@ run_plan_evaluation() {
         cmd+=(--plan-url "${plan_s3_url}")
     fi
 
+    # Provenance: record the canonical plan digest under this run_id. The flags
+    # are produced by provenance_eval_flags and are empty unless attestation
+    # captured a digest, so this preserves prior behaviour when disabled.
+    provenance_eval_flags "${plan_digest:-}" "${canon_version:-}"
+    if [[ ${#PROVENANCE_EVAL_FLAGS[@]} -gt 0 ]]; then
+        cmd+=("${PROVENANCE_EVAL_FLAGS[@]}")
+    fi
+
     # Note: Upload happens via Compliance API using scan_id from policy resolution
     # No --skip-upload needed - the CLI handles this automatically
 
@@ -183,6 +200,8 @@ run_plan_evaluation() {
     set -e
 
     PLAN_URL="${plan_s3_url:-}"
+    EVAL_PLAN_DIGEST="${plan_digest:-}"
+    EVAL_CANON_VERSION="${canon_version:-}"
 
     # Extract results
     if [[ -f "${results_file}" ]]; then

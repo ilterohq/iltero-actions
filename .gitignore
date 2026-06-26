@@ -110,3 +110,7 @@ temp/
 # =========================
 .act/
 act.secrets
+
+# Internal-only docs
+docs/adr/
+docs/business_values/

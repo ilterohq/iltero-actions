@@ -220,12 +220,12 @@ parse_args() {
     done
 
     # Validate required arguments
-    if [[ "$PIPELINE_MODE" != "brownfield" ]] && [[ -z "$STACKS_PATH" ]]; then
+    if [[ "${PIPELINE_MODE}" != "brownfield" ]] && [[ -z "${STACKS_PATH}" ]]; then
         log_error "stacks-path is required (--stacks-path or STACKS_PATH env var)"
         exit 1
     fi
 
-    if [[ "$MODE" == "deploy" ]] && [[ -z "$GLOBAL_RUN_ID" ]]; then
+    if [[ "${MODE}" == "deploy" ]] && [[ -z "${GLOBAL_RUN_ID}" ]]; then
         log_error "run-id is required for deploy-only mode"
         exit 1
     fi
@@ -254,8 +254,8 @@ process_unit() {
     esac
 
     # Skip if unit filter is set and doesn't match
-    if [[ -n "$UNIT_FILTER" ]] && [[ "$UNIT_FILTER" != "$unit_name" ]]; then
-        log_debug "Skipping unit $unit_name (filter: $UNIT_FILTER)"
+    if [[ -n "${UNIT_FILTER}" ]] && [[ "${UNIT_FILTER}" != "${unit_name}" ]]; then
+        log_debug "Skipping unit ${unit_name} (filter: ${UNIT_FILTER})"
         return 0
     fi
 
@@ -271,25 +271,27 @@ process_unit() {
     SCAN_PLAN_STATE_JSON_FILE=""
     SCAN_PLAN_S3_URL=""
     SCAN_PLAN_MODE=""
+    SCAN_PLAN_DIGEST=""
+    SCAN_PLAN_CANON_VERSION=""
 
     # Check dependency status (warn but never skip — scan everything)
     local dep_has_failures=false
-    if [[ -n "$depends_on" ]] && [[ "$depends_on" != "[]" ]] && [[ "$depends_on" != "null" ]]; then
-        for dep in $(echo "$depends_on" | jq -r '.[]' 2>/dev/null); do
-            if [[ -n "${FAILED_UNITS[$dep]:-}" ]]; then
-                local dep_failure_type="${FAILED_UNITS[$dep]}"
-                log_warning "Dependency '$dep' has status '$dep_failure_type' — $unit_name will still be scanned/evaluated"
+    if [[ -n "${depends_on}" ]] && [[ "${depends_on}" != "[]" ]] && [[ "${depends_on}" != "null" ]]; then
+        for dep in $(echo "${depends_on}" | jq -r '.[]' 2>/dev/null); do
+            if [[ -n "${FAILED_UNITS[${dep}]:-}" ]]; then
+                local dep_failure_type="${FAILED_UNITS[${dep}]}"
+                log_warning "Dependency '${dep}' has status '${dep_failure_type}' — ${unit_name} will still be scanned/evaluated"
                 dep_has_failures=true
             fi
         done
     fi
 
     # Validate unit structure first
-    if ! validate_unit_structure "$full_path"; then
-        scan_result_json=$(jq -n --arg unit "$unit_name" \
+    if ! validate_unit_structure "${full_path}"; then
+        scan_result_json=$(jq -n --arg unit "${unit_name}" \
             '{passed: false, skipped: false, violations: 0, error: "validation_failed"}')
-        append_unit_result "$stack" "$unit_name" "$scan_result_json" "$eval_result_json" "$deploy_result_json"
-        FAILED_UNITS["$unit_name"]="validation_failed"
+        append_unit_result "${stack}" "${unit_name}" "${scan_result_json}" "${eval_result_json}" "${deploy_result_json}"
+        FAILED_UNITS["${unit_name}"]="validation_failed"
         return 1
     fi
 
@@ -299,38 +301,38 @@ process_unit() {
     if [[ "${MODE}" == "scan" ]] || [[ "${MODE}" == "full" ]] || [[ "${MODE}" == "scan_evaluate" ]] || [[ "${MODE}" == "preview" ]]; then
         if echo "${scan_types}" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
             set +e
-            run_static_scan "$full_path" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
+            run_static_scan "${full_path}" "${stack_id}" "${unit_name}" "${environment}" "${severity_threshold}" "${GLOBAL_RUN_ID}" "${frameworks}" "${config_path}"
             local scan_exit=$?
             set -e
 
             # Update global run ID for chaining
-            if [[ -n "$SCAN_RUN_ID" ]]; then
-                if [[ -n "$GLOBAL_RUN_ID" ]] && [[ "$SCAN_RUN_ID" != "$GLOBAL_RUN_ID" ]]; then
-                    log_warning "Run ID mismatch after scan: expected=$GLOBAL_RUN_ID, got=$SCAN_RUN_ID"
+            if [[ -n "${SCAN_RUN_ID}" ]]; then
+                if [[ -n "${GLOBAL_RUN_ID}" ]] && [[ "${SCAN_RUN_ID}" != "${GLOBAL_RUN_ID}" ]]; then
+                    log_warning "Run ID mismatch after scan: expected=${GLOBAL_RUN_ID}, got=${SCAN_RUN_ID}"
                 fi
-                log_info "Setting global run ID from static scan: $SCAN_RUN_ID"
-                GLOBAL_RUN_ID="$SCAN_RUN_ID"
+                log_info "Setting global run ID from static scan: ${SCAN_RUN_ID}"
+                GLOBAL_RUN_ID="${SCAN_RUN_ID}"
             fi
 
             # Update global scan ID for apply phase (scan_id from policy resolution)
             if [[ -n "${SCAN_ID:-}" ]]; then
-                GLOBAL_SCAN_ID="$SCAN_ID"
+                GLOBAL_SCAN_ID="${SCAN_ID}"
             fi
 
             # Collect scan result
             local scan_passed="true"
-            if [[ $scan_exit -ne 0 ]]; then
+            if [[ ${scan_exit} -ne 0 ]]; then
                 if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
                     STATIC_SCAN_FAILED=true
                 else
                     log_warning "Compliance violations found but block_on_violations is false - continuing"
                 fi
-                FAILED_UNITS["$unit_name"]="static_scan_failed"
+                FAILED_UNITS["${unit_name}"]="static_scan_failed"
                 scan_passed="false"
             fi
 
             scan_result_json=$(jq -n \
-                --arg passed "$scan_passed" \
+                --arg passed "${scan_passed}" \
                 --argjson violations "${SCAN_VIOLATIONS:-0}" \
                 --arg scan_id "${SCAN_ID:-}" \
                 --arg run_id "${SCAN_RUN_ID:-}" \
@@ -348,51 +350,53 @@ process_unit() {
             set +e
             # Reuse the plan JSON produced by the static scan (when scan ran in
             # plan-mode) so we don't re-run terraform init+plan per unit.
-            run_plan_evaluation "$full_path" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "${SCAN_PLAN_JSON_FILE:-}" "$depends_on" "$frameworks"
+            run_plan_evaluation "${full_path}" "${stack_id}" "${unit_name}" "${environment}" "${severity_threshold}" "${GLOBAL_RUN_ID}" "${SCAN_PLAN_JSON_FILE:-}" "${depends_on}" "${frameworks}"
             local eval_exit=$?
             set -e
 
             # Update global run ID and approval ID
-            if [[ -n "$EVAL_RUN_ID" ]]; then
-                if [[ -n "$GLOBAL_RUN_ID" ]] && [[ "$EVAL_RUN_ID" != "$GLOBAL_RUN_ID" ]]; then
-                    log_warning "Run ID mismatch after evaluation: expected=$GLOBAL_RUN_ID, got=$EVAL_RUN_ID"
+            if [[ -n "${EVAL_RUN_ID}" ]]; then
+                if [[ -n "${GLOBAL_RUN_ID}" ]] && [[ "${EVAL_RUN_ID}" != "${GLOBAL_RUN_ID}" ]]; then
+                    log_warning "Run ID mismatch after evaluation: expected=${GLOBAL_RUN_ID}, got=${EVAL_RUN_ID}"
                 fi
-                log_info "Setting global run ID from evaluation: $EVAL_RUN_ID"
-                GLOBAL_RUN_ID="$EVAL_RUN_ID"
+                log_info "Setting global run ID from evaluation: ${EVAL_RUN_ID}"
+                GLOBAL_RUN_ID="${EVAL_RUN_ID}"
             fi
 
             # Update global scan ID for apply phase (scan_id from policy resolution)
             if [[ -n "${EVAL_SCAN_ID:-}" ]]; then
-                GLOBAL_SCAN_ID="$EVAL_SCAN_ID"
+                GLOBAL_SCAN_ID="${EVAL_SCAN_ID}"
             fi
 
             local eval_passed="true"
-            if [[ $eval_exit -ne 0 ]]; then
+            if [[ ${eval_exit} -ne 0 ]]; then
                 if [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
                     if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
                         EVALUATION_FAILED=true
                     else
                         log_warning "Evaluation violations found but block_on_violations is false — continuing"
                     fi
-                    FAILED_UNITS["$unit_name"]="evaluation_failed"
-                    log_warning "Unit $unit_name has $EVAL_VIOLATIONS policy violations"
+                    FAILED_UNITS["${unit_name}"]="evaluation_failed"
+                    log_warning "Unit ${unit_name} has ${EVAL_VIOLATIONS} policy violations"
                 else
                     # Infrastructure errors always block regardless of block_on_violations
                     EVALUATION_FAILED=true
-                    FAILED_UNITS["$unit_name"]="infra_error"
-                    log_warning "Unit $unit_name had infrastructure errors but no policy violations"
+                    FAILED_UNITS["${unit_name}"]="infra_error"
+                    log_warning "Unit ${unit_name} had infrastructure errors but no policy violations"
                 fi
                 eval_passed="false"
             fi
 
             eval_result_json=$(jq -n \
-                --arg passed "$eval_passed" \
+                --arg passed "${eval_passed}" \
                 --argjson violations "${EVAL_VIOLATIONS:-0}" \
                 --arg eval_mode "${EVAL_MODE:-full}" \
                 --arg run_id "${EVAL_RUN_ID:-}" \
                 --arg scan_id "${EVAL_SCAN_ID:-}" \
                 --arg approval_id "${APPROVAL_ID:-}" \
-                '{passed: ($passed == "true"), skipped: false, violations: $violations, eval_mode: $eval_mode, run_id: $run_id, scan_id: $scan_id, approval_id: $approval_id}')
+                --arg plan_digest "${EVAL_PLAN_DIGEST:-}" \
+                --arg canon "${EVAL_CANON_VERSION:-}" \
+                '{passed: ($passed == "true"), skipped: false, violations: $violations, eval_mode: $eval_mode, run_id: $run_id, scan_id: $scan_id, approval_id: $approval_id, plan_digest: $plan_digest, canonicalization_version: $canon}')
         else
             eval_result_json=$(jq -n '{passed: true, skipped: true, violations: 0}')
         fi
@@ -411,32 +415,37 @@ process_unit() {
                 should_deploy=true
             fi
 
-            if [[ "$should_deploy" == "true" ]]; then
+            if [[ "${should_deploy}" == "true" ]]; then
                 # Verify authorization before deployment
-                if [[ "$VERIFY_AUTHORIZATION" == "true" ]]; then
-                    if ! verify_authorization "$GLOBAL_RUN_ID" "$stack_id" "$environment" "$unit_name"; then
+                # Under attestation, the digest-bearing authorization runs inside
+                # run_deployment (it needs the downloaded plan to recompute the
+                # digest), so this approval-only pre-check is skipped to avoid a
+                # second, digest-less authorize call.
+                if [[ "${VERIFY_AUTHORIZATION}" == "true" ]] && ! attestation_enabled; then
+                    if ! verify_authorization "${GLOBAL_RUN_ID}" "${stack_id}" "${environment}" "${unit_name}"; then
                         AUTHORIZATION_FAILED=true
                         deploy_result_json=$(jq -n '{success: false, skipped: false, error: "authorization_failed"}')
-                        append_unit_result "$stack" "$unit_name" "$scan_result_json" "$eval_result_json" "$deploy_result_json"
+                        append_unit_result "${stack}" "${unit_name}" "${scan_result_json}" "${eval_result_json}" "${deploy_result_json}"
                         return 1
                     fi
                 fi
 
                 # Run deployment with scan_id for apply phase API notification
                 set +e
-                run_deployment "$full_path" "$unit_name" "$environment" "$GLOBAL_RUN_ID" "$GLOBAL_SCAN_ID"
+                run_deployment "${full_path}" "${unit_name}" "${environment}" "${GLOBAL_RUN_ID}" "${GLOBAL_SCAN_ID}" "${stack_id}"
                 local deploy_exit=$?
                 set -e
 
                 local deploy_success="true"
-                if [[ $deploy_exit -ne 0 ]]; then
+                if [[ ${deploy_exit} -ne 0 ]]; then
                     DEPLOY_FAILED=true
                     deploy_success="false"
                 fi
 
                 deploy_result_json=$(jq -n \
-                    --arg success "$deploy_success" \
-                    '{success: ($success == "true"), skipped: false}')
+                    --arg success "${deploy_success}" \
+                    --arg bound "${PROVENANCE_BOUND:-false}" \
+                    '{success: ($success == "true"), skipped: false, provenance: {bound: ($bound == "true")}}')
             else
                 deploy_result_json=$(jq -n '{success: true, skipped: true}')
                 log_debug "Deployment skipped for ${unit_name} (use --deploy-only or MODE=deploy)"
@@ -447,7 +456,7 @@ process_unit() {
     fi
 
     # Append collected results for this unit
-    append_unit_result "$stack" "$unit_name" "$scan_result_json" "$eval_result_json" "$deploy_result_json"
+    append_unit_result "${stack}" "${unit_name}" "${scan_result_json}" "${eval_result_json}" "${deploy_result_json}"
 }
 
 # =============================================================================
@@ -457,31 +466,31 @@ process_stack() {
     local stack="$1"
     local config_file="${STACKS_CONFIG}/${stack}/config.yml"
 
-    if [[ ! -f "$config_file" ]]; then
-        log_error "Config file not found: $config_file"
+    if [[ ! -f "${config_file}" ]]; then
+        log_error "Config file not found: ${config_file}"
         return 1
     fi
 
     echo ""
-    echo "=== Stack: $stack ==="
+    echo "=== Stack: ${stack} ==="
     echo ""
 
     # Export stack name for use by scanning.sh, evaluation.sh, and state tracking
-    export ILTERO_STACK_NAME="$stack"
+    export ILTERO_STACK_NAME="${stack}"
 
     # Initialize remote state tracking for this stack (.iltero/{stack}/state-status/)
-    init_remote_state_tracking "$stack"
+    init_remote_state_tracking "${stack}"
 
     # Initialize result tracking for this stack (.iltero/{stack}/results.json)
-    init_stack_results "$stack"
+    init_stack_results "${stack}"
 
     # -------------------------------------------------------------------------
     # Extract Stack Configuration (including workspace)
     # -------------------------------------------------------------------------
     local stack_id stack_name workspace
-    stack_id=$(yq eval '.stack.id // ""' "$config_file")
-    stack_name=$(yq eval '.stack.name // ""' "$config_file")
-    workspace=$(yq eval '.stack.workspace // ""' "$config_file")
+    stack_id=$(yq eval '.stack.id // ""' "${config_file}")
+    stack_name=$(yq eval '.stack.name // ""' "${config_file}")
+    workspace=$(yq eval '.stack.workspace // ""' "${config_file}")
 
     if [[ -z "${stack_id}" ]]; then
         log_error "stack.id is required in config.yml"
@@ -532,24 +541,24 @@ process_stack() {
     # Detect Environment
     # -------------------------------------------------------------------------
     local environment
-    if [[ -n "$ENVIRONMENT" ]]; then
-        environment="$ENVIRONMENT"
-        log_info "Using environment override: $environment"
+    if [[ -n "${ENVIRONMENT}" ]]; then
+        environment="${ENVIRONMENT}"
+        log_info "Using environment override: ${environment}"
     else
-        if ! environment=$(detect_environment "$config_file") || [[ -z "$environment" ]]; then
-            log_warning "No environment matched for this branch — skipping stack '$stack'"
+        if ! environment=$(detect_environment "${config_file}") || [[ -z "${environment}" ]]; then
+            log_warning "No environment matched for this branch — skipping stack '${stack}'"
             log_info "Compliance checks require a matching environment in config.yml"
             return 0
         fi
-        log_info "Auto-detected environment: $environment"
+        log_info "Auto-detected environment: ${environment}"
     fi
 
     # Validate environment exists in config
-    if ! validate_environment "$config_file" "$environment"; then
-        log_error "Environment '$environment' not found in config.yml"
+    if ! validate_environment "${config_file}" "${environment}"; then
+        log_error "Environment '${environment}' not found in config.yml"
         log_info "Available environments:"
-        yq eval '.environments | keys | .[]' "$config_file" | while read -r env; do
-            log_info "  - $env"
+        yq eval '.environments | keys | .[]' "${config_file}" | while read -r env; do
+            log_info "  - ${env}"
         done
         return 1
     fi
@@ -559,86 +568,86 @@ process_stack() {
     # -------------------------------------------------------------------------
     # Environment-specific settings
     local scan_types severity_threshold require_approval frameworks_csv
-    scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "$config_file" -o json)
-    severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "$config_file")
-    require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "$config_file")
-    BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "$config_file")
-    frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "$config_file" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
+    scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "${config_file}" -o json)
+    severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "${config_file}")
+    require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "${config_file}")
+    BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "${config_file}")
+    frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "${config_file}" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
 
     # Default framework based on cloud provider if none explicitly configured
-    if [[ -z "$frameworks_csv" ]]; then
+    if [[ -z "${frameworks_csv}" ]]; then
         local cloud_provider
-        cloud_provider=$(yq eval ".environments.${environment}.cloud.provider // \"\"" "$config_file" 2>/dev/null || echo "")
-        case "$cloud_provider" in
+        cloud_provider=$(yq eval ".environments.${environment}.cloud.provider // \"\"" "${config_file}" 2>/dev/null || echo "")
+        case "${cloud_provider}" in
             aws)   frameworks_csv="CIS-AWS" ;;
             azure) frameworks_csv="CIS-Azure" ;;
             gcp)   frameworks_csv="CIS-GCP" ;;
         esac
-        if [[ -n "$frameworks_csv" ]]; then
+        if [[ -n "${frameworks_csv}" ]]; then
             log_info "No frameworks configured, defaulting to ${frameworks_csv} based on provider: ${cloud_provider}"
         fi
     fi
 
-    log_info "Stack ID: $stack_id"
-    log_info "Stack Name: $stack_name"
-    log_info "Environment: $environment"
-    log_info "Mode: $MODE"
-    log_info "Severity threshold: $severity_threshold"
-    log_info "Compliance frameworks: $frameworks_csv"
+    log_info "Stack ID: ${stack_id}"
+    log_info "Stack Name: ${stack_name}"
+    log_info "Environment: ${environment}"
+    log_info "Mode: ${MODE}"
+    log_info "Severity threshold: ${severity_threshold}"
+    log_info "Compliance frameworks: ${frameworks_csv}"
 
     # -------------------------------------------------------------------------
     # Get Units in Dependency Order (using shared library)
     # -------------------------------------------------------------------------
     local units
-    units=$(yq eval '.infrastructure_units[] | select(.enabled != false)' "$config_file" -o json | jq -s '.')
+    units=$(yq eval '.infrastructure_units[] | select(.enabled != false)' "${config_file}" -o json | jq -s '.')
     local unit_count
-    unit_count=$(echo "$units" | jq 'length')
+    unit_count=$(echo "${units}" | jq 'length')
 
-    if [[ "$unit_count" -eq 0 ]]; then
+    if [[ "${unit_count}" -eq 0 ]]; then
         log_warning "No enabled infrastructure units found"
         return 0
     fi
 
     # Topological sort for dependency ordering
     local ordered_units
-    ordered_units=$(sort_units_by_dependency "$units")
+    ordered_units=$(sort_units_by_dependency "${units}")
 
     local unit_names
-    unit_names=$(echo "$ordered_units" | jq -r '.[].name')
-    log_info "Units (in order): $(echo "$unit_names" | tr '\n' ' ')"
+    unit_names=$(echo "${ordered_units}" | jq -r '.[].name')
+    log_info "Units (in order): $(echo "${unit_names}" | tr '\n' ' ')"
 
     # -------------------------------------------------------------------------
     # Process Each Unit
     # -------------------------------------------------------------------------
-    for unit_name in $unit_names; do
+    for unit_name in ${unit_names}; do
         local unit_path
-        unit_path=$(echo "$ordered_units" | jq -r ".[] | select(.name == \"$unit_name\") | .path")
+        unit_path=$(echo "${ordered_units}" | jq -r ".[] | select(.name == \"${unit_name}\") | .path")
         local depends_on
-        depends_on=$(echo "$ordered_units" | jq -c ".[] | select(.name == \"$unit_name\") | .depends_on // []")
+        depends_on=$(echo "${ordered_units}" | jq -c ".[] | select(.name == \"${unit_name}\") | .depends_on // []")
 
         process_unit \
-            "$stack" \
-            "$unit_name" \
-            "$unit_path" \
-            "$stack_id" \
-            "$environment" \
-            "$severity_threshold" \
-            "$scan_types" \
-            "$depends_on" \
-            "$frameworks_csv" \
-            "$config_file"
+            "${stack}" \
+            "${unit_name}" \
+            "${unit_path}" \
+            "${stack_id}" \
+            "${environment}" \
+            "${severity_threshold}" \
+            "${scan_types}" \
+            "${depends_on}" \
+            "${frameworks_csv}" \
+            "${config_file}"
     done
 
-    PROCESSED_STACKS+=("$stack")
+    PROCESSED_STACKS+=("${stack}")
 
     # Set outputs
-    set_output "environment" "$environment"
-    set_output "require_approval" "$require_approval"
+    set_output "environment" "${environment}"
+    set_output "require_approval" "${require_approval}"
 
     # Output approval info if applicable
-    if [[ "$require_approval" == "true" ]] && [[ -n "$APPROVAL_ID" ]]; then
-        set_output "approval_id" "$APPROVAL_ID"
-        log_success "Approval created: $APPROVAL_ID"
+    if [[ "${require_approval}" == "true" ]] && [[ -n "${APPROVAL_ID}" ]]; then
+        set_output "approval_id" "${APPROVAL_ID}"
+        log_success "Approval created: ${APPROVAL_ID}"
     fi
 }
 
@@ -656,7 +665,7 @@ process_brownfield_unit() {
     local config_path="${8:-}"
 
     # Unit name is the stack name (single "unit")
-    local unit_name="$stack_name"
+    local unit_name="${stack_name}"
 
     # Per-unit result collectors
     local scan_result_json="null"
@@ -670,11 +679,13 @@ process_brownfield_unit() {
     SCAN_PLAN_STATE_JSON_FILE=""
     SCAN_PLAN_S3_URL=""
     SCAN_PLAN_MODE=""
+    SCAN_PLAN_DIGEST=""
+    SCAN_PLAN_CANON_VERSION=""
 
     # Validate brownfield structure (relaxed — only check .tf files exist)
-    if ! validate_brownfield_structure "$tf_dir"; then
+    if ! validate_brownfield_structure "${tf_dir}"; then
         scan_result_json=$(jq -n '{passed: false, skipped: false, violations: 0, error: "validation_failed"}')
-        append_unit_result "$stack_name" "$unit_name" "$scan_result_json" "$eval_result_json" "$deploy_result_json"
+        append_unit_result "${stack_name}" "${unit_name}" "${scan_result_json}" "${eval_result_json}" "${deploy_result_json}"
         return 1
     fi
 
@@ -684,22 +695,22 @@ process_brownfield_unit() {
     if [[ "${MODE}" == "scan" ]] || [[ "${MODE}" == "full" ]] || [[ "${MODE}" == "scan_evaluate" ]] || [[ "${MODE}" == "preview" ]]; then
         if echo "${scan_types}" | jq -e 'contains(["static"])' > /dev/null 2>&1; then
             set +e
-            run_static_scan "$tf_dir" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "$frameworks" "$config_path"
+            run_static_scan "${tf_dir}" "${stack_id}" "${unit_name}" "${environment}" "${severity_threshold}" "${GLOBAL_RUN_ID}" "${frameworks}" "${config_path}"
             local scan_exit=$?
             set -e
 
-            if [[ -n "$SCAN_RUN_ID" ]]; then
-                if [[ -n "$GLOBAL_RUN_ID" ]] && [[ "$SCAN_RUN_ID" != "$GLOBAL_RUN_ID" ]]; then
-                    log_warning "Run ID mismatch after scan: expected=$GLOBAL_RUN_ID, got=$SCAN_RUN_ID"
+            if [[ -n "${SCAN_RUN_ID}" ]]; then
+                if [[ -n "${GLOBAL_RUN_ID}" ]] && [[ "${SCAN_RUN_ID}" != "${GLOBAL_RUN_ID}" ]]; then
+                    log_warning "Run ID mismatch after scan: expected=${GLOBAL_RUN_ID}, got=${SCAN_RUN_ID}"
                 fi
-                GLOBAL_RUN_ID="$SCAN_RUN_ID"
+                GLOBAL_RUN_ID="${SCAN_RUN_ID}"
             fi
             if [[ -n "${SCAN_ID:-}" ]]; then
-                GLOBAL_SCAN_ID="$SCAN_ID"
+                GLOBAL_SCAN_ID="${SCAN_ID}"
             fi
 
             local scan_passed="true"
-            if [[ $scan_exit -ne 0 ]]; then
+            if [[ ${scan_exit} -ne 0 ]]; then
                 if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
                     STATIC_SCAN_FAILED=true
                 else
@@ -709,7 +720,7 @@ process_brownfield_unit() {
             fi
 
             scan_result_json=$(jq -n \
-                --arg passed "$scan_passed" \
+                --arg passed "${scan_passed}" \
                 --argjson violations "${SCAN_VIOLATIONS:-0}" \
                 --arg scan_id "${SCAN_ID:-}" \
                 --arg run_id "${SCAN_RUN_ID:-}" \
@@ -725,22 +736,22 @@ process_brownfield_unit() {
     if [[ "${MODE}" == "evaluate" ]] || [[ "${MODE}" == "full" ]] || [[ "${MODE}" == "scan_evaluate" ]] || [[ "${MODE}" == "preview" ]]; then
         if echo "${scan_types}" | jq -e 'contains(["evaluation"])' > /dev/null 2>&1; then
             set +e
-            run_plan_evaluation "$tf_dir" "$stack_id" "$unit_name" "$environment" "$severity_threshold" "$GLOBAL_RUN_ID" "${SCAN_PLAN_JSON_FILE:-}" "[]" "$frameworks"
+            run_plan_evaluation "${tf_dir}" "${stack_id}" "${unit_name}" "${environment}" "${severity_threshold}" "${GLOBAL_RUN_ID}" "${SCAN_PLAN_JSON_FILE:-}" "[]" "${frameworks}"
             local eval_exit=$?
             set -e
 
-            if [[ -n "$EVAL_RUN_ID" ]]; then
-                if [[ -n "$GLOBAL_RUN_ID" ]] && [[ "$EVAL_RUN_ID" != "$GLOBAL_RUN_ID" ]]; then
-                    log_warning "Run ID mismatch after evaluation: expected=$GLOBAL_RUN_ID, got=$EVAL_RUN_ID"
+            if [[ -n "${EVAL_RUN_ID}" ]]; then
+                if [[ -n "${GLOBAL_RUN_ID}" ]] && [[ "${EVAL_RUN_ID}" != "${GLOBAL_RUN_ID}" ]]; then
+                    log_warning "Run ID mismatch after evaluation: expected=${GLOBAL_RUN_ID}, got=${EVAL_RUN_ID}"
                 fi
-                GLOBAL_RUN_ID="$EVAL_RUN_ID"
+                GLOBAL_RUN_ID="${EVAL_RUN_ID}"
             fi
             if [[ -n "${EVAL_SCAN_ID:-}" ]]; then
-                GLOBAL_SCAN_ID="$EVAL_SCAN_ID"
+                GLOBAL_SCAN_ID="${EVAL_SCAN_ID}"
             fi
 
             local eval_passed="true"
-            if [[ $eval_exit -ne 0 ]]; then
+            if [[ ${eval_exit} -ne 0 ]]; then
                 if [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
                     if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
                         EVALUATION_FAILED=true
@@ -755,7 +766,7 @@ process_brownfield_unit() {
             fi
 
             eval_result_json=$(jq -n \
-                --arg passed "$eval_passed" \
+                --arg passed "${eval_passed}" \
                 --argjson violations "${EVAL_VIOLATIONS:-0}" \
                 --arg eval_mode "${EVAL_MODE:-full}" \
                 --arg run_id "${EVAL_RUN_ID:-}" \
@@ -778,30 +789,35 @@ process_brownfield_unit() {
                 should_deploy=true
             fi
 
-            if [[ "$should_deploy" == "true" ]]; then
-                if [[ "$VERIFY_AUTHORIZATION" == "true" ]]; then
-                    if ! verify_authorization "$GLOBAL_RUN_ID" "$stack_id" "$environment" "$unit_name"; then
+            if [[ "${should_deploy}" == "true" ]]; then
+                # Under attestation, the digest-bearing authorization runs inside
+                # run_deployment (it needs the downloaded plan to recompute the
+                # digest), so this approval-only pre-check is skipped to avoid a
+                # second, digest-less authorize call.
+                if [[ "${VERIFY_AUTHORIZATION}" == "true" ]] && ! attestation_enabled; then
+                    if ! verify_authorization "${GLOBAL_RUN_ID}" "${stack_id}" "${environment}" "${unit_name}"; then
                         AUTHORIZATION_FAILED=true
                         deploy_result_json=$(jq -n '{success: false, skipped: false, error: "authorization_failed"}')
-                        append_unit_result "$stack_name" "$unit_name" "$scan_result_json" "$eval_result_json" "$deploy_result_json"
+                        append_unit_result "${stack_name}" "${unit_name}" "${scan_result_json}" "${eval_result_json}" "${deploy_result_json}"
                         return 1
                     fi
                 fi
 
                 set +e
-                run_deployment "$tf_dir" "$unit_name" "$environment" "$GLOBAL_RUN_ID" "$GLOBAL_SCAN_ID"
+                run_deployment "${tf_dir}" "${unit_name}" "${environment}" "${GLOBAL_RUN_ID}" "${GLOBAL_SCAN_ID}" "${stack_id}"
                 local deploy_exit=$?
                 set -e
 
                 local deploy_success="true"
-                if [[ $deploy_exit -ne 0 ]]; then
+                if [[ ${deploy_exit} -ne 0 ]]; then
                     DEPLOY_FAILED=true
                     deploy_success="false"
                 fi
 
                 deploy_result_json=$(jq -n \
-                    --arg success "$deploy_success" \
-                    '{success: ($success == "true"), skipped: false}')
+                    --arg success "${deploy_success}" \
+                    --arg bound "${PROVENANCE_BOUND:-false}" \
+                    '{success: ($success == "true"), skipped: false, provenance: {bound: ($bound == "true")}}')
             else
                 deploy_result_json=$(jq -n '{success: true, skipped: true}')
             fi
@@ -811,7 +827,7 @@ process_brownfield_unit() {
     fi
 
     # Append collected results
-    append_unit_result "$stack_name" "$unit_name" "$scan_result_json" "$eval_result_json" "$deploy_result_json"
+    append_unit_result "${stack_name}" "${unit_name}" "${scan_result_json}" "${eval_result_json}" "${deploy_result_json}"
 }
 
 # =============================================================================
@@ -820,18 +836,18 @@ process_brownfield_unit() {
 process_brownfield_stack() {
     local config_file="$1"
 
-    if [[ ! -f "$config_file" ]]; then
-        log_error "Config file not found: $config_file"
+    if [[ ! -f "${config_file}" ]]; then
+        log_error "Config file not found: ${config_file}"
         return 1
     fi
 
     # Extract configuration
     local stack_id stack_name stack_slug workspace tf_dir
-    stack_id=$(yq eval '.stack.id // ""' "$config_file")
-    stack_name=$(yq eval '.stack.name // ""' "$config_file")
-    stack_slug=$(yq eval '.stack.slug // ""' "$config_file")
-    workspace=$(yq eval '.stack.workspace // ""' "$config_file")
-    tf_dir=$(yq eval '.stack.terraform_working_directory // "."' "$config_file")
+    stack_id=$(yq eval '.stack.id // ""' "${config_file}")
+    stack_name=$(yq eval '.stack.name // ""' "${config_file}")
+    stack_slug=$(yq eval '.stack.slug // ""' "${config_file}")
+    workspace=$(yq eval '.stack.workspace // ""' "${config_file}")
+    tf_dir=$(yq eval '.stack.terraform_working_directory // "."' "${config_file}")
 
     if [[ -z "${stack_id}" ]]; then
         log_error "stack.id is required in config.yml"
@@ -865,72 +881,72 @@ process_brownfield_stack() {
     init_remote_state_tracking "${stack_slug:-${stack_name}}"
 
     # Initialize result tracking for this stack
-    init_stack_results "${stack_slug:-$stack_name}"
+    init_stack_results "${stack_slug:-${stack_name}}"
 
     echo ""
-    echo "=== Stack: $stack_name (brownfield) ==="
+    echo "=== Stack: ${stack_name} (brownfield) ==="
     echo ""
 
     # Detect environment
     local environment
-    if [[ -n "$ENVIRONMENT" ]]; then
-        environment="$ENVIRONMENT"
-        log_info "Using environment override: $environment"
+    if [[ -n "${ENVIRONMENT}" ]]; then
+        environment="${ENVIRONMENT}"
+        log_info "Using environment override: ${environment}"
     else
-        if ! environment=$(detect_environment "$config_file") || [[ -z "$environment" ]]; then
-            log_warning "No environment matched for this branch — skipping stack '$stack_name'"
+        if ! environment=$(detect_environment "${config_file}") || [[ -z "${environment}" ]]; then
+            log_warning "No environment matched for this branch — skipping stack '${stack_name}'"
             log_info "Compliance checks require a matching environment in config.yml"
             return 0
         fi
-        log_info "Auto-detected environment: $environment"
+        log_info "Auto-detected environment: ${environment}"
     fi
 
     # Validate environment exists in config
-    if ! validate_environment "$config_file" "$environment"; then
-        log_error "Environment '$environment' not found in config.yml"
+    if ! validate_environment "${config_file}" "${environment}"; then
+        log_error "Environment '${environment}' not found in config.yml"
         log_info "Available environments:"
-        yq eval '.environments | keys | .[]' "$config_file" | while read -r env; do
-            log_info "  - $env"
+        yq eval '.environments | keys | .[]' "${config_file}" | while read -r env; do
+            log_info "  - ${env}"
         done
         return 1
     fi
 
     # Extract environment-specific config
     local scan_types severity_threshold require_approval frameworks_csv
-    scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "$config_file" -o json)
-    severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "$config_file")
-    require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "$config_file")
-    BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "$config_file")
-    frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "$config_file" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
+    scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "${config_file}" -o json)
+    severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "${config_file}")
+    require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "${config_file}")
+    BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "${config_file}")
+    frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "${config_file}" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
 
-    log_info "Stack ID: $stack_id"
-    log_info "Stack Name: $stack_name"
-    log_info "Environment: $environment"
-    log_info "Terraform Dir: $tf_dir"
-    log_info "Mode: $MODE"
-    log_info "Severity threshold: $severity_threshold"
-    log_info "Compliance frameworks: $frameworks_csv"
+    log_info "Stack ID: ${stack_id}"
+    log_info "Stack Name: ${stack_name}"
+    log_info "Environment: ${environment}"
+    log_info "Terraform Dir: ${tf_dir}"
+    log_info "Mode: ${MODE}"
+    log_info "Severity threshold: ${severity_threshold}"
+    log_info "Compliance frameworks: ${frameworks_csv}"
 
     # No unit iteration — process terraform_working_directory directly
     process_brownfield_unit \
-        "${stack_slug:-$stack_name}" \
-        "$tf_dir" \
-        "$stack_id" \
-        "$environment" \
-        "$severity_threshold" \
-        "$scan_types" \
-        "$frameworks_csv" \
-        "$config_file"
+        "${stack_slug:-${stack_name}}" \
+        "${tf_dir}" \
+        "${stack_id}" \
+        "${environment}" \
+        "${severity_threshold}" \
+        "${scan_types}" \
+        "${frameworks_csv}" \
+        "${config_file}"
 
-    PROCESSED_STACKS+=("${stack_slug:-$stack_name}")
+    PROCESSED_STACKS+=("${stack_slug:-${stack_name}}")
 
     # Set outputs
-    set_output "environment" "$environment"
-    set_output "require_approval" "$require_approval"
+    set_output "environment" "${environment}"
+    set_output "require_approval" "${require_approval}"
 
-    if [[ "$require_approval" == "true" ]] && [[ -n "$APPROVAL_ID" ]]; then
-        set_output "approval_id" "$APPROVAL_ID"
-        log_success "Approval created: $APPROVAL_ID"
+    if [[ "${require_approval}" == "true" ]] && [[ -n "${APPROVAL_ID}" ]]; then
+        set_output "approval_id" "${APPROVAL_ID}"
+        log_success "Approval created: ${APPROVAL_ID}"
     fi
 }
 
@@ -1008,7 +1024,7 @@ main() {
     fi
     export STACKS_CONFIG
 
-    log_banner "Iltero Pipeline | Mode: $MODE"
+    log_banner "Iltero Pipeline | Mode: ${MODE}"
 
     # -------------------------------------------------------------------------
     # Configure Registry Credentials (if token provided)
@@ -1018,18 +1034,18 @@ main() {
     # -------------------------------------------------------------------------
     # Brownfield vs Greenfield Pipeline
     # -------------------------------------------------------------------------
-    if [[ "$PIPELINE_MODE" == "brownfield" ]]; then
+    if [[ "${PIPELINE_MODE}" == "brownfield" ]]; then
         # Brownfield: single config file, no stacks directory
         local stacks_json
-        if [[ -n "$STACK" ]]; then
-            stacks_json="[\"$STACK\"]"
-            log_info "Using manual stack: $STACK"
+        if [[ -n "${STACK}" ]]; then
+            stacks_json="[\"${STACK}\"]"
+            log_info "Using manual stack: ${STACK}"
         else
-            stacks_json=$(detect_brownfield_stack "$CONFIG_PATH")
-            log_info "Auto-detected brownfield stack: $stacks_json"
+            stacks_json=$(detect_brownfield_stack "${CONFIG_PATH}")
+            log_info "Auto-detected brownfield stack: ${stacks_json}"
         fi
 
-        if [[ "$stacks_json" == "[]" ]] || [[ -z "$stacks_json" ]]; then
+        if [[ "${stacks_json}" == "[]" ]] || [[ -z "${stacks_json}" ]]; then
             log_info "No stacks to process"
             set_output "stacks_processed" "[]"
             set_output "overall_status" "skipped"
@@ -1043,8 +1059,8 @@ main() {
         process_brownfield_stack "${CONFIG_PATH}" || STACK_ERROR=true
     else
         # Greenfield: stacks code directory with infrastructure units
-        if [[ ! -d "$STACKS_PATH" ]]; then
-            log_info "Stacks code directory not found: $STACKS_PATH — no stacks to process"
+        if [[ ! -d "${STACKS_PATH}" ]]; then
+            log_info "Stacks code directory not found: ${STACKS_PATH} — no stacks to process"
             set_output "stacks_processed" "[]"
             set_output "overall_status" "skipped"
             set_output "static_scan_passed" "true"
@@ -1054,15 +1070,15 @@ main() {
         fi
 
         local stacks_json
-        if [[ -n "$STACK" ]]; then
-            stacks_json="[\"$STACK\"]"
-            log_info "Using manual stack: $STACK"
+        if [[ -n "${STACK}" ]]; then
+            stacks_json="[\"${STACK}\"]"
+            log_info "Using manual stack: ${STACK}"
         else
-            stacks_json=$(detect_stacks "$STACKS_PATH")
-            log_info "Auto-detected stacks: $stacks_json"
+            stacks_json=$(detect_stacks "${STACKS_PATH}")
+            log_info "Auto-detected stacks: ${stacks_json}"
         fi
 
-        if [[ "$stacks_json" == "[]" ]] || [[ -z "$stacks_json" ]]; then
+        if [[ "${stacks_json}" == "[]" ]] || [[ -z "${stacks_json}" ]]; then
             log_info "No stacks to process"
             set_output "stacks_processed" "[]"
             set_output "overall_status" "skipped"
@@ -1083,51 +1099,51 @@ main() {
     local processed_json
     # Use jq -c for compact single-line JSON to avoid GitHub Actions output formatting issues
     processed_json=$(printf '%s\n' "${PROCESSED_STACKS[@]}" | jq -R . | jq -sc .)
-    set_output "stacks_processed" "$processed_json"
-    set_output "run_id" "$GLOBAL_RUN_ID"
+    set_output "stacks_processed" "${processed_json}"
+    set_output "run_id" "${GLOBAL_RUN_ID}"
 
     # Aggregate per-unit results from all stacks
     local all_unit_results
     all_unit_results=$(get_all_results)
-    set_output "unit_results" "$(echo "$all_unit_results" | jq -c .)"
+    set_output "unit_results" "$(echo "${all_unit_results}" | jq -c .)"
 
     # Count violations across all units for reporting
     local total_scan_violations total_eval_violations
-    total_scan_violations=$(echo "$all_unit_results" | jq '[.[].scan // {} | .violations // 0] | add // 0')
-    total_eval_violations=$(echo "$all_unit_results" | jq '[.[].evaluation // {} | .violations // 0] | add // 0')
+    total_scan_violations=$(echo "${all_unit_results}" | jq '[.[].scan // {} | .violations // 0] | add // 0')
+    total_eval_violations=$(echo "${all_unit_results}" | jq '[.[].evaluation // {} | .violations // 0] | add // 0')
 
     # Determine static_scan_passed and evaluation_passed independently
     local static_scan_passed="true"
     local evaluation_passed="true"
-    if [[ "$STATIC_SCAN_FAILED" == "true" ]]; then
+    if [[ "${STATIC_SCAN_FAILED}" == "true" ]]; then
         static_scan_passed="false"
     fi
-    if [[ "$EVALUATION_FAILED" == "true" ]]; then
+    if [[ "${EVALUATION_FAILED}" == "true" ]]; then
         evaluation_passed="false"
     fi
 
-    set_output "static_scan_passed" "$static_scan_passed"
-    set_output "evaluation_passed" "$evaluation_passed"
+    set_output "static_scan_passed" "${static_scan_passed}"
+    set_output "evaluation_passed" "${evaluation_passed}"
 
     # Determine phase statuses for summary
     local scan_status="[PASS]" eval_status="[PASS]" deploy_status="--"
     local scan_detail="0 findings above threshold" eval_detail="0 policy violations" deploy_detail=""
 
-    if [[ "$STATIC_SCAN_FAILED" == "true" ]]; then
+    if [[ "${STATIC_SCAN_FAILED}" == "true" ]]; then
         scan_status="[FAIL]"
         scan_detail="${total_scan_violations} findings above threshold"
     fi
-    if [[ "$EVALUATION_FAILED" == "true" ]]; then
+    if [[ "${EVALUATION_FAILED}" == "true" ]]; then
         eval_status="[FAIL]"
         eval_detail="${total_eval_violations} policy violations above threshold"
     fi
-    if [[ "$DEPLOY_FAILED" == "true" ]]; then
+    if [[ "${DEPLOY_FAILED}" == "true" ]]; then
         deploy_status="[FAIL]"
         deploy_detail="deployment failed"
-    elif [[ "$AUTHORIZATION_FAILED" == "true" ]]; then
+    elif [[ "${AUTHORIZATION_FAILED}" == "true" ]]; then
         deploy_status="[FAIL]"
         deploy_detail="not authorized"
-    elif [[ "$STATIC_SCAN_FAILED" == "true" ]] || [[ "$EVALUATION_FAILED" == "true" ]]; then
+    elif [[ "${STATIC_SCAN_FAILED}" == "true" ]] || [[ "${EVALUATION_FAILED}" == "true" ]]; then
         deploy_status="  --  "
         deploy_detail="blocked (static scan/evaluation failed)"
     fi
@@ -1138,9 +1154,9 @@ main() {
     echo "Pipeline Result"
     echo "==============================================================================="
     echo ""
-    printf "  %-20s %s  %s\n" "Static Analysis" "$scan_status" "$scan_detail"
-    printf "  %-20s %s  %s\n" "Plan Evaluation" "$eval_status" "$eval_detail"
-    printf "  %-20s %s  %s\n" "Deploy" "$deploy_status" "$deploy_detail"
+    printf "  %-20s %s  %s\n" "Static Analysis" "${scan_status}" "${scan_detail}"
+    printf "  %-20s %s  %s\n" "Plan Evaluation" "${eval_status}" "${eval_detail}"
+    printf "  %-20s %s  %s\n" "Deploy" "${deploy_status}" "${deploy_detail}"
     echo ""
 
     if [[ "${STACK_ERROR}" == "true" ]]; then
@@ -1175,7 +1191,7 @@ main() {
         echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
         echo "==============================================================================="
         exit 1
-    elif [[ "$DEPLOY_FAILED" == "true" ]]; then
+    elif [[ "${DEPLOY_FAILED}" == "true" ]]; then
         set_output "overall_status" "deploy_failed"
         set_output "deployment_ready" "false"
         set_output "authorization_passed" "true"

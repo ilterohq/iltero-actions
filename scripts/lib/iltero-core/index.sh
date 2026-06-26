@@ -22,6 +22,7 @@
 #   results.sh       - Per-stack result accumulation
 #   ci-credential.sh - CI credential resolution (deploy-time)
 #   terraform.sh     - Shared terraform init+plan+state-export pipeline
+#   attestation.sh   - Plan-to-apply provenance attestation (opt-in)
 # =============================================================================
 
 set -euo pipefail
@@ -46,6 +47,9 @@ source "${ILTERO_CORE_DIR}/utils.sh"
 
 # Source remote state tracking (needed before evaluation)
 source "${ILTERO_CORE_DIR}/remote-state.sh"
+
+# Source provenance attestation helpers (used by terraform/evaluation/deployment)
+source "${ILTERO_CORE_DIR}/attestation.sh"
 
 # Source all modules
 source "${ILTERO_CORE_DIR}/validation.sh"
