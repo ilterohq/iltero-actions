@@ -1,18 +1,15 @@
 # =============================================================================
 # Iltero Actions - Release Automation
 # =============================================================================
-# When a new GitHub Release is published (e.g. v1.2.3), this workflow:
+# When a new GitHub Release is published (e.g. v0.1.0), this workflow:
 #   1. Validates the tag follows semantic versioning
 #   2. Runs the full CI suite to ensure quality
-#   3. Updates the moving major version tag (e.g. v1) so customers on @v1
-#      automatically get the latest compatible release
 #
-# Usage:
-#   Customers reference the major tag for automatic updates:
-#     uses: ilterohq/iltero-actions@v1
+# Pinning: there are no moving major tags. Pin to an exact version or commit SHA:
+#     uses: ilterohq/iltero-actions@v0.1.0
+#     uses: ilterohq/iltero-actions@<commit-sha>  # v0.1.0
 #
-#   Or pin to an exact version for stability:
-#     uses: ilterohq/iltero-actions@v1.2.3
+# Published tags are immutable (a repository ruleset blocks moving/deleting them).
 # =============================================================================
 
 name: Release
@@ -34,13 +31,9 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-    outputs:
-      version: ${{ steps.parse.outputs.version }}
-      major: ${{ steps.parse.outputs.major }}
 
     steps:
       - name: Parse and validate semver tag
-        id: parse
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
 
@@ -50,15 +43,7 @@ jobs:
             exit 1
           fi
 
-          MAJOR="${BASH_REMATCH[1]}"
-          echo "version=$TAG" >> "$GITHUB_OUTPUT"
-          echo "major=v${MAJOR}" >> "$GITHUB_OUTPUT"
-          echo "Parsed tag: $TAG → major=v${MAJOR}"
-
-      - name: Reject pre-release major tag updates
-        if: github.event.release.prerelease
-        run: |
-          echo "::notice::Pre-release detected — major version tag will NOT be updated"
+          echo "Validated tag: $TAG"
 
   # ===========================================================================
   # CI: Run the full quality suite against the tagged commit
@@ -70,37 +55,3 @@ jobs:
     permissions:
       contents: read
       security-events: write
-
-  # ===========================================================================
-  # Update Major Tag: Move vN to point at this release
-  # ===========================================================================
-  update-major-tag:
-    name: Update Major Version Tag
-    needs: [validate-tag, ci]
-    if: ${{ !github.event.release.prerelease }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Update major version tag
-        env:
-          VERSION: ${{ needs.validate-tag.outputs.version }}
-          MAJOR: ${{ needs.validate-tag.outputs.major }}
-          GH_TOKEN: ${{ github.token }}
-          GH_REPOSITORY: ${{ github.repository }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPOSITORY}.git"
-
-          echo "Moving tag $MAJOR → $VERSION"
-          git tag -fa "$MAJOR" -m "Release $VERSION"
-          git push origin "$MAJOR" --force
