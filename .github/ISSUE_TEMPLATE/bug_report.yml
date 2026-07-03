@@ -49,7 +49,7 @@ body:
     attributes:
       label: Action Version
       description: The version of iltero-actions you are using.
-      placeholder: "v1.0.0 or commit SHA"
+      placeholder: "v0.1.1 or commit SHA"
     validations:
       required: true
 
