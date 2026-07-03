@@ -19,7 +19,7 @@ teardown() {
     if [[ "${PATH}" == "${TEST_TEMP}:"* ]]; then
         export PATH="${PATH#"${TEST_TEMP}:"}"
     fi
-    unset ILTERO_ATTEST ILTERO_CLI_BIN
+    unset ILTERO_ATTEST ILTERO_CLI_BIN PREVIEW_MODE
 }
 
 # Install a fake `iltero` whose `scan plan-digest` prints the contents of
@@ -59,6 +59,14 @@ EOF
     export ILTERO_ATTEST="true"
     run attestation_enabled
     assert_exit_code 0
+}
+
+@test "attestation_enabled is false in preview even when ILTERO_ATTEST=true" {
+    # A preview plan (even a credentialed same-repo one) must never attest.
+    export ILTERO_ATTEST="true"
+    export PREVIEW_MODE="true"
+    run attestation_enabled
+    assert_exit_code 1
 }
 
 # -----------------------------------------------------------------------------

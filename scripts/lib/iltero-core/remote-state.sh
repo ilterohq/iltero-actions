@@ -101,7 +101,8 @@ write_unit_state_status() {
 # 
 # Logic:
 #   - No dependencies → "check_self" (unit needs to verify its own backend)
-#   - Any dependency unavailable/unknown → "unavailable" (must use -backend=false)
+#   - Any dependency unavailable/unknown → "unavailable" (disables remote-state
+#     deps in the plan via -var enable_remote_state_dependencies=false)
 #   - All dependencies available → "available" (can try with backend)
 check_dependency_remote_state() {
     local depends_on="${1}"

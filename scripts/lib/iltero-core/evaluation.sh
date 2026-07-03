@@ -5,14 +5,15 @@
 # Functions for running Terraform plan evaluation via Iltero CLI.
 #
 # Remote State Handling Flow:
-# ┌─────────────────────────────────────────────────────────────────────────┐
-# │ 1. Check dependency remote state status (via depends_on parameter)      │
-# │ 2. If any dependency has unavailable state → use -backend=false        │
-# │ 3. If no deps or all deps available → try with backend first           │
-# │ 4. If backend init fails on remote state → fallback to -backend=false  │
-# │ 5. Update unit's remote state status for downstream dependencies       │
-# │ 6. Always run plan and evaluate (never skip the unit entirely)         │
-# └─────────────────────────────────────────────────────────────────────────┘
+#   1. Check dependency remote state status (via the depends_on parameter).
+#   2. If any dependency has unavailable state → best_effort mode: the plan runs
+#      with -var enable_remote_state_dependencies=false (NOT -backend=false).
+#   3. If no deps or all deps available → plan with the real backend.
+#   4. Credential-less preview (PREVIEW_MODE + no creds) → init -backend=false and
+#      a mock-credential plan; advisory only, never provenance-bound. See
+#      prepare_terraform_plan in terraform.sh.
+#   5. Update the unit's remote state status for downstream dependencies.
+#   6. Always run plan and evaluate (never skip the unit entirely).
 #
 # Exit Codes:
 #   EXIT_SUCCESS (0)    - Evaluation passed, no violations above threshold
@@ -27,6 +28,7 @@
 # EVAL_MODE values:
 #   "full"        - Full evaluation with backend (remote state available)
 #   "best_effort" - Evaluation without backend (remote state unavailable)
+#   "preview"     - Credential-less preview plan (never provenance-bound)
 # =============================================================================
 
 # Run terraform plan and evaluate against policies
