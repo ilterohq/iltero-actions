@@ -43,6 +43,13 @@ TF_PLAN_DIGEST=""
 TF_CANON_VERSION=""
 TF_PLAN_BINARY_URL=""
 
+# Set by configure_preview_credentials(). PREVIEW_SUPPORTED is true only when
+# every provider the unit declares has an adapter.
+PREVIEW_SUPPORTED="false"
+PREVIEW_OVERRIDE_FILE=""
+PREVIEW_CRED_ENV=()
+PREVIEW_PLAN_VARS=()
+
 # cloud_credentials_present
 # Returns 0 if any supported cloud has credentials present in the
 # environment, 1 otherwise. Used to decide whether a terraform init+plan
@@ -73,6 +80,82 @@ cloud_credentials_present() {
         fi
     done
     return 1
+}
+
+# detect_terraform_providers
+# Echoes the distinct provider names a unit declares (one per line) from its
+# *.tf files. Cloud-neutral; the adapters below decide what to do per provider.
+# Args: $1 = unit directory
+detect_terraform_providers() {
+    local dir="$1"
+    grep -rhoE '^[[:space:]]*provider[[:space:]]+"[a-z0-9]+"' "${dir}"/*.tf 2>/dev/null \
+        | grep -oE '"[a-z0-9]+"' | tr -d '"' | sort -u
+}
+
+# configure_preview_credentials
+# Cloud-agnostic dispatch for planning a unit with NO cloud credentials (PR
+# preview). Per declared provider, an adapter appends its credential-skip block
+# to a runner-owned override, adds mock cred env, and adds the -var that drops
+# role assumption. Add a cloud by adding a case arm. The override name is
+# lexically last so a committed *_override.tf can't shadow it. PREVIEW_SUPPORTED
+# is true only if every declared provider has an adapter (else preview fails).
+# Args: $1 = unit directory
+# Sets: PREVIEW_SUPPORTED, PREVIEW_OVERRIDE_FILE, PREVIEW_CRED_ENV, PREVIEW_PLAN_VARS
+configure_preview_credentials() {
+    local dir="$1"
+    PREVIEW_SUPPORTED="false"
+    PREVIEW_OVERRIDE_FILE=""
+    PREVIEW_CRED_ENV=()
+    PREVIEW_PLAN_VARS=()
+
+    local providers
+    providers=$(detect_terraform_providers "${dir}")
+    if [[ -z "${providers}" ]]; then
+        log_warning "Credential-less preview: no provider block found in ${dir}"
+        return 0
+    fi
+
+    local override="${dir}/zzz_iltero_preview_override.tf"
+    : > "${override}"
+
+    local provider unadapted=""
+    while IFS= read -r provider; do
+        [[ -z "${provider}" ]] && continue
+        case "${provider}" in
+            aws)
+                # Skips + mock static creds + IMDS off + -refresh=false + empty
+                # assume_role_arn (drops assume_role) => plan with no STS/IMDS call.
+                cat >> "${override}" <<'AWS_PREVIEW_OVERRIDE'
+provider "aws" {
+  skip_credentials_validation = true
+  skip_requesting_account_id  = true
+  skip_metadata_api_check     = true
+}
+AWS_PREVIEW_OVERRIDE
+                PREVIEW_CRED_ENV+=(
+                    AWS_ACCESS_KEY_ID=iltero-preview-mock
+                    AWS_SECRET_ACCESS_KEY=iltero-preview-mock
+                    AWS_EC2_METADATA_DISABLED=true
+                    AWS_REGION="${AWS_REGION:-us-east-1}"
+                )
+                PREVIEW_PLAN_VARS+=(-var="assume_role_arn=")
+                ;;
+            *)
+                # No adapter for this cloud yet -> preview fails for the unit.
+                unadapted="${unadapted:+${unadapted}, }${provider}"
+                ;;
+        esac
+    done <<< "${providers}"
+
+    if [[ -n "${unadapted}" ]]; then
+        log_warning "Credential-less preview: no adapter yet for provider(s): ${unadapted}"
+        rm -f "${override}"
+        return 0
+    fi
+
+    PREVIEW_OVERRIDE_FILE="${override}"
+    PREVIEW_SUPPORTED="true"
+    return 0
 }
 
 # extract_s3_backend_config
@@ -259,7 +342,43 @@ prepare_terraform_plan() {
         return 1
     fi
 
+    # Credential-less preview: no-creds PR preview runs a real plan (so OPA sees
+    # plan JSON) without a backend. Gated on PREVIEW_MODE (deploy path untouched)
+    # AND creds-absent (a same-repo preview with OIDC creds keeps the real
+    # backend; the PREVIEW_MODE evidence guards keep it out of the chain).
+    # Evaluate once, before any env is mocked (cloud_credentials_present keys on
+    # AWS_ACCESS_KEY_ID).
+    local credentialless=false
+    if [[ "${PREVIEW_MODE:-false}" == "true" ]] && ! cloud_credentials_present; then
+        credentialless=true
+    fi
+
+    # Mock creds are applied inline per terraform call (below), NEVER exported —
+    # an export would flip cloud_credentials_present for the next unit. Empty on
+    # the normal path. Populated by configure_preview_credentials.
+    local tf_env=()
+    local preview_override=""
+    local preview_plan_vars=()
+
     pushd "${eval_path}" > /dev/null
+
+    # Cloud-agnostic — see configure_preview_credentials. The override is removed
+    # at every return below (explicit rm, not a RETURN trap, which fires on nested
+    # returns under functrace).
+    if [[ "${credentialless}" == "true" ]]; then
+        configure_preview_credentials "${eval_path}"
+        if [[ "${PREVIEW_SUPPORTED}" == "true" ]]; then
+            preview_override="${PREVIEW_OVERRIDE_FILE}"
+            tf_env=(env ${PREVIEW_CRED_ENV[@]+"${PREVIEW_CRED_ENV[@]}"})
+            preview_plan_vars=(${PREVIEW_PLAN_VARS[@]+"${PREVIEW_PLAN_VARS[@]}"})
+            log_info "Credential-less preview: ${preview_override##*/} written for detected provider(s)"
+        else
+            # No adapter for this unit's cloud: cannot plan credential-less.
+            log_error "Credential-less preview unsupported for ${unit_name} (no adapter for its provider)"
+            popd > /dev/null
+            return 2
+        fi
+    fi
 
     # -------------------------------------------------------------------------
     # Step 1: Dependency remote-state availability check
@@ -276,6 +395,12 @@ prepare_terraform_plan() {
         TF_PLAN_MODE="best_effort"
     fi
 
+    # Distinct label: separates "no creds (preview)" from best_effort in EVAL_MODE,
+    # and the full-only digest gate below skips it (never the deployable plan).
+    if [[ "${credentialless}" == "true" ]]; then
+        TF_PLAN_MODE="preview"
+    fi
+
     # -------------------------------------------------------------------------
     # Step 2: terraform init
     # -------------------------------------------------------------------------
@@ -284,14 +409,17 @@ prepare_terraform_plan() {
     log_info "Resolved: BACKEND_HCL=${BACKEND_HCL:-<empty>} TFVARS_FILE=${TFVARS_FILE:-<empty>}"
 
     local init_args=(-input=false)
-    if [[ -n "${BACKEND_HCL}" ]]; then
+    if [[ "${credentialless}" == "true" ]]; then
+        # No backend: preview never reads or writes remote state.
+        init_args+=(-backend=false)
+    elif [[ -n "${BACKEND_HCL}" ]]; then
         init_args+=(-backend-config="${BACKEND_HCL}")
     fi
 
     log_info "Running: terraform init ${init_args[*]}"
     local init_output
     set +e
-    init_output=$(terraform init "${init_args[@]}" 2>&1)
+    init_output=$(${tf_env[@]+"${tf_env[@]}"} terraform init "${init_args[@]}" 2>&1)
     local init_exit=$?
     set -e
 
@@ -301,6 +429,7 @@ prepare_terraform_plan() {
         echo "${init_output}" | grep -A 5 "Error:" | head -30 || echo "${init_output}" | tail -20
         emit_cloud_credentials_hint_if_needed "${init_output}"
         update_unit_remote_state_status "${unit_name}" "unavailable" "init_failed"
+        [[ -n "${preview_override}" ]] && rm -f "${preview_override}"
         popd > /dev/null
         return 1
     fi
@@ -318,7 +447,7 @@ prepare_terraform_plan() {
     local has_backend_state=false
     set +e
     local state_output
-    state_output=$(terraform state list 2>&1)
+    state_output=$(${tf_env[@]+"${tf_env[@]}"} terraform state list 2>&1)
     local state_exit=$?
     set -e
 
@@ -335,9 +464,14 @@ prepare_terraform_plan() {
     # Step 3: terraform plan
     # -------------------------------------------------------------------------
     local plan_args=(-out=tfplan -input=false)
-    if [[ "${TF_PLAN_MODE}" == "best_effort" ]]; then
+    if [[ "${TF_PLAN_MODE}" == "best_effort" || "${credentialless}" == "true" ]]; then
         plan_args+=(-var="enable_remote_state_dependencies=false")
-        log_info "Disabling remote state dependencies (dependencies not yet deployed)"
+        log_info "Disabling remote state dependencies (deps not yet deployed or credential-less preview)"
+    fi
+    if [[ "${credentialless}" == "true" ]]; then
+        # -refresh=false so no data source hits a live API; provider vars drop
+        # role assumption (empty value beats any -var-file entry).
+        plan_args+=(-refresh=false ${preview_plan_vars[@]+"${preview_plan_vars[@]}"})
     fi
     if [[ -n "${TFVARS_FILE}" ]]; then
         plan_args+=(-var-file="${TFVARS_FILE}")
@@ -349,7 +483,7 @@ prepare_terraform_plan() {
     log_info "Running: terraform plan ${plan_args[*]}"
     local plan_output
     set +e
-    plan_output=$(terraform plan "${plan_args[@]}" 2>&1)
+    plan_output=$(${tf_env[@]+"${tf_env[@]}"} terraform plan "${plan_args[@]}" 2>&1)
     local plan_exit=$?
     set -e
 
@@ -366,6 +500,7 @@ prepare_terraform_plan() {
         echo "${plan_output}" | grep -A 5 "Error:" | head -50 || echo "${plan_output}" | tail -30
         emit_cloud_credentials_hint_if_needed "${plan_output}"
 
+        [[ -n "${preview_override}" ]] && rm -f "${preview_override}"
         popd > /dev/null
         return 2
     fi
@@ -379,7 +514,7 @@ prepare_terraform_plan() {
     fi
 
     # Convert plan to JSON for downstream consumers
-    terraform show -json tfplan > tfplan.json 2>/dev/null
+    ${tf_env[@]+"${tf_env[@]}"} terraform show -json tfplan > tfplan.json 2>/dev/null
     TF_PLAN_JSON_FILE="$(pwd)/tfplan.json"
 
     # Provenance: capture the canonical digest of the evaluated plan via the
@@ -397,7 +532,10 @@ prepare_terraform_plan() {
 
     # Upload plan JSON alongside the state file when an S3 backend is used.
     # Server-side encryption follows ILTERO_S3_SSE when set, else S3's default.
-    if [[ -n "${TF_BACKEND_S3_BUCKET}" ]] && [[ -n "${TF_BACKEND_S3_KEY_PREFIX}" ]]; then
+    # Never in preview: a preview plan is advisory and must not persist to the
+    # evidence backend, even when it ran credentialed (same-repo PR).
+    if [[ "${PREVIEW_MODE:-false}" != "true" ]] \
+       && [[ -n "${TF_BACKEND_S3_BUCKET}" ]] && [[ -n "${TF_BACKEND_S3_KEY_PREFIX}" ]]; then
         local plan_s3_key="${TF_BACKEND_S3_KEY_PREFIX}/plans/${chain_run_id:-$(date +%s)}-tfplan.json"
         local plan_s3_dest="s3://${TF_BACKEND_S3_BUCKET}/${plan_s3_key}"
         log_info "Uploading plan JSON to ${plan_s3_dest}"
@@ -430,7 +568,7 @@ prepare_terraform_plan() {
     local state_json_file
     state_json_file="$(pwd)/tfstate-before-plan.json"
     set +e
-    terraform show -json > "${state_json_file}" 2>/dev/null
+    ${tf_env[@]+"${tf_env[@]}"} terraform show -json > "${state_json_file}" 2>/dev/null
     local state_export_exit=$?
     set -e
 
@@ -442,6 +580,7 @@ prepare_terraform_plan() {
         TF_STATE_JSON_FILE="${state_json_file}"
     fi
 
+    [[ -n "${preview_override}" ]] && rm -f "${preview_override}"
     popd > /dev/null
     return 0
 }

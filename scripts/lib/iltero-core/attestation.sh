@@ -32,8 +32,12 @@ PROVENANCE_EVAL_FLAGS=()
 # Single decision point for whether provenance attestation is active this run.
 # Returns 0 when enabled, 1 otherwise. Callers stay uniform by branching on this
 # rather than reading ILTERO_ATTEST directly.
+#
+# Preview always disables attestation: a preview plan is advisory and must never
+# enter the evidence/provenance chain, even when it ran credentialed (same-repo
+# PR, where TF_PLAN_MODE would otherwise be "full").
 attestation_enabled() {
-    [[ "${ILTERO_ATTEST:-false}" == "true" ]]
+    [[ "${PREVIEW_MODE:-false}" != "true" ]] && [[ "${ILTERO_ATTEST:-false}" == "true" ]]
 }
 
 # compute_plan_digest

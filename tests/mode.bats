@@ -41,6 +41,9 @@ MOCK
 
     mkdir -p "${TEST_TEMP}/unit"
     touch "${TEST_TEMP}/unit/main.tf"
+    # A provider block so the credential-less preview path (no creds) can detect
+    # the cloud and produce a plan.
+    printf 'provider "aws" {}\n' > "${TEST_TEMP}/unit/providers.tf"
 }
 
 # =============================================================================

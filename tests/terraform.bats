@@ -508,3 +508,140 @@ _unset_cloud_cred_env() {
 
     unset AZURE_CLIENT_ID
 }
+
+# -----------------------------------------------------------------------------
+# Credential-less preview path (A′): PREVIEW_MODE + no creds -> real plan with
+# no backend, mock creds, provider skip-flags via an override, assume-role
+# dropped. Never provenance-bound; mock creds must not leak to the env.
+# -----------------------------------------------------------------------------
+
+# Fake terraform that also records the AWS_ACCESS_KEY_ID it ran with and whether
+# the preview override file was present at plan time.
+_mock_terraform_preview() {
+    local mock="${TEST_TEMP}/terraform"
+    cat > "${mock}" <<EOF
+#!/bin/bash
+echo "terraform \$*" >> "${TEST_TEMP}/tf.log"
+echo "\${AWS_ACCESS_KEY_ID:-<unset>}" >> "${TEST_TEMP}/tf.creds.log"
+case "\$1" in
+    plan)
+        [[ -f zzz_iltero_preview_override.tf ]] && echo present >> "${TEST_TEMP}/tf.override.log"
+        echo "{}" > tfplan
+        exit 0
+        ;;
+    show)
+        if [[ "\$2" == "-json" && "\$3" == "tfplan" ]]; then echo '{"format_version":"1.0"}'
+        elif [[ "\$2" == "-json" ]]; then echo '{"format_version":"1.0","values":{}}'; fi
+        exit 0 ;;
+esac
+exit 0
+EOF
+    chmod +x "${mock}"
+    export PATH="${TEST_TEMP}:${PATH}"
+}
+
+@test "prepare_terraform_plan (preview, no creds) runs credential-less" {
+    _unset_cloud_cred_env
+    export PREVIEW_MODE="true"
+    export MOCK_BACKEND_HCL="${TEST_TEMP}/backend.hcl"  # would drive -backend-config
+    printf 'provider "aws" {}\n' > "${UNIT_DIR}/providers.tf"
+    _mock_terraform_preview
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}"
+
+    [[ "${TF_PLAN_MODE}" == "preview" ]]
+    [[ -z "${TF_PLAN_DIGEST}" ]]
+    # init used -backend=false, never the backend-config
+    grep -q -- "-backend=false" "${TEST_TEMP}/tf.log"
+    ! grep -q -- "-backend-config" "${TEST_TEMP}/tf.log"
+    # plan skipped refresh and dropped the assume-role block
+    grep -q -- "-refresh=false" "${TEST_TEMP}/tf.log"
+    grep -q -- "assume_role_arn=" "${TEST_TEMP}/tf.log"
+    # remote-state deps disabled too
+    grep -q -- "enable_remote_state_dependencies=false" "${TEST_TEMP}/tf.log"
+    # the override was present while planning, and removed afterwards
+    grep -q present "${TEST_TEMP}/tf.override.log"
+    [[ ! -f "${UNIT_DIR}/zzz_iltero_preview_override.tf" ]]
+
+    unset PREVIEW_MODE MOCK_BACKEND_HCL
+}
+
+@test "prepare_terraform_plan (preview) does not leak mock creds to the env" {
+    _unset_cloud_cred_env
+    export PREVIEW_MODE="true"
+    printf 'provider "aws" {}\n' > "${UNIT_DIR}/providers.tf"
+    _mock_terraform_preview
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}"
+
+    # terraform saw the mock key...
+    grep -q "iltero-preview-mock" "${TEST_TEMP}/tf.creds.log"
+    # ...but it never leaked into the calling shell
+    [[ -z "${AWS_ACCESS_KEY_ID:-}" ]]
+    run cloud_credentials_present
+    assert_exit_code 1
+
+    unset PREVIEW_MODE
+}
+
+@test "prepare_terraform_plan (preview) removes the override even when plan fails" {
+    _unset_cloud_cred_env
+    export PREVIEW_MODE="true"
+    printf 'provider "aws" {}\n' > "${UNIT_DIR}/providers.tf"
+    _mock_terraform 0 1 false  # plan fails, writes no tfplan
+
+    run prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}"
+    assert_exit_code 2
+    [[ ! -f "${UNIT_DIR}/zzz_iltero_preview_override.tf" ]]
+
+    unset PREVIEW_MODE
+}
+
+@test "prepare_terraform_plan (preview) fails for a provider with no adapter" {
+    _unset_cloud_cred_env
+    export PREVIEW_MODE="true"
+    # A cloud without a credential-less adapter: must not emit another cloud's
+    # flags — it returns 2 (before terraform runs) and leaves no override.
+    printf 'provider "google" {}\n' > "${UNIT_DIR}/providers.tf"
+    _mock_terraform 0 0 true
+
+    run prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}"
+    assert_exit_code 2
+    [[ ! -f "${UNIT_DIR}/zzz_iltero_preview_override.tf" ]]
+    # terraform was never invoked (no plan attempted for an unsupported cloud)
+    [[ ! -f "${TEST_TEMP}/tf.log" ]]
+
+    unset PREVIEW_MODE
+}
+
+@test "prepare_terraform_plan (preview WITH creds) stays on the credentialed path" {
+    _unset_cloud_cred_env
+    export PREVIEW_MODE="true"
+    export AWS_ACCESS_KEY_ID="real-oidc-key"
+    export MOCK_BACKEND_HCL="${TEST_TEMP}/backend.hcl"
+    _mock_terraform 0 0 true
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}"
+
+    [[ "${TF_PLAN_MODE}" != "preview" ]]
+    grep -q -- "-backend-config=${TEST_TEMP}/backend.hcl" "${TEST_TEMP}/tf.log"
+    ! grep -q -- "assume_role_arn=" "${TEST_TEMP}/tf.log"
+    [[ ! -f "${UNIT_DIR}/zzz_iltero_preview_override.tf" ]]
+
+    unset PREVIEW_MODE AWS_ACCESS_KEY_ID MOCK_BACKEND_HCL
+}
+
+@test "prepare_terraform_plan (no preview, no creds) does not go credential-less" {
+    _unset_cloud_cred_env
+    unset PREVIEW_MODE
+    export MOCK_BACKEND_HCL="${TEST_TEMP}/backend.hcl"
+    _mock_terraform 0 0 true
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}"
+
+    [[ "${TF_PLAN_MODE}" != "preview" ]]
+    ! grep -q -- "-backend=false" "${TEST_TEMP}/tf.log"
+    [[ ! -f "${UNIT_DIR}/zzz_iltero_preview_override.tf" ]]
+
+    unset MOCK_BACKEND_HCL
+}

@@ -90,9 +90,9 @@ teardown() {
 @test "check_env_config clears vars when files don't exist" {
     local unit_dir="${TEST_TEMP}/unit-no-config"
     mkdir -p "$unit_dir"
-    
+
     check_env_config "$unit_dir" "staging"
-    
+
     [[ -z "$TFVARS_FILE" ]]
     [[ -z "$BACKEND_HCL" ]]
 }
