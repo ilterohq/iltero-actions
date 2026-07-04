@@ -17,7 +17,6 @@
 #   registry.sh      - Private module registry config
 #   github.sh        - GitHub Actions helpers + rich summaries
 #   polling.sh       - Async scan polling with timeout
-#   aggregation.sh   - Multi-unit result aggregation
 #   runtime.sh       - Runtime/drift scanning
 #   results.sh       - Per-stack result accumulation
 #   ci-credential.sh - CI credential resolution (deploy-time)
@@ -60,7 +59,6 @@ source "${ILTERO_CORE_DIR}/authorization.sh"
 source "${ILTERO_CORE_DIR}/registry.sh"
 source "${ILTERO_CORE_DIR}/github.sh"
 source "${ILTERO_CORE_DIR}/polling.sh"
-source "${ILTERO_CORE_DIR}/aggregation.sh"
 source "${ILTERO_CORE_DIR}/runtime.sh"
 source "${ILTERO_CORE_DIR}/results.sh"
 source "${ILTERO_CORE_DIR}/ci-credential.sh"
