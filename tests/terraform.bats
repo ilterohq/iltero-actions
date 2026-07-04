@@ -510,9 +510,13 @@ _unset_cloud_cred_env() {
 }
 
 # -----------------------------------------------------------------------------
-# Credential-less preview path (A′): PREVIEW_MODE + no creds -> real plan with
-# no backend, mock creds, provider skip-flags via an override, assume-role
-# dropped. Never provenance-bound; mock creds must not leak to the env.
+# Credential-less preview path (A′): PREVIEW_MODE + no creds -> real plan with a
+# local-backend override, mock creds, provider skip-flags + empty assume_role,
+# assume-role dropped. Never provenance-bound; mock creds must not leak to the
+# env. terraform is mocked here, so these tests assert the override CONTENT and
+# CLI flags only; real override-merge semantics (local backend replaces s3,
+# empty assume_role drops the unit's role) are validated against real Terraform
+# out-of-band.
 # -----------------------------------------------------------------------------
 
 # Fake terraform that also records the AWS_ACCESS_KEY_ID it ran with and whether
@@ -566,10 +570,12 @@ EOF
     # the override was present while planning, and removed afterwards
     grep -q present "${TEST_TEMP}/tf.override.log"
     [[ ! -f "${UNIT_DIR}/zzz_iltero_preview_override.tf" ]]
-    # the override supplied a local backend (replacing the real s3 backend) plus
-    # the provider skip flags, so init/plan need no credentials
+    # the override supplied a local backend (replacing the real s3 backend), the
+    # provider skip flags, and an empty assume_role{} that drops any role the
+    # unit would assume, so init/plan need no credentials and make no STS call
     grep -q 'backend "local"' "${TEST_TEMP}/tf.override.content"
     grep -q "skip_credentials_validation" "${TEST_TEMP}/tf.override.content"
+    grep -q "assume_role {}" "${TEST_TEMP}/tf.override.content"
 
     unset PREVIEW_MODE MOCK_BACKEND_HCL
 }
