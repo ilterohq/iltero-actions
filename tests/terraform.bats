@@ -525,7 +525,10 @@ echo "terraform \$*" >> "${TEST_TEMP}/tf.log"
 echo "\${AWS_ACCESS_KEY_ID:-<unset>}" >> "${TEST_TEMP}/tf.creds.log"
 case "\$1" in
     plan)
-        [[ -f zzz_iltero_preview_override.tf ]] && echo present >> "${TEST_TEMP}/tf.override.log"
+        if [[ -f zzz_iltero_preview_override.tf ]]; then
+            echo present >> "${TEST_TEMP}/tf.override.log"
+            cp zzz_iltero_preview_override.tf "${TEST_TEMP}/tf.override.content"
+        fi
         echo "{}" > tfplan
         exit 0
         ;;
@@ -551,8 +554,9 @@ EOF
 
     [[ "${TF_PLAN_MODE}" == "preview" ]]
     [[ -z "${TF_PLAN_DIGEST}" ]]
-    # init used -backend=false, never the backend-config
-    grep -q -- "-backend=false" "${TEST_TEMP}/tf.log"
+    # init ran with no -backend=false and no real backend-config: the preview
+    # override supplies a local backend instead.
+    ! grep -q -- "-backend=false" "${TEST_TEMP}/tf.log"
     ! grep -q -- "-backend-config" "${TEST_TEMP}/tf.log"
     # plan skipped refresh and dropped the assume-role block
     grep -q -- "-refresh=false" "${TEST_TEMP}/tf.log"
@@ -562,6 +566,10 @@ EOF
     # the override was present while planning, and removed afterwards
     grep -q present "${TEST_TEMP}/tf.override.log"
     [[ ! -f "${UNIT_DIR}/zzz_iltero_preview_override.tf" ]]
+    # the override supplied a local backend (replacing the real s3 backend) plus
+    # the provider skip flags, so init/plan need no credentials
+    grep -q 'backend "local"' "${TEST_TEMP}/tf.override.content"
+    grep -q "skip_credentials_validation" "${TEST_TEMP}/tf.override.content"
 
     unset PREVIEW_MODE MOCK_BACKEND_HCL
 }

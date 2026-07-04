@@ -118,6 +118,17 @@ configure_preview_credentials() {
     local override="${dir}/zzz_iltero_preview_override.tf"
     : > "${override}"
 
+    # Replace the unit's real backend (e.g. s3) with a local backend so
+    # `terraform init` needs no cloud credentials and plan runs against empty
+    # state. An override-file backend block always supersedes the base backend
+    # block (and may change its type); terraform-block settings otherwise merge
+    # individually, so required_version/required_providers are preserved.
+    cat >> "${override}" <<'BACKEND_PREVIEW_OVERRIDE'
+terraform {
+  backend "local" {}
+}
+BACKEND_PREVIEW_OVERRIDE
+
     local provider unadapted=""
     while IFS= read -r provider; do
         [[ -z "${provider}" ]] && continue
@@ -343,7 +354,8 @@ prepare_terraform_plan() {
     fi
 
     # Credential-less preview: no-creds PR preview runs a real plan (so OPA sees
-    # plan JSON) without a backend. Gated on PREVIEW_MODE (deploy path untouched)
+    # plan JSON) with a local-backend override in place of the real backend.
+    # Gated on PREVIEW_MODE (deploy path untouched)
     # AND creds-absent (a same-repo preview with OIDC creds keeps the real
     # backend; the PREVIEW_MODE evidence guards keep it out of the chain).
     # Evaluate once, before any env is mocked (cloud_credentials_present keys on
@@ -409,10 +421,10 @@ prepare_terraform_plan() {
     log_info "Resolved: BACKEND_HCL=${BACKEND_HCL:-<empty>} TFVARS_FILE=${TFVARS_FILE:-<empty>}"
 
     local init_args=(-input=false)
-    if [[ "${credentialless}" == "true" ]]; then
-        # No backend: preview never reads or writes remote state.
-        init_args+=(-backend=false)
-    elif [[ -n "${BACKEND_HCL}" ]]; then
+    # Credential-less preview substitutes a local backend via the preview
+    # override (see configure_preview_credentials), so init needs no backend
+    # config and no credentials. Normal path keeps the unit's real s3 backend.
+    if [[ "${credentialless}" != "true" ]] && [[ -n "${BACKEND_HCL}" ]]; then
         init_args+=(-backend-config="${BACKEND_HCL}")
     fi
 
