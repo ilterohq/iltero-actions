@@ -370,7 +370,13 @@ process_unit() {
 
             local eval_passed="true"
             if [[ ${eval_exit} -ne 0 ]]; then
-                if [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
+                if [[ "${EVAL_STATUS:-}" == "needs_review" ]]; then
+                    # Nothing to evaluate (resource-less plan / nothing evaluated).
+                    # Always blocks: an un-evaluated unit must never pass the gate.
+                    EVALUATION_FAILED=true
+                    FAILED_UNITS["${unit_name}"]="needs_review"
+                    log_warning "Unit ${unit_name} needs review — nothing was evaluated"
+                elif [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
                     if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
                         EVALUATION_FAILED=true
                     else
@@ -752,7 +758,12 @@ process_brownfield_unit() {
 
             local eval_passed="true"
             if [[ ${eval_exit} -ne 0 ]]; then
-                if [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
+                if [[ "${EVAL_STATUS:-}" == "needs_review" ]]; then
+                    # Nothing to evaluate — always blocks (never an implicit pass).
+                    EVALUATION_FAILED=true
+                    FAILED_UNITS["${unit_name}"]="needs_review"
+                    log_warning "Unit ${unit_name} needs review — nothing was evaluated"
+                elif [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
                     if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
                         EVALUATION_FAILED=true
                     else

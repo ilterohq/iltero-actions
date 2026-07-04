@@ -42,6 +42,28 @@ TF_BACKEND_S3_REGION=""
 TF_PLAN_DIGEST=""
 TF_CANON_VERSION=""
 TF_PLAN_BINARY_URL=""
+# Plan shape, derived from tfplan.json after `terraform show -json`:
+#   TF_PLAN_HAS_RESOURCES  "true" if the plan changes >=1 resource.
+#   TF_PLAN_HAS_CHECKS     "true" if the plan carries any native check{} block.
+# A plan that changes no resources produces a tfplan.json with no
+# resource_changes; the evaluator has nothing to score, so callers gate on this.
+TF_PLAN_HAS_RESOURCES=""
+TF_PLAN_HAS_CHECKS=""
+
+# plan_has_resources <plan.json>
+# Succeeds (0) if the plan changes at least one resource. terraform omits
+# resource_changes entirely for a no-op plan, so read it through `// []`.
+plan_has_resources() {
+    jq -e '((.resource_changes // []) | length) > 0' "$1" >/dev/null 2>&1
+}
+
+# plan_has_checks <plan.json>
+# Succeeds (0) if the plan carries at least one native check{} block. Counts
+# only address.kind == "check" (the check{} compliance-control blocks), not
+# variable-validation or resource-condition results.
+plan_has_checks() {
+    jq -e '([ (.checks // [])[] | select(.address.kind == "check") ] | length) > 0' "$1" >/dev/null 2>&1
+}
 
 # Set by configure_preview_credentials(). PREVIEW_SUPPORTED is true only when
 # every provider the unit declares has an adapter.
@@ -352,6 +374,8 @@ prepare_terraform_plan() {
     TF_PLAN_DIGEST=""
     TF_CANON_VERSION=""
     TF_PLAN_BINARY_URL=""
+    TF_PLAN_HAS_RESOURCES=""
+    TF_PLAN_HAS_CHECKS=""
 
     if [[ -z "${eval_path}" || ! -d "${eval_path}" ]]; then
         log_error "prepare_terraform_plan: invalid eval_path '${eval_path}'"
@@ -533,6 +557,18 @@ prepare_terraform_plan() {
     # Convert plan to JSON for downstream consumers
     ${tf_env[@]+"${tf_env[@]}"} terraform show -json tfplan > tfplan.json 2>/dev/null
     TF_PLAN_JSON_FILE="$(pwd)/tfplan.json"
+
+    # Derive plan shape for the evaluator's resource-less gate.
+    if plan_has_resources "${TF_PLAN_JSON_FILE}"; then
+        TF_PLAN_HAS_RESOURCES="true"
+    else
+        TF_PLAN_HAS_RESOURCES="false"
+    fi
+    if plan_has_checks "${TF_PLAN_JSON_FILE}"; then
+        TF_PLAN_HAS_CHECKS="true"
+    else
+        TF_PLAN_HAS_CHECKS="false"
+    fi
 
     # Provenance: capture the canonical digest of the evaluated plan via the
     # CLI (which owns canonicalization). No-op unless ILTERO_ATTEST=true, and
