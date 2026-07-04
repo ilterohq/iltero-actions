@@ -95,10 +95,11 @@ detect_terraform_providers() {
 # configure_preview_credentials
 # Cloud-agnostic dispatch for planning a unit with NO cloud credentials (PR
 # preview). Per declared provider, an adapter appends its credential-skip block
-# to a runner-owned override, adds mock cred env, and adds the -var that drops
-# role assumption. Add a cloud by adding a case arm. The override name is
-# lexically last so a committed *_override.tf can't shadow it. PREVIEW_SUPPORTED
-# is true only if every declared provider has an adapter (else preview fails).
+# to a runner-owned override, adds mock cred env, and neutralizes role
+# assumption via an empty assume_role block. Add a cloud by adding a case arm.
+# The override is prefixed to sort after a unit's own *_override.tf files.
+# PREVIEW_SUPPORTED is true only if every declared provider has an adapter (else
+# preview fails).
 # Args: $1 = unit directory
 # Sets: PREVIEW_SUPPORTED, PREVIEW_OVERRIDE_FILE, PREVIEW_CRED_ENV, PREVIEW_PLAN_VARS
 configure_preview_credentials() {
@@ -134,13 +135,17 @@ BACKEND_PREVIEW_OVERRIDE
         [[ -z "${provider}" ]] && continue
         case "${provider}" in
             aws)
-                # Skips + mock static creds + IMDS off + -refresh=false + empty
-                # assume_role_arn (drops assume_role) => plan with no STS/IMDS call.
+                # Skips + mock static creds + IMDS off + -refresh=false + an
+                # empty assume_role{} (an override nested block replaces the
+                # unit's own assume_role, so no role is assumed) => plan with no
+                # STS/IMDS call. The empty block is a no-op for units that
+                # declare no assume_role.
                 cat >> "${override}" <<'AWS_PREVIEW_OVERRIDE'
 provider "aws" {
   skip_credentials_validation = true
   skip_requesting_account_id  = true
   skip_metadata_api_check     = true
+  assume_role {}
 }
 AWS_PREVIEW_OVERRIDE
                 PREVIEW_CRED_ENV+=(

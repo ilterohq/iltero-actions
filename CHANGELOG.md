@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-07-04
+
+### Fixed
+
+- Credential-less PR preview now drops IAM role assumption so `terraform plan`
+  runs with no cloud credentials. Units whose `provider "aws"` sets a fixed
+  `assume_role { role_arn = "..." }` previously failed preview with an STS
+  "Cannot assume IAM Role" error, because the mock preview credentials cannot
+  assume a real role. The provider override now includes an empty
+  `assume_role {}`, which replaces the unit's block so no role is assumed and no
+  STS call is made.
+
 ## [0.1.2] - 2026-07-04
 
 ### Fixed
