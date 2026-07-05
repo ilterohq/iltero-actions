@@ -18,6 +18,7 @@
 #   github.sh        - GitHub Actions helpers + rich summaries
 #   runtime.sh       - Runtime/drift scanning
 #   results.sh       - Per-stack result accumulation
+#   reporting.sh     - PR findings + downloadable artifact assembly
 #   ci-credential.sh - CI credential resolution (deploy-time)
 #   terraform.sh     - Shared terraform init+plan+state-export pipeline
 #   attestation.sh   - Plan-to-apply provenance attestation (opt-in)
@@ -59,6 +60,7 @@ source "${ILTERO_CORE_DIR}/registry.sh"
 source "${ILTERO_CORE_DIR}/github.sh"
 source "${ILTERO_CORE_DIR}/runtime.sh"
 source "${ILTERO_CORE_DIR}/results.sh"
+source "${ILTERO_CORE_DIR}/reporting.sh"
 source "${ILTERO_CORE_DIR}/ci-credential.sh"
 source "${ILTERO_CORE_DIR}/terraform.sh"
 

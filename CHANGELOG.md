@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-07-05
+
+### Fixed
+
+- The advisory pull-request comment reported only violation counts, so users
+  could not tell what failed or why. It now lists the actual findings: each one
+  shows its severity, the control it maps to (e.g. a SOC 2 requirement and the
+  underlying CIS AWS control), a plain-language detail, and — for static
+  findings — the file, line, and a link to remediation docs. Findings are split
+  into **blocking** (at or above the environment's fail-on severity, plus any
+  failed native Terraform `check{}` control, which previously did not appear at
+  all) and **below threshold** (shown for awareness), and the comment names the
+  active threshold so a passing "N violations" count is no longer ambiguous.
+  Per-unit detail is collapsible so the comment stays readable from zero
+  findings up to many.
+- Scan results were not downloadable. Every run now uploads a **scan results**
+  artifact with the full, sanitized findings for all units (runner-absolute
+  paths stripped, raw Terraform plan excluded).
+
 ## [0.1.4] - 2026-07-04
 
 ### Fixed
