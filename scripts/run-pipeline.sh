@@ -114,6 +114,7 @@ UNIT_FILTER=""
 ENVIRONMENT="${ENVIRONMENT_OVERRIDE:-}"
 GLOBAL_RUN_ID="${RUN_ID:-}"
 GLOBAL_SCAN_ID="${SCAN_ID:-}"  # Scan ID from policy resolution (required for apply phase)
+GLOBAL_SEVERITY_THRESHOLD=""   # fail-on threshold used this run (from env config); surfaced to the PR comment
 VERIFY_AUTHORIZATION="${VERIFY_AUTHORIZATION:-true}"
 DEBUG="${DEBUG:-false}"
 
@@ -584,6 +585,7 @@ process_stack() {
     local scan_types severity_threshold require_approval frameworks_csv
     scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "${config_file}" -o json)
     severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "${config_file}")
+    GLOBAL_SEVERITY_THRESHOLD="${severity_threshold}"
     require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "${config_file}")
     BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "${config_file}")
     frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "${config_file}" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
@@ -941,6 +943,7 @@ process_brownfield_stack() {
     local scan_types severity_threshold require_approval frameworks_csv
     scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "${config_file}" -o json)
     severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "${config_file}")
+    GLOBAL_SEVERITY_THRESHOLD="${severity_threshold}"
     require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "${config_file}")
     BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "${config_file}")
     frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "${config_file}" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
@@ -1132,6 +1135,19 @@ main() {
     local all_unit_results
     all_unit_results=$(get_all_results)
     set_output "unit_results" "$(echo "${all_unit_results}" | jq -c .)"
+
+    # Surface the fail-on threshold (from env config) so the PR comment can
+    # name it and split findings into blocking vs below-threshold.
+    local effective_threshold="${GLOBAL_SEVERITY_THRESHOLD:-high}"
+    set_output "severity_threshold" "${effective_threshold}"
+
+    # Build the sanitized downloadable artifact tree and the bounded findings
+    # file the PR comment reads directly. Both are additive and failure-soft
+    # (they never touch unit_results or the pipeline exit code).
+    local report_dir
+    report_dir="$(pwd)/.iltero/report"
+    assemble_report_artifact "${report_dir}" "${ENVIRONMENT:-unknown}" "${effective_threshold}"
+    build_pr_findings "${report_dir}" "${effective_threshold}" 50
 
     # Count violations across all units for reporting
     local total_scan_violations total_eval_violations
