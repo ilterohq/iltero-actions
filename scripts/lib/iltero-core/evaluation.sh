@@ -319,9 +319,6 @@ run_plan_evaluation() {
     #                              -> needs_review (never a pass, not an error)
     #   exit 1                  -> OPA and/or native check{} failure(s) -> waivable
     #   exit 2/4/5              -> genuine scanner/config/input error -> infra_error
-    # A failed native check carries no CVSS severity, so it is absent from the
-    # severity-derived EVAL_VIOLATIONS; fold the native fail count in so a
-    # native-only failure is a waivable violation rather than an infra error.
     local evaluated_total="${total_evaluated:-0}"
     local native_failed
     native_failed=$(jq -r '[.native_checks[]? | select(.status == "fail")] | length' "${results_file}" 2>/dev/null || echo "0")
