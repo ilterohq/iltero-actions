@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs-review, and only a genuine scanner/config/input error is an
   infrastructure error.
 
+### Removed
+
+- Unused `aggregation.sh` and `polling.sh` modules (dead code that invoked CLI
+  subcommands that do not exist; never run by the pipeline).
+
 ## [0.1.3] - 2026-07-04
 
 ### Fixed
