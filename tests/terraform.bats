@@ -659,3 +659,44 @@ EOF
 
     unset MOCK_BACKEND_HCL
 }
+
+# -----------------------------------------------------------------------------
+# plan_has_resources / plan_has_checks — plan-shape discriminators used by the
+# evaluator's resource-less gate.
+# -----------------------------------------------------------------------------
+
+@test "plan_has_resources: true when the plan changes a resource" {
+    echo '{"resource_changes":[{"address":"aws_vpc.x","change":{"actions":["create"]}}]}' > "${TEST_TEMP}/p.json"
+    run plan_has_resources "${TEST_TEMP}/p.json"
+    assert_exit_code 0
+}
+
+@test "plan_has_resources: false for an empty resource_changes array" {
+    echo '{"resource_changes":[]}' > "${TEST_TEMP}/p.json"
+    run plan_has_resources "${TEST_TEMP}/p.json"
+    [[ "${status}" -ne 0 ]]
+}
+
+@test "plan_has_resources: false when resource_changes key is absent (no-op plan)" {
+    echo '{"format_version":"1.2","terraform_version":"1.14.0"}' > "${TEST_TEMP}/p.json"
+    run plan_has_resources "${TEST_TEMP}/p.json"
+    [[ "${status}" -ne 0 ]]
+}
+
+@test "plan_has_checks: true for a check{} block, ignoring var/resource conditions" {
+    echo '{"checks":[{"address":{"kind":"check","name":"c"},"status":"pass"},{"address":{"kind":"var","name":"v"},"status":"pass"}]}' > "${TEST_TEMP}/p.json"
+    run plan_has_checks "${TEST_TEMP}/p.json"
+    assert_exit_code 0
+}
+
+@test "plan_has_checks: false when only non-check conditions are present" {
+    echo '{"checks":[{"address":{"kind":"resource","name":"r"},"status":"pass"}]}' > "${TEST_TEMP}/p.json"
+    run plan_has_checks "${TEST_TEMP}/p.json"
+    [[ "${status}" -ne 0 ]]
+}
+
+@test "plan_has_checks: false when checks key is absent" {
+    echo '{"resource_changes":[]}' > "${TEST_TEMP}/p.json"
+    run plan_has_checks "${TEST_TEMP}/p.json"
+    [[ "${status}" -ne 0 ]]
+}

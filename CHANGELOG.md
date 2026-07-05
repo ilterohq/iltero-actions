@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-07-04
+
+### Fixed
+
+- A plan that changes no resources and defines no checks is now reported as
+  **needs-review** with an actionable message (enable or add resources, then
+  re-run) instead of a confusing "invalid plan" error, and the evaluator is not
+  run for it — so no result is recorded for a unit with nothing to evaluate. A
+  resource-less plan that still defines control checks is passed through to the
+  evaluator rather than short-circuited.
+- Plan evaluation now records a pass only when the evaluator produced results
+  and evaluated at least one policy. A zero exit with nothing evaluated (missing
+  results or an empty policy set) is treated as needs-review, never a pass.
+- Evaluation verdicts are derived from the evaluator's exit code and confirmed-
+  check count: a failing native Terraform `check{}` control now counts as a
+  (waivable) violation even though it has no severity, an all-unknown result is
+  needs-review, and only a genuine scanner/config/input error is an
+  infrastructure error.
+
 ## [0.1.3] - 2026-07-04
 
 ### Fixed

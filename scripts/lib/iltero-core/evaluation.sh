@@ -21,9 +21,19 @@
 #   EXIT_ERROR (2)      - Evaluation failed (Terraform error, API error, etc.)
 #
 # Exports after run_plan_evaluation():
-#   EVAL_RUN_ID, EVAL_SCAN_ID, EVAL_PASSED, EVAL_VIOLATIONS, EVAL_EXIT_CODE,
-#   APPROVAL_ID, PLAN_JSON_FILE, PLAN_URL, EVAL_MODE,
+#   EVAL_RUN_ID, EVAL_SCAN_ID, EVAL_PASSED, EVAL_STATUS, EVAL_VIOLATIONS,
+#   EVAL_EXIT_CODE, APPROVAL_ID, PLAN_JSON_FILE, PLAN_URL, EVAL_MODE,
 #   EVAL_PLAN_DIGEST, EVAL_CANON_VERSION  (provenance; "" when disabled)
+#
+# EVAL_STATUS values (derived from the evaluator's exit code + confirmed-check
+# count; see the CLI->runner contract):
+#   "pass"         - Evaluated >=1 check, none failing above threshold (exit 0)
+#   "violations"   - OPA policy and/or native check{} failures (exit 1, count>0);
+#                    waivable via block_on_violations
+#   "needs_review" - Nothing confirmable: resource-less+check-less plan, all-
+#                    unknown checks (exit 1, count 0), or exit 0 with no results
+#                    — never treated as a pass, always blocks
+#   "infra_error"  - Scanner/config/input or terraform error (exit 2/4/5)
 #
 # EVAL_MODE values:
 #   "full"        - Full evaluation with backend (remote state available)
@@ -59,6 +69,12 @@ run_plan_evaluation() {
     EVAL_PASSED="false"
     EVAL_VIOLATIONS="0"
     EVAL_EXIT_CODE=0
+    # EVAL_STATUS: pass | violations | needs_review | infra_error. A superset of
+    # EVAL_PASSED (pass <=> EVAL_PASSED=true) that lets the pipeline distinguish
+    # "nothing to evaluate" (needs_review) from policy violations or infra errors.
+    # Defaults to infra_error so any early return that doesn't set it fails closed
+    # as an error rather than as a pass.
+    EVAL_STATUS="infra_error"
     APPROVAL_ID=""
     PLAN_JSON_FILE=""
     PLAN_URL=""
@@ -108,6 +124,36 @@ run_plan_evaluation() {
         state_json_file="${TF_STATE_JSON_FILE}"
         plan_digest="${TF_PLAN_DIGEST}"
         canon_version="${TF_CANON_VERSION}"
+    fi
+
+    # =====================================================================
+    # Nothing-to-evaluate gate
+    # =====================================================================
+    # The evaluator scores resource changes and native check{} blocks. A plan
+    # that carries NEITHER has nothing to evaluate: mark it needs-review (never a
+    # pass) and short-circuit BEFORE the evaluator so no result is recorded. A
+    # resource-less plan that DOES carry check{} blocks still flows to the
+    # evaluator, which scores those controls. Compute from the plan JSON directly
+    # so both the generated- and existing-plan paths are covered.
+    local eval_has_resources="true"
+    local eval_has_checks="false"
+    if [[ -n "${PLAN_JSON_FILE}" ]] && [[ -f "${PLAN_JSON_FILE}" ]]; then
+        plan_has_resources "${PLAN_JSON_FILE}" || eval_has_resources="false"
+        plan_has_checks "${PLAN_JSON_FILE}" && eval_has_checks="true"
+    fi
+
+    if [[ "${eval_has_resources}" == "false" ]] && [[ "${eval_has_checks}" == "false" ]]; then
+        EVAL_STATUS="needs_review"
+        EVAL_PASSED="false"
+        EVAL_VIOLATIONS="0"
+        EVAL_EXIT_CODE=2
+        log_result "NEEDS_REVIEW" "Unit '${unit_name}' plans no resource changes and defines no checks — nothing to evaluate. If this unit should create infrastructure, enable or add resources (e.g. set the relevant enable_* flags and inputs), then re-run. Marked needs-review, not passed."
+        log_group_end
+        return "${EVAL_EXIT_CODE}"
+    fi
+
+    if [[ "${eval_has_resources}" == "false" ]]; then
+        log_info "Unit '${unit_name}' plans no resource changes; evaluating its control check(s)"
     fi
 
     # Ensure OPA policy directory exists (policies will be resolved from Iltero backend)
@@ -246,7 +292,9 @@ run_plan_evaluation() {
 
         # Structured policy results
         local total_evaluated passed_count failed_count
-        total_evaluated=$(jq -r '.summary.total // 0' "${results_file}" 2>/dev/null || echo "0")
+        # The evaluator reports the count of evaluated checks (OPA policies over
+        # resources + native check{} blocks) as summary.total_checks.
+        total_evaluated=$(jq -r '.summary.total_checks // 0' "${results_file}" 2>/dev/null || echo "0")
         passed_count=$(jq -r '.summary.passed // 0' "${results_file}" 2>/dev/null || echo "0")
         failed_count=$(jq -r '.summary.failed // 0' "${results_file}" 2>/dev/null || echo "0")
 
@@ -263,20 +311,50 @@ run_plan_evaluation() {
         log_warning "Results file not found: ${results_file}"
     fi
 
-    if [[ ${EVAL_EXIT_CODE} -eq 0 ]]; then
+    # Derive the verdict from the evaluator's exit code and the confirmed-check
+    # count (summary.total_checks counts only pass/fail; unknown is excluded),
+    # per the CLI->runner contract:
+    #   exit 0                  -> evaluated and passed (CLI invariant: total>0)
+    #   exit 1 and total == 0   -> nothing confirmable (incl. all-unknown checks)
+    #                              -> needs_review (never a pass, not an error)
+    #   exit 1                  -> OPA and/or native check{} failure(s) -> waivable
+    #   exit 2/4/5              -> genuine scanner/config/input error -> infra_error
+    local evaluated_total="${total_evaluated:-0}"
+    local native_failed
+    native_failed=$(jq -r '[.native_checks[]? | select(.status == "fail")] | length' "${results_file}" 2>/dev/null || echo "0")
+
+    if [[ ${EVAL_EXIT_CODE} -eq 0 ]] && [[ -f "${results_file}" ]] && [[ "${evaluated_total}" -gt 0 ]]; then
         EVAL_PASSED="true"
+        EVAL_STATUS="pass"
         if [[ "${EVAL_MODE}" == "best_effort" ]]; then
             log_result "PASS" "Plan evaluation passed (best-effort mode, ${EVAL_VIOLATIONS} violations)"
         else
             log_result "PASS" "Plan evaluation passed (${EVAL_VIOLATIONS} policy violations)"
         fi
-    else
+    elif [[ ${EVAL_EXIT_CODE} -eq 0 ]]; then
+        # exit 0 but no results file / nothing evaluated — belt-and-suspenders
+        # (the CLI's invariant is that exit 0 implies total_checks > 0).
         EVAL_PASSED="false"
-        if [[ "${EVAL_VIOLATIONS}" -gt 0 ]]; then
-            log_result "FAIL" "${EVAL_VIOLATIONS} policy violations at or above '${fail_on}' threshold"
-        else
-            log_result "FAIL" "Plan evaluation failed for ${unit_name} (exit code: ${EVAL_EXIT_CODE})"
-        fi
+        EVAL_STATUS="needs_review"
+        EVAL_EXIT_CODE=2
+        log_result "NEEDS_REVIEW" "Evaluation exited 0 but nothing was evaluated for ${unit_name} (no results or empty policy set); marked needs-review, not passed."
+    elif [[ ${EVAL_EXIT_CODE} -eq 1 ]] && [[ "${evaluated_total}" -eq 0 ]]; then
+        # Compliance verdict, not an error: nothing could be confirmed at plan
+        # time (e.g. every native check is unknown until apply).
+        EVAL_PASSED="false"
+        EVAL_STATUS="needs_review"
+        log_result "NEEDS_REVIEW" "Nothing could be evaluated for ${unit_name} (no confirmable policy or check result); marked needs-review, not passed."
+    elif [[ ${EVAL_EXIT_CODE} -eq 1 ]]; then
+        # Compliance failure: OPA policy violations and/or native check failures.
+        EVAL_PASSED="false"
+        EVAL_STATUS="violations"
+        EVAL_VIOLATIONS=$((EVAL_VIOLATIONS + native_failed))
+        log_result "FAIL" "${EVAL_VIOLATIONS} violation(s) at or above '${fail_on}' threshold (incl. ${native_failed} failing control check(s))"
+    else
+        # exit 2/4/5 — genuine scanner/config/input error, not a compliance verdict.
+        EVAL_PASSED="false"
+        EVAL_STATUS="infra_error"
+        log_result "FAIL" "Plan evaluation failed for ${unit_name} (exit code: ${EVAL_EXIT_CODE})"
     fi
 
     if [[ -n "${APPROVAL_ID}" ]]; then
