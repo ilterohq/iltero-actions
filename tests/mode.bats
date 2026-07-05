@@ -356,3 +356,85 @@ MOCK
     [[ "${EVAL_STATUS}" == "pass" ]]
     [[ "${EVAL_PASSED}" == "true" ]]
 }
+
+# -----------------------------------------------------------------------------
+# Verdict derivation from CLI exit code + total_checks + native fails
+# (CLI->runner contract)
+# -----------------------------------------------------------------------------
+
+# Writes an iltero mock that records args, writes <results-json> to --output-file,
+# and exits <code>. Also creates the unit dir with a provider block.
+_setup_cli_mock_exit() {
+    local code="$1" results="$2"
+    export STACKS_CONFIG=".iltero/stacks"
+    export ILTERO_STACK_NAME="test-stack"
+    export ILTERO_MOCK_RESULTS="${results}"
+    export ILTERO_MOCK_EXIT="${code}"
+    cat > "${TEST_TEMP}/iltero" << 'MOCK'
+#!/bin/bash
+echo "$@" > "${TEST_TEMP}/cli_args"
+of=""; prev=""
+for a in "$@"; do [[ "${prev}" == "--output-file" ]] && of="${a}"; prev="${a}"; done
+[[ -n "${of}" ]] && printf '%s' "${ILTERO_MOCK_RESULTS}" > "${of}"
+echo '{}'
+exit "${ILTERO_MOCK_EXIT}"
+MOCK
+    chmod +x "${TEST_TEMP}/iltero"
+    export PATH="${TEST_TEMP}:${PATH}"
+    mkdir -p "${TEST_TEMP}/unit"
+    touch "${TEST_TEMP}/unit/main.tf"
+    printf 'provider "aws" {}\n' > "${TEST_TEMP}/unit/providers.tf"
+}
+
+_mock_tf_with_resource() {
+    cat > "${TEST_TEMP}/terraform" << 'MOCK'
+#!/bin/bash
+case "${1}" in
+    init) exit 0 ;;
+    plan) touch "${PWD}/tfplan"; exit 0 ;;
+    show) echo '{"resource_changes":[{"address":"aws_s3_bucket.x","mode":"managed","change":{"actions":["create"]}}]}'; exit 0 ;;
+    *) exit 0 ;;
+esac
+MOCK
+    chmod +x "${TEST_TEMP}/terraform"
+}
+
+@test "evaluation: native check failure (exit 1, no severity) is a waivable violation" {
+    export PREVIEW_MODE="false"
+    _setup_cli_mock_exit 1 '{"summary":{"total_checks":1,"passed":0,"failed":1,"critical":0,"high":0,"medium":0,"low":0},"native_checks":[{"name":"CIS_1_2","status":"fail","instance_statuses":["fail"]}],"run_id":"r1","scan_id":"s1"}'
+    source_iltero_core
+    _mock_tf_with_resource
+    init_remote_state_tracking "test-stack"
+
+    run_plan_evaluation "${TEST_TEMP}/unit" "stack-123" "vpc" "dev" "high" "" "" "[]" "" || true
+
+    [[ "${EVAL_STATUS}" == "violations" ]]
+    [[ "${EVAL_VIOLATIONS}" -ge 1 ]]   # native fail folded in despite 0 severity
+    [[ "${EVAL_PASSED}" == "false" ]]
+}
+
+@test "evaluation: exit 1 with zero confirmed checks (all-unknown) is needs_review" {
+    export PREVIEW_MODE="false"
+    _setup_cli_mock_exit 1 '{"summary":{"total_checks":0,"passed":0,"failed":0,"critical":0,"high":0,"medium":0,"low":0},"native_checks":[{"name":"X","status":"unknown","instance_statuses":["unknown"]}]}'
+    source_iltero_core
+    _mock_tf_with_resource
+    init_remote_state_tracking "test-stack"
+
+    run_plan_evaluation "${TEST_TEMP}/unit" "stack-123" "vpc" "dev" "high" "" "" "[]" "" || true
+
+    [[ "${EVAL_STATUS}" == "needs_review" ]]
+    [[ "${EVAL_PASSED}" == "false" ]]
+}
+
+@test "evaluation: scanner error (exit 4) is infra_error, not needs_review" {
+    export PREVIEW_MODE="false"
+    _setup_cli_mock_exit 4 '{}'
+    source_iltero_core
+    _mock_tf_with_resource
+    init_remote_state_tracking "test-stack"
+
+    run_plan_evaluation "${TEST_TEMP}/unit" "stack-123" "vpc" "dev" "high" "" "" "[]" "" || true
+
+    [[ "${EVAL_STATUS}" == "infra_error" ]]
+    [[ "${EVAL_PASSED}" == "false" ]]
+}

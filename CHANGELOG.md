@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plan evaluation now records a pass only when the evaluator produced results
   and evaluated at least one policy. A zero exit with nothing evaluated (missing
   results or an empty policy set) is treated as needs-review, never a pass.
+- Evaluation verdicts are derived from the evaluator's exit code and confirmed-
+  check count: a failing native Terraform `check{}` control now counts as a
+  (waivable) violation even though it has no severity, an all-unknown result is
+  needs-review, and only a genuine scanner/config/input error is an
+  infrastructure error.
 
 ## [0.1.3] - 2026-07-04
 

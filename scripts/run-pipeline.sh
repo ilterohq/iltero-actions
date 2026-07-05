@@ -370,26 +370,34 @@ process_unit() {
 
             local eval_passed="true"
             if [[ ${eval_exit} -ne 0 ]]; then
-                if [[ "${EVAL_STATUS:-}" == "needs_review" ]]; then
-                    # Nothing to evaluate (resource-less plan / nothing evaluated).
-                    # Always blocks: an un-evaluated unit must never pass the gate.
-                    EVALUATION_FAILED=true
-                    FAILED_UNITS["${unit_name}"]="needs_review"
-                    log_warning "Unit ${unit_name} needs review — nothing was evaluated"
-                elif [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
-                    if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                case "${EVAL_STATUS:-infra_error}" in
+                    needs_review)
+                        # Nothing to evaluate (resource-less plan / all-unknown /
+                        # nothing evaluated). Always blocks — an un-evaluated unit
+                        # must never pass the gate.
                         EVALUATION_FAILED=true
-                    else
-                        log_warning "Evaluation violations found but block_on_violations is false — continuing"
-                    fi
-                    FAILED_UNITS["${unit_name}"]="evaluation_failed"
-                    log_warning "Unit ${unit_name} has ${EVAL_VIOLATIONS} policy violations"
-                else
-                    # Infrastructure errors always block regardless of block_on_violations
-                    EVALUATION_FAILED=true
-                    FAILED_UNITS["${unit_name}"]="infra_error"
-                    log_warning "Unit ${unit_name} had infrastructure errors but no policy violations"
-                fi
+                        FAILED_UNITS["${unit_name}"]="needs_review"
+                        log_warning "Unit ${unit_name} needs review — nothing was evaluated"
+                        ;;
+                    violations)
+                        # Policy and/or native check{} failures — waivable via
+                        # block_on_violations.
+                        if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                            EVALUATION_FAILED=true
+                        else
+                            log_warning "Evaluation violations found but block_on_violations is false — continuing"
+                        fi
+                        FAILED_UNITS["${unit_name}"]="evaluation_failed"
+                        log_warning "Unit ${unit_name} has ${EVAL_VIOLATIONS} violation(s)"
+                        ;;
+                    *)
+                        # Infrastructure/tooling errors always block regardless of
+                        # block_on_violations.
+                        EVALUATION_FAILED=true
+                        FAILED_UNITS["${unit_name}"]="infra_error"
+                        log_warning "Unit ${unit_name} had an evaluation error (${EVAL_STATUS:-infra_error})"
+                        ;;
+                esac
                 eval_passed="false"
             fi
 
@@ -758,21 +766,28 @@ process_brownfield_unit() {
 
             local eval_passed="true"
             if [[ ${eval_exit} -ne 0 ]]; then
-                if [[ "${EVAL_STATUS:-}" == "needs_review" ]]; then
-                    # Nothing to evaluate — always blocks (never an implicit pass).
-                    EVALUATION_FAILED=true
-                    FAILED_UNITS["${unit_name}"]="needs_review"
-                    log_warning "Unit ${unit_name} needs review — nothing was evaluated"
-                elif [[ "${EVAL_VIOLATIONS:-0}" -gt 0 ]]; then
-                    if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                case "${EVAL_STATUS:-infra_error}" in
+                    needs_review)
+                        # Nothing to evaluate — always blocks (never an implicit pass).
                         EVALUATION_FAILED=true
-                    else
-                        log_warning "Evaluation violations found but block_on_violations is false — continuing"
-                    fi
-                else
-                    # Infrastructure errors always block regardless of block_on_violations
-                    EVALUATION_FAILED=true
-                fi
+                        FAILED_UNITS["${unit_name}"]="needs_review"
+                        log_warning "Unit ${unit_name} needs review — nothing was evaluated"
+                        ;;
+                    violations)
+                        # Policy and/or native check{} failures — waivable.
+                        if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                            EVALUATION_FAILED=true
+                        else
+                            log_warning "Evaluation violations found but block_on_violations is false — continuing"
+                        fi
+                        FAILED_UNITS["${unit_name}"]="evaluation_failed"
+                        ;;
+                    *)
+                        # Infrastructure/tooling errors always block regardless of block_on_violations
+                        EVALUATION_FAILED=true
+                        FAILED_UNITS["${unit_name}"]="infra_error"
+                        ;;
+                esac
                 eval_passed="false"
             fi
 
