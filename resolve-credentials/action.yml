@@ -54,11 +54,34 @@ inputs:
   environment:
     description: |
       Target environment key (matches an environment in your stack's config.yml).
-    required: true
+      Optional: when omitted, it is detected from the stack config.yml git_ref
+      mapping (a workspace invariant, so all matching stacks must agree).
+    required: false
+    default: ''
+
+  stacks-config:
+    description: |
+      Path to the stacks metadata directory, used for environment detection when
+      `environment` is not provided. Default: .iltero/stacks.
+    required: false
+    default: '.iltero/stacks'
+
+  role-duration-seconds:
+    description: |
+      STS session duration (seconds) for the assumed role. Default 900. Generated
+      workflows pass a larger value (e.g. 3600) to cover a multi-unit run; the
+      role's MaxSessionDuration must be at least this value.
+    required: false
+    default: '900'
 
 outputs:
+  environment:
+    description: |
+      Resolved environment key. Empty when no environment mapped to the current
+      branch and credential resolution was skipped.
+    value: ${{ steps.resolve.outputs.environment }}
   provider:
-    description: Cloud provider that was resolved (e.g. 'aws').
+    description: Cloud provider that was resolved (e.g. 'aws'). Empty when skipped.
     value: ${{ steps.resolve.outputs.provider }}
   role-arn:
     description: AWS IAM role ARN (when provider=aws).
@@ -80,6 +103,7 @@ runs:
         WORKSPACE_ID: ${{ inputs.workspace-id }}
         STACK_ID: ${{ inputs.stack-id }}
         ENVIRONMENT: ${{ inputs.environment }}
+        STACKS_CONFIG: ${{ inputs.stacks-config }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
@@ -96,15 +120,49 @@ runs:
           exit 1
         fi
 
+        # Environment: an explicit input wins; otherwise resolve it from the stack
+        # config git_ref mapping via the CLI (`iltero environment detect` — local,
+        # no yq dependency in this credential step). Exit code is the contract, and
+        # the env key is the ONLY thing on stdout (diagnostics go to stderr):
+        #   0 = matched (env key on stdout), 3 = no match (benign skip),
+        #   2 (or any other non-zero) = error (fail closed).
+        resolved_env="${ENVIRONMENT}"
+        if [[ -z "${resolved_env}" ]]; then
+          detect_rc=0
+          resolved_env=$("${ILTERO_CLI_BIN:-iltero}" environment detect \
+            --stacks-config "${STACKS_CONFIG}") || detect_rc=$?
+          if [[ "${detect_rc}" -eq 3 ]]; then
+            echo "::notice::No environment maps to this branch — skipping cloud credential resolution."
+            {
+              echo "environment="
+              echo "provider="
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [[ "${detect_rc}" -ne 0 || -z "${resolved_env}" ]]; then
+            echo "::error::Could not detect environment from ${STACKS_CONFIG} (iltero environment detect exit ${detect_rc}). Check config.yml."
+            exit 1
+          fi
+        fi
+
+        # Defense-in-depth: resolved_env is written to $GITHUB_OUTPUT below; reject
+        # a newline so a stray value can't inject a forged output line, independent
+        # of resolve_ci_credential's own env-key validation.
+        if [[ "${resolved_env}" == *$'\n'* ]]; then
+          echo "::error::Resolved environment contains an unexpected newline."
+          exit 1
+        fi
+
         if [[ -n "${WORKSPACE_ID}" ]]; then
-          resolve_ci_credential --workspace-id "${WORKSPACE_ID}" "${ENVIRONMENT}"
+          resolve_ci_credential --workspace-id "${WORKSPACE_ID}" "${resolved_env}"
         else
-          resolve_ci_credential --stack-id "${STACK_ID}" "${ENVIRONMENT}"
+          resolve_ci_credential --stack-id "${STACK_ID}" "${resolved_env}"
         fi
 
         case "${CI_CREDENTIAL_PROVIDER}" in
           aws)
             {
+              echo "environment=${resolved_env}"
               echo "provider=aws"
               echo "role-arn=${CI_CREDENTIAL_AWS_ROLE_ARN}"
               echo "region=${CI_CREDENTIAL_AWS_REGION}"
@@ -130,5 +188,6 @@ runs:
       with:
         role-to-assume: ${{ steps.resolve.outputs.role-arn }}
         aws-region: ${{ steps.resolve.outputs.region }}
-        # 15-minute sessions; re-assume per stack if a longer window is required.
-        role-duration-seconds: 900
+        # Session assumed once per job; sized by the caller to cover the whole
+        # run (default 900s). Must be <= the role's MaxSessionDuration.
+        role-duration-seconds: ${{ inputs.role-duration-seconds }}

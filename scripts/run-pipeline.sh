@@ -527,7 +527,9 @@ process_stack() {
         # Token hygiene: clear previous stack's tokens
         unset ILTERO_TOKEN ILTERO_REGISTRY_TOKEN 2>/dev/null || true
 
-        # oidc-exchange.sh reads these from env
+        # oidc-exchange.sh reads these from env. Clear ILTERO_WORKSPACE_ID so the
+        # exchange is unambiguously stack mode (it errors if both are set).
+        unset ILTERO_WORKSPACE_ID 2>/dev/null || true
         export ILTERO_STACK_ID="${stack_id}"
 
         # Run exchange — writes tokens to $GITHUB_ENV and masks them
@@ -560,10 +562,18 @@ process_stack() {
         environment="${ENVIRONMENT}"
         log_info "Using environment override: ${environment}"
     else
-        if ! environment=$(detect_environment "${config_file}") || [[ -z "${environment}" ]]; then
+        local detect_rc=0
+        environment=$(detect_environment "${config_file}") || detect_rc=$?
+        # Fail closed: only an explicit no-match is a benign skip; a config
+        # error (2) or any other non-match code halts the stack.
+        if [[ "${detect_rc}" -eq "${DETECT_ENV_NO_MATCH}" ]]; then
             log_warning "No environment matched for this branch — skipping stack '${stack}'"
             log_info "Compliance checks require a matching environment in config.yml"
             return 0
+        fi
+        if [[ "${detect_rc}" -ne "${DETECT_ENV_MATCHED}" || -z "${environment}" ]]; then
+            log_error "Could not detect environment for stack '${stack}' (detect_environment exit ${detect_rc}) — check config.yml"
+            return "${EXIT_ERROR}"
         fi
         log_info "Auto-detected environment: ${environment}"
     fi
@@ -889,6 +899,8 @@ process_brownfield_stack() {
     if [[ "${OIDC_ENABLED:-false}" == "true" ]]; then
         log_info "Exchanging OIDC token for stack ${stack_id}..."
         unset ILTERO_TOKEN ILTERO_REGISTRY_TOKEN 2>/dev/null || true
+        # Force stack mode (oidc-exchange errors if both scopes are set).
+        unset ILTERO_WORKSPACE_ID 2>/dev/null || true
         export ILTERO_STACK_ID="${stack_id}"
         if ! "${ACTION_PATH}/scripts/oidc-exchange.sh"; then
             log_error "OIDC token exchange failed for stack ${stack_id}"
@@ -921,10 +933,18 @@ process_brownfield_stack() {
         environment="${ENVIRONMENT}"
         log_info "Using environment override: ${environment}"
     else
-        if ! environment=$(detect_environment "${config_file}") || [[ -z "${environment}" ]]; then
+        local detect_rc=0
+        environment=$(detect_environment "${config_file}") || detect_rc=$?
+        # Fail closed: only an explicit no-match is a benign skip; a config
+        # error (2) or any other non-match code halts the stack.
+        if [[ "${detect_rc}" -eq "${DETECT_ENV_NO_MATCH}" ]]; then
             log_warning "No environment matched for this branch — skipping stack '${stack_name}'"
             log_info "Compliance checks require a matching environment in config.yml"
             return 0
+        fi
+        if [[ "${detect_rc}" -ne "${DETECT_ENV_MATCHED}" || -z "${environment}" ]]; then
+            log_error "Could not detect environment for stack '${stack_name}' (detect_environment exit ${detect_rc}) — check config.yml"
+            return "${EXIT_ERROR}"
         fi
         log_info "Auto-detected environment: ${environment}"
     fi

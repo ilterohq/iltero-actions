@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-07-13
+
+### Fixed
+
+- `resolve-credentials` resolves the cloud role at run time instead of relying
+  on a role hard-coded in the workflow. It takes a `workspace-id` or `stack-id`,
+  detects `environment` from `config.yml` when omitted, and adds a
+  `role-duration-seconds` input (default 900).
+- `setup-oidc` adds a repo-scoped mode (`workspace-id`) for a job-level lookup
+  before any stack is selected. Exactly one of `workspace-id`/`stack-id` is
+  required.
+- Credential resolution retries transient failures (rate limit, network, 5xx)
+  and fails fast on auth/not-found errors with an actionable message.
+- Environment detection now fails closed on a malformed config instead of
+  treating it as "no environment" and skipping.
+
+Requires an Iltero CLI providing `iltero environment detect` (`setup` installs
+the latest by default).
+
 ## [0.1.5] - 2026-07-05
 
 ### Fixed

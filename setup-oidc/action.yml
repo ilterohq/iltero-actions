@@ -11,11 +11,17 @@
 #   - Workflow must have `permissions: { id-token: write }`
 #   - PipelinePrincipal must exist for this repository in Iltero
 #
-# Usage:
+# Usage (stack mode — deploy-authorizing per-stack token):
 #   - uses: ilterohq/iltero-actions/setup@v1
 #   - uses: ilterohq/iltero-actions/setup-oidc@v1
 #     with:
 #       stack-id: ${{ vars.ILTERO_STACK_ID }}
+#       org-id: ${{ vars.ILTERO_ORG_ID }}
+#
+# Usage (repo mode — repo-scoped token for a job-level resolve):
+#   - uses: ilterohq/iltero-actions/setup-oidc@v1
+#     with:
+#       workspace-id: ${{ vars.ILTERO_WORKSPACE_ID }}
 #       org-id: ${{ vars.ILTERO_ORG_ID }}
 # =============================================================================
 
@@ -30,8 +36,18 @@ branding:
 inputs:
   stack-id:
     description: |
-      Iltero Stack ID to request tokens for.
-    required: true
+      Iltero Stack ID (stack mode) — mints a deploy-authorizing per-stack token.
+      Mutually exclusive with workspace-id; provide exactly one.
+    required: false
+    default: ''
+
+  workspace-id:
+    description: |
+      Iltero Workspace ID (repo mode) — mints a repo-scoped token for a
+      job-level resolve that runs before any stack is selected.
+      Mutually exclusive with stack-id; provide exactly one.
+    required: false
+    default: ''
 
   org-id:
     description: |
@@ -98,6 +114,7 @@ runs:
       env:
         INPUT_API_URL: ${{ inputs.api-url }}
         ILTERO_STACK_ID: ${{ inputs.stack-id }}
+        ILTERO_WORKSPACE_ID: ${{ inputs.workspace-id }}
         ILTERO_ORG_ID: ${{ inputs.org-id }}
       run: |
         "${GITHUB_ACTION_PATH}/../scripts/oidc-exchange.sh"

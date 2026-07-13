@@ -13,15 +13,32 @@
 # environments — compliance checks run against the target environment's
 # policies.
 #
-# Usage:
+# Usage (branch on the exit code — see detect_environment below):
 #   source detect-environment.sh
-#   ENVIRONMENT=$(detect_environment "/path/to/config.yml")
+#   rc=0; env=$(detect_environment "/path/to/config.yml") || rc=$?
+#     rc 0 -> use "$env"   |   rc 3 -> no env maps to this ref (skip)
+#     rc 2 -> config error (fail)
 #
 # Environment Variables Used:
 #   GITHUB_REF        - Full git ref (e.g., refs/heads/main)
 #   GITHUB_BASE_REF   - Base branch for PRs
 #   GITHUB_EVENT_NAME - Event type (push, pull_request, etc.)
 # =============================================================================
+
+# Guard against re-sourcing — the readonly constants below would error on a
+# second source. Not exported: an exported guard would make a child shell skip
+# the function definitions.
+if [[ -n "${ILTERO_DETECT_ENVIRONMENT_SOURCED:-}" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+ILTERO_DETECT_ENVIRONMENT_SOURCED=1
+
+# detect_environment() exit codes — the caller contract. Distinguishing a
+# benign no-match from a real config error lets callers skip the former and
+# fail loud on the latter, instead of collapsing both into one signal.
+readonly DETECT_ENV_MATCHED=0    # matched exactly one environment (key on stdout)
+readonly DETECT_ENV_ERROR=2      # missing/unreadable/malformed config, or branch undeterminable
+readonly DETECT_ENV_NO_MATCH=3   # config parsed; current ref maps to no environment
 
 # =============================================================================
 # Get the branch to resolve environment from.
@@ -38,7 +55,7 @@ get_current_branch() {
             # the feature branch. The question is "what environment will
             # this code land in?", not "what branch am I on?"
             if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
-                branch="$GITHUB_BASE_REF"
+                branch="${GITHUB_BASE_REF}"
             else
                 echo "ERROR: GITHUB_BASE_REF is not set for pull_request event" >&2
                 echo ""
@@ -73,106 +90,117 @@ get_current_branch() {
             ;;
     esac
 
-    echo "$branch"
+    echo "${branch}"
 }
 
 # =============================================================================
 # Detect environment from config.yml git_ref mapping
 #
-# Returns the environment key on stdout and exit 0, or an empty string
-# and exit 1 when no match is found. Callers must handle the failure.
+# Exit codes (see the constants above):
+#   DETECT_ENV_MATCHED (0)  - env key on stdout
+#   DETECT_ENV_NO_MATCH (3) - config parsed but no env maps to the current ref
+#                             (empty stdout; a benign "skip this stack" signal)
+#   DETECT_ENV_ERROR (2)    - missing/unreadable/malformed config, or the branch
+#                             could not be determined (empty stdout; hard fail)
+# Callers MUST branch on the exit code, never on the stderr text.
 # =============================================================================
 detect_environment() {
     local config_file="$1"
 
-    if [[ ! -f "$config_file" ]]; then
-        echo "ERROR: Config file not found: $config_file" >&2
+    if [[ ! -f "${config_file}" ]]; then
+        echo "ERROR: Config file not found: ${config_file}" >&2
         echo ""
-        return 1
+        return "${DETECT_ENV_ERROR}"
     fi
 
     local current_branch
     if ! current_branch=$(get_current_branch); then
         echo ""
-        return 1
+        return "${DETECT_ENV_ERROR}"
     fi
 
-    if [[ -z "$current_branch" ]]; then
+    if [[ -z "${current_branch}" ]]; then
         echo "ERROR: Could not determine current branch" >&2
         echo ""
-        return 1
+        return "${DETECT_ENV_ERROR}"
     fi
 
     if [[ "${DEBUG:-}" == "true" ]]; then
-        echo "DEBUG: Detecting environment for branch: $current_branch" >&2
+        echo "DEBUG: Detecting environment for branch: ${current_branch}" >&2
     fi
 
     # Search all environments for matching git_ref.name
     local envs
-    if ! envs=$(yq eval '.environments | keys | .[]' "$config_file" 2>&1); then
-        echo "ERROR: Failed to parse environments from config: $envs" >&2
+    if ! envs=$(yq eval '.environments | keys | .[]' "${config_file}" 2>&1); then
+        echo "ERROR: Failed to parse environments from config: ${envs}" >&2
         echo ""
-        return 1
+        return "${DETECT_ENV_ERROR}"
     fi
 
-    for env in $envs; do
+    for env in ${envs}; do
         local ref_type
-        ref_type=$(yq eval ".environments.${env}.git_ref.type // \"branch\"" "$config_file")
+        ref_type=$(yq eval ".environments.${env}.git_ref.type // \"branch\"" "${config_file}")
         local ref_name
-        ref_name=$(yq eval ".environments.${env}.git_ref.name // \"\"" "$config_file")
+        ref_name=$(yq eval ".environments.${env}.git_ref.name // \"\"" "${config_file}")
 
-        if [[ -z "$ref_name" ]]; then
+        if [[ -z "${ref_name}" ]]; then
             continue
         fi
 
         # Match based on ref type
-        case "$ref_type" in
+        case "${ref_type}" in
             branch)
-                if [[ "$ref_name" == "$current_branch" ]]; then
+                if [[ "${ref_name}" == "${current_branch}" ]]; then
                     if [[ "${DEBUG:-}" == "true" ]]; then
-                        echo "DEBUG: Matched branch '$current_branch' to environment '$env'" >&2
+                        echo "DEBUG: Matched branch '${current_branch}' to environment '${env}'" >&2
                     fi
-                    echo "$env"
+                    echo "${env}"
                     return 0
                 fi
                 ;;
             tag)
                 # For tags, exact string match only
-                if [[ "$current_branch" == "$ref_name" ]]; then
+                if [[ "${current_branch}" == "${ref_name}" ]]; then
                     if [[ "${DEBUG:-}" == "true" ]]; then
-                        echo "DEBUG: Matched tag '$current_branch' to environment '$env'" >&2
+                        echo "DEBUG: Matched tag '${current_branch}' to environment '${env}'" >&2
                     fi
-                    echo "$env"
+                    echo "${env}"
                     return 0
                 fi
                 ;;
             pattern)
                 # Regex pattern matching — fully anchored, guard against ERE parse errors
-                if [[ "$current_branch" =~ ^${ref_name}$ ]] 2>/dev/null; then
+                if [[ "${current_branch}" =~ ^${ref_name}$ ]] 2>/dev/null; then
                     if [[ "${DEBUG:-}" == "true" ]]; then
-                        echo "DEBUG: Matched pattern '$ref_name' to environment '$env'" >&2
+                        echo "DEBUG: Matched pattern '${ref_name}' to environment '${env}'" >&2
                     fi
-                    echo "$env"
+                    echo "${env}"
                     return 0
                 fi
                 ;;
         esac
     done
 
-    # No match found — fail explicitly (no fallback)
-    echo "WARNING: No environment matched for branch '$current_branch'" >&2
+    # No environment maps to the current ref. This is a benign "skip" signal,
+    # distinct from a config error — callers may skip the stack gracefully.
+    echo "WARNING: No environment matched for branch '${current_branch}'" >&2
     echo "Available git_ref mappings:" >&2
 
-    for env in $envs; do
+    for env in ${envs}; do
         local ref_name ref_type
-        ref_name=$(yq eval ".environments.${env}.git_ref.name // \"(not configured)\"" "$config_file")
-        ref_type=$(yq eval ".environments.${env}.git_ref.type // \"branch\"" "$config_file")
-        echo "  - $env: $ref_name ($ref_type)" >&2
+        ref_name=$(yq eval ".environments.${env}.git_ref.name // \"(not configured)\"" "${config_file}")
+        ref_type=$(yq eval ".environments.${env}.git_ref.type // \"branch\"" "${config_file}")
+        echo "  - ${env}: ${ref_name} (${ref_type})" >&2
     done
 
     echo ""
-    return 1
+    return "${DETECT_ENV_NO_MATCH}"
 }
+
+# Note: multi-config agreement across a stacks directory now lives in the CLI
+# (`iltero environment detect`), which `resolve-credentials` calls directly so
+# the credential step has no `yq` dependency. `detect_environment` above stays
+# for `run-pipeline.sh`'s per-stack (single-config) detection.
 
 # =============================================================================
 # Validate environment exists in config
@@ -181,14 +209,14 @@ validate_environment() {
     local config_file="$1"
     local environment="$2"
 
-    if [[ ! -f "$config_file" ]]; then
+    if [[ ! -f "${config_file}" ]]; then
         return 1
     fi
 
     local env_exists
-    env_exists=$(yq eval ".environments.${environment} // null" "$config_file")
+    env_exists=$(yq eval ".environments.${environment} // null" "${config_file}")
 
-    if [[ "$env_exists" == "null" ]]; then
+    if [[ "${env_exists}" == "null" ]]; then
         return 1
     fi
 
@@ -201,10 +229,10 @@ validate_environment() {
 get_all_environments() {
     local config_file="$1"
 
-    if [[ ! -f "$config_file" ]]; then
+    if [[ ! -f "${config_file}" ]]; then
         echo "[]"
         return
     fi
 
-    yq eval '.environments | keys' "$config_file" -o json
+    yq eval '.environments | keys' "${config_file}" -o json
 }
