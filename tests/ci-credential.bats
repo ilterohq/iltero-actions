@@ -536,3 +536,80 @@ EOF
     unset ILTERO_CLI_BIN
 }
 
+# =============================================================================
+# Bounded retry — keyed on the CLI status-class exit codes (8/9/11 retry)
+# =============================================================================
+
+# Stateful mock: counts invocations in $counter, returns $first_exit until the
+# last attempt, then valid AWS JSON + exit 0. Shadows sleep to skip the backoff.
+_install_counting_mock() {
+    local counter="$1" first_exit="$2" succeed_on="$3"
+    local mock="${TEST_TEMP}/iltero"
+    echo 0 > "${counter}"
+    cat > "${mock}" <<EOF
+#!/bin/bash
+n=\$(cat "${counter}"); n=\$((n + 1)); echo "\${n}" > "${counter}"
+if [[ "\${n}" -lt "${succeed_on}" ]]; then
+    echo "transient" >&2
+    exit ${first_exit}
+fi
+cat <<'JSON'
+{"provider":"aws","role_arn":"${VALID_ROLE_ARN}","region":"${VALID_REGION}"}
+JSON
+EOF
+    chmod +x "${mock}"
+    export PATH="${TEST_TEMP}:${PATH}"
+}
+
+@test "resolve_ci_credential retries a transient 5xx (exit 11) then succeeds" {
+    local counter="${TEST_TEMP}/calls"
+    _install_counting_mock "${counter}" 11 2   # fail once, succeed on 2nd
+    sleep() { return 0; }
+
+    run resolve_ci_credential --workspace-id "${VALID_UUID}" "${VALID_ENV}"
+    assert_exit_code 0
+    [[ "$(cat "${counter}")" -eq 2 ]]
+}
+
+@test "resolve_ci_credential retries a network error (exit 9) then succeeds" {
+    local counter="${TEST_TEMP}/calls"
+    _install_counting_mock "${counter}" 9 2
+    sleep() { return 0; }
+
+    run resolve_ci_credential --workspace-id "${VALID_UUID}" "${VALID_ENV}"
+    assert_exit_code 0
+    [[ "$(cat "${counter}")" -eq 2 ]]
+}
+
+@test "resolve_ci_credential retries rate-limit (exit 8) up to the limit then fails" {
+    local counter="${TEST_TEMP}/calls"
+    _install_counting_mock "${counter}" 8 99   # never succeeds
+    sleep() { return 0; }
+
+    run resolve_ci_credential --workspace-id "${VALID_UUID}" "${VALID_ENV}"
+    assert_exit_code 2
+    [[ "$(cat "${counter}")" -eq 3 ]]          # max_attempts
+    assert_output_contains "resolution failed"
+}
+
+@test "resolve_ci_credential does NOT retry a 401/403/404 (exit 4) and hints unbound env" {
+    local counter="${TEST_TEMP}/calls"
+    _install_counting_mock "${counter}" 4 99   # exit 4 is fail-fast
+    sleep() { return 0; }
+
+    run resolve_ci_credential --workspace-id "${VALID_UUID}" "${VALID_ENV}"
+    assert_exit_code 2
+    [[ "$(cat "${counter}")" -eq 1 ]]          # no retry
+    assert_output_contains "credential is bound for this environment"
+}
+
+@test "resolve_ci_credential does NOT retry a usage error (exit 2)" {
+    local counter="${TEST_TEMP}/calls"
+    _install_counting_mock "${counter}" 2 99
+    sleep() { return 0; }
+
+    run resolve_ci_credential --workspace-id "${VALID_UUID}" "${VALID_ENV}"
+    assert_exit_code 2
+    [[ "$(cat "${counter}")" -eq 1 ]]
+}
+

@@ -88,23 +88,47 @@ resolve_ci_credential() {
         --json
     )
 
-    local response
-    local cli_exit
-    local stderr_capture
+    # Invoke the CLI with bounded retry on transient failures. The CLI maps HTTP
+    # status classes to stable exit codes (its status-class contract):
+    #   8 = 429 rate limited, 9 = network/transport, 11 = backend 5xx  -> retry
+    # Every other non-zero code (esp. 4, the CLI's uniform auth/not-found code)
+    # fails fast.
+    local response cli_exit stderr_capture
+    local -r max_attempts=3
+    local attempt=1
     stderr_capture=$(mktemp)
-    set +e
-    response=$("${cmd[@]}" 2>"${stderr_capture}")
-    cli_exit=$?
-    set -e
+    while true; do
+        set +e
+        response=$("${cmd[@]}" 2>"${stderr_capture}")
+        cli_exit=$?
+        set -e
+
+        if [[ ${cli_exit} -eq 0 ]]; then
+            break
+        fi
+        if [[ ${attempt} -lt ${max_attempts} && ( ${cli_exit} -eq 8 || ${cli_exit} -eq 9 || ${cli_exit} -eq 11 ) ]]; then
+            local backoff=$(( attempt * 2 ))
+            log_warning "CI credential resolution transient failure (exit ${cli_exit}); retry ${attempt}/${max_attempts} in ${backoff}s"
+            sleep "${backoff}"
+            attempt=$(( attempt + 1 ))
+            continue
+        fi
+        break
+    done
 
     if [[ ${cli_exit} -ne 0 ]]; then
-        log_error "CI credential resolution failed (exit ${cli_exit})"
         local stderr_text
         stderr_text=$(<"${stderr_capture}")
+        rm -f "${stderr_capture}"
+        log_error "CI credential resolution failed (exit ${cli_exit}) for ${label}=${scope_value} (env=${env_key})"
         if [[ -n "${stderr_text}" ]]; then
             log_error "iltero stderr: ${stderr_text}"
         fi
-        rm -f "${stderr_capture}"
+        # Exit 4 is the CLI's uniform auth/not-found code — a missing binding and
+        # an unauthorized token are indistinguishable here, so hint at both.
+        if [[ ${cli_exit} -eq 4 ]]; then
+            log_error "Could not resolve a CI credential for ${label}=${scope_value} (env=${env_key}) — ensure a credential is bound for this environment in Iltero and the token is authorized."
+        fi
         return "${EXIT_ERROR}"
     fi
     rm -f "${stderr_capture}"

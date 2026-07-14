@@ -7,11 +7,12 @@
 # `--format github-actions` so the CLI writes ILTERO_TOKEN /
 # ILTERO_REGISTRY_TOKEN / expires_at into $GITHUB_ENV and $GITHUB_OUTPUT.
 #
-# Inputs (env vars):
-#   ILTERO_STACK_ID    required — UUID of the stack
-#   ILTERO_ORG_ID      required — UUID of the org
-#   ILTERO_API_URL     required — set by the upstream setup step
-#   INPUT_API_URL      optional — explicit override from composite input
+# Inputs (env vars) — provide exactly one of STACK_ID or WORKSPACE_ID:
+#   ILTERO_STACK_ID     stack mode — UUID of the stack (deploy-authorizing token)
+#   ILTERO_WORKSPACE_ID repo mode  — UUID of the workspace (repo-scoped token)
+#   ILTERO_ORG_ID       required — UUID of the org (both modes)
+#   ILTERO_API_URL      required — set by the upstream setup step
+#   INPUT_API_URL       optional — explicit override from composite input
 #
 # Audience convention: derived from the API URL host (scheme + port + path
 # stripped). The backend applies the same derivation against its configured
@@ -21,8 +22,17 @@
 
 set -euo pipefail
 
-if [[ -z "${ILTERO_STACK_ID:-}" ]]; then
-  echo "::error::ILTERO_STACK_ID is required for OIDC exchange"
+STACK_ID="${ILTERO_STACK_ID:-}"
+WORKSPACE_ID="${ILTERO_WORKSPACE_ID:-}"
+
+# Mode select: exactly one of stack-id (stack mode) or workspace-id (repo mode).
+# Keyed on non-empty so an empty composite input behaves as "unset".
+if [[ -n "${STACK_ID}" && -n "${WORKSPACE_ID}" ]]; then
+  echo "::error::Provide exactly one of ILTERO_STACK_ID or ILTERO_WORKSPACE_ID, not both."
+  exit 1
+fi
+if [[ -z "${STACK_ID}" && -z "${WORKSPACE_ID}" ]]; then
+  echo "::error::One of ILTERO_STACK_ID (stack mode) or ILTERO_WORKSPACE_ID (repo mode) is required."
   exit 1
 fi
 if [[ -z "${ILTERO_ORG_ID:-}" ]]; then
@@ -55,8 +65,23 @@ if [[ -z "${AUDIENCE}" ]]; then
   exit 1
 fi
 
+# Scope flag: --stack-id (stack mode) or --workspace-id (repo mode).
+# --org-id is required in both modes. Validate the UUID shape before the CLI
+# call (fail fast, mirrors the ci-credential resolver's validation).
+UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+if [[ -n "${STACK_ID}" ]]; then
+  SCOPE_FLAG="--stack-id"; SCOPE_VALUE="${STACK_ID}"; SCOPE_NAME="ILTERO_STACK_ID"
+else
+  SCOPE_FLAG="--workspace-id"; SCOPE_VALUE="${WORKSPACE_ID}"; SCOPE_NAME="ILTERO_WORKSPACE_ID"
+fi
+if [[ ! "${SCOPE_VALUE}" =~ ${UUID_RE} ]]; then
+  echo "::error::${SCOPE_NAME} is not a valid UUID"
+  exit 1
+fi
+scope_args=("${SCOPE_FLAG}" "${SCOPE_VALUE}")
+
 iltero auth oidc \
-  --stack-id "${ILTERO_STACK_ID}" \
+  "${scope_args[@]}" \
   --org-id "${ILTERO_ORG_ID}" \
   --api-url "${RESOLVED_API_URL}" \
   --audience "${AUDIENCE}" \
