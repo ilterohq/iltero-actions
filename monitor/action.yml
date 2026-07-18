@@ -226,6 +226,16 @@ runs:
     # at the job level via `ilterohq/iltero-actions/resolve-credentials@v1`
     # or a hand-written `aws-actions/configure-aws-credentials` block.
     # terraform init/refresh will fail without valid AWS_* env vars.
+    #
+    # Drift detection runs `terraform refresh`, which writes and locks state, so
+    # the version floor must hold here too (S3 native locking needs >= 1.10).
+    - name: Enforce Terraform version floor
+      shell: bash
+      env:
+        ACTION_DIR: ${{ github.action_path }}
+      run: |
+        "${ACTION_DIR}/../scripts/terraform-version.sh" enforce-floor
+
     - name: Terraform Init
       id: init
       shell: bash

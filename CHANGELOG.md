@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Terraform version selection. Set `terraform_version` on the action (an exact
+  version, `latest`, or a constraint like `~> 1.11`) or `terraform.version` in
+  `config.yml`; the action input takes precedence. The version is resolved
+  before install so `config.yml` can drive it. Terraform-style constraints are
+  accepted and normalized to what `setup-terraform` expects.
+- The installed Terraform version is enforced to be >= 1.10 (required for S3
+  native state locking, `use_lockfile`). The job fails closed below it — checked
+  both right after install and again before every plan/apply/refresh, so all
+  entrypoints (the root action and the granular scan/evaluate/deploy/monitor
+  actions) are covered.
+- The concrete Terraform version used is exposed as the `terraform_version`
+  action output and shown in the run summary (a range resolves to a specific
+  patch), for the audit trail.
+- Clearer error when a unit's state was written by a newer Terraform than the
+  installed version, pointing at the version to raise.
+
+### Changed
+
+- Default Terraform version is now the newest 1.10.x (was 1.5.7). Pin
+  `terraform_version` or `terraform.version` to keep a specific version.
+- A job whose selected stacks pin different `terraform.version` values now fails
+  closed; pin an explicit version or split the stacks.
+
 ## [0.1.8] - 2026-07-18
 
 ### Fixed

@@ -56,9 +56,12 @@ inputs:
     default: 'true'
 
   terraform-version:
-    description: Terraform version (only used if install-toolchain is true)
+    description: |
+      Terraform version to install (only used if install-toolchain is true).
+      Accepts an exact version, `latest`, or a semver range. Iltero requires
+      Terraform >= 1.10 for S3 native state locking (use_lockfile).
     required: false
-    default: '1.5.7'
+    default: '~1.10'
 
 outputs:
   cli-version:

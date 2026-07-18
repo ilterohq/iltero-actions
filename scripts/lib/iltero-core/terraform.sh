@@ -32,6 +32,11 @@ if [[ -n "${ILTERO_TERRAFORM_SOURCED:-}" ]]; then
 fi
 export ILTERO_TERRAFORM_SOURCED=1
 
+# Terraform version floor gate (assert_terraform_floor). Sourced directly so
+# terraform.sh is self-sufficient when loaded outside index.sh (e.g. tests).
+# shellcheck source=scripts/lib/iltero-core/tf-floor.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tf-floor.sh"
+
 TF_PLAN_JSON_FILE=""
 TF_STATE_JSON_FILE=""
 TF_PLAN_MODE="full"
@@ -349,6 +354,23 @@ upload_plan_binary() {
     return 1
 }
 
+# emit_state_version_hint_if_needed
+# Inspect terraform stdout/stderr for the "state written by a newer Terraform"
+# refusal and emit an actionable hint. Terraform refuses to operate on state
+# newer than the running CLI; the fix is to raise the version — Iltero never
+# auto-downgrades. Safe under set -e (grep runs inside the if condition).
+# Args: $1=output_text  $2=unit_name
+emit_state_version_hint_if_needed() {
+    local output="$1"
+    local unit="${2:-unit}"
+    [[ -z "${output}" ]] && return 0
+    if printf '%s' "${output}" | grep -qiE 'newer than current|state snapshot was created by Terraform|created by a newer version of Terraform'; then
+        log_error ""
+        log_error "Hint: unit '${unit}' state was last written by a newer Terraform than the installed version."
+        log_error "Raise terraform.version (config.yml) or the 'terraform_version' input to at least that version; Iltero never auto-downgrades."
+    fi
+}
+
 # prepare_terraform_plan
 # Args:
 #   $1 = eval_path     absolute path to the unit directory
@@ -380,6 +402,12 @@ prepare_terraform_plan() {
     if [[ -z "${eval_path}" || ! -d "${eval_path}" ]]; then
         log_error "prepare_terraform_plan: invalid eval_path '${eval_path}'"
         return 1
+    fi
+
+    # Fail closed if the installed Terraform is below the supported floor —
+    # gates the plan path (scan/evaluate) regardless of entrypoint.
+    if ! assert_terraform_floor; then
+        return 2
     fi
 
     # Resolve to an absolute path before the pushd below. Callers may pass a
@@ -476,6 +504,7 @@ prepare_terraform_plan() {
         echo ""
         echo "${init_output}" | grep -A 5 "Error:" | head -30 || echo "${init_output}" | tail -20
         emit_cloud_credentials_hint_if_needed "${init_output}"
+        emit_state_version_hint_if_needed "${init_output}" "${unit_name}"
         update_unit_remote_state_status "${unit_name}" "unavailable" "init_failed"
         [[ -n "${preview_override}" ]] && rm -f "${preview_override}"
         popd > /dev/null
@@ -552,6 +581,7 @@ prepare_terraform_plan() {
         echo ""
         echo "${plan_output}" | grep -A 5 "Error:" | head -50 || echo "${plan_output}" | tail -30
         emit_cloud_credentials_hint_if_needed "${plan_output}"
+        emit_state_version_hint_if_needed "${plan_output}" "${unit_name}"
 
         [[ -n "${preview_override}" ]] && rm -f "${preview_override}"
         popd > /dev/null

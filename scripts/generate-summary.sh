@@ -24,6 +24,7 @@ STATIC_SCAN="${STATIC_SCAN_PASSED:-unknown}"
 EVALUATION="${EVALUATION_PASSED:-unknown}"
 ENV="${ENVIRONMENT:-unknown}"
 UNIT_RESULTS_JSON="${UNIT_RESULTS:-}"
+TF_VER="${TERRAFORM_VERSION:-unknown}"
 
 # Get stack count
 STACK_COUNT=$(echo "$STACKS" | jq 'length' 2>/dev/null || echo "0")
@@ -86,7 +87,7 @@ esac
 cat >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}" << EOF
 # Iltero Pipeline — $ENV
 
-**Result: $STATUS_TEXT** | $STACK_COUNT stack(s) processed
+**Result: $STATUS_TEXT** | $STACK_COUNT stack(s) processed | Terraform \`$TF_VER\`
 
 ## Summary
 

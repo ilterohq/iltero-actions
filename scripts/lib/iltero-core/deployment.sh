@@ -13,6 +13,11 @@
 #   DEPLOY_SUCCESS, RESOURCES_COUNT, OUTPUTS_FILE
 # =============================================================================
 
+# Terraform version floor gate (assert_terraform_floor). Sourced directly so
+# deployment.sh is self-sufficient when loaded outside index.sh (e.g. tests).
+# shellcheck source=scripts/lib/iltero-core/tf-floor.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tf-floor.sh"
+
 # Run terraform deployment
 # Args: $1=path $2=unit $3=environment $4=run_id (optional) $5=scan_id (optional)
 #       $6=stack_id (required when ILTERO_ATTEST=true; used for the deploy-time
@@ -42,6 +47,13 @@ run_deployment() {
     PROVENANCE_BOUND="false"
 
     log_group "Deploy: ${unit_name}"
+
+    # Fail closed if the installed Terraform is below the supported floor —
+    # gates the deploy path regardless of entrypoint (root or granular action).
+    if ! assert_terraform_floor; then
+        log_group_end
+        return "${EXIT_ERROR}"
+    fi
 
     pushd "${deploy_path}" > /dev/null
 
