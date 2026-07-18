@@ -382,6 +382,13 @@ prepare_terraform_plan() {
         return 1
     fi
 
+    # Resolve to an absolute path before the pushd below. Callers may pass a
+    # path relative to the repo root (e.g. STACKS_PATH=infra/stacks); once we
+    # pushd into it, a relative eval_path would no longer resolve, leaving
+    # check_env_config — and the -backend-config/-var-file paths it produces —
+    # empty.
+    eval_path="$(cd "${eval_path}" && pwd)"
+
     # Credential-less preview: no-creds PR preview runs a real plan (so OPA sees
     # plan JSON) with a local-backend override in place of the real backend.
     # Gated on PREVIEW_MODE (deploy path untouched)
@@ -504,7 +511,12 @@ prepare_terraform_plan() {
     # -------------------------------------------------------------------------
     # Step 3: terraform plan
     # -------------------------------------------------------------------------
-    local plan_args=(-out=tfplan -input=false)
+    # -lock=false: this plan is read-only compliance evidence (scan/evaluate) and
+    # is never applied from here — the deploy job re-plans and applies under its
+    # own state lock. Skipping the lock keeps evaluation from depending on the
+    # backend's state-lock resource (e.g. the DynamoDB lock table) being
+    # provisioned, which is unnecessary for a plan that never mutates state.
+    local plan_args=(-out=tfplan -input=false -lock=false)
     if [[ "${TF_PLAN_MODE}" == "best_effort" || "${credentialless}" == "true" ]]; then
         plan_args+=(-var="enable_remote_state_dependencies=false")
         log_info "Disabling remote state dependencies (deps not yet deployed or credential-less preview)"

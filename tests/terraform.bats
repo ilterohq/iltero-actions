@@ -146,6 +146,46 @@ EOF
     [[ "${TF_PLAN_MODE}" == "full" ]]
 }
 
+# The plan is read-only compliance evidence, never applied from here, so it must
+# not take a state lock (evaluation must not depend on the backend lock table).
+@test "prepare_terraform_plan runs plan with -lock=false" {
+    _mock_terraform 0 0 true
+
+    prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}"
+
+    grep -q -- "terraform plan .*-lock=false" "${TEST_TEMP}/tf.log"
+}
+
+# Regression: a relative eval_path (as run_static_scan passes from
+# STACKS_PATH=infra/stacks) must still resolve the unit's backend/tfvars config.
+# The function pushd's into eval_path, so it must resolve to an absolute path
+# first; otherwise check_env_config looks under the wrong directory and init/plan
+# run with no -backend-config/-var-file. Uses the REAL check_env_config.
+@test "prepare_terraform_plan resolves config for a relative eval_path" {
+    _mock_terraform 0 0 true
+
+    # Real check_env_config (the setup stub would mask the resolution bug).
+    check_env_config() {
+        local unit_path="$1" environment="$2"
+        TFVARS_FILE=""; BACKEND_HCL=""
+        [[ -f "${unit_path}/config/${environment}.tfvars" ]] \
+            && TFVARS_FILE="${unit_path}/config/${environment}.tfvars"
+        [[ -f "${unit_path}/config/backend/${environment}.hcl" ]] \
+            && BACKEND_HCL="${unit_path}/config/backend/${environment}.hcl"
+    }
+
+    mkdir -p "${UNIT_DIR}/config/backend"
+    echo 'foo = "bar"'    > "${UNIT_DIR}/config/${VALID_ENV}.tfvars"
+    echo 'bucket = "b"'   > "${UNIT_DIR}/config/backend/${VALID_ENV}.hcl"
+
+    # Invoke with a path RELATIVE to TEST_TEMP (parent of UNIT_DIR).
+    cd "${TEST_TEMP}"
+    prepare_terraform_plan "unit" "unit-x" "${VALID_ENV}"
+
+    grep -q -- "-backend-config=${UNIT_DIR}/config/backend/${VALID_ENV}.hcl" "${TEST_TEMP}/tf.log"
+    grep -q -- "-var-file=${UNIT_DIR}/config/${VALID_ENV}.tfvars" "${TEST_TEMP}/tf.log"
+}
+
 @test "prepare_terraform_plan binds the unit when the plan binary uploads" {
     _mock_terraform 0 0 true
     _mock_aws 0
