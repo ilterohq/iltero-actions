@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-07-18
+
+### Fixed
+
+- Plan-mode static scanning left the unit's backend and variable files
+  unresolved when `stacks_path` was relative, so `terraform init` ran without a
+  backend config and failed. The unit path is now resolved before use.
+- Compliance plans (scan and evaluate) run without taking a Terraform state
+  lock. These plans are read-only and are never applied, so they no longer
+  require the backend's state-lock resource (e.g. a DynamoDB lock table) to
+  exist. Deployment still locks as before.
+
 ## [0.1.7] - 2026-07-13
 
 ### Fixed
