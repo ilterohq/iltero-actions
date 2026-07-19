@@ -43,8 +43,10 @@ bundle:
 # Terraform Configuration
 # =============================================================================
 terraform:
-  # Optional: Terraform version (default: latest)
-  version: 1.5.7
+  # Optional: Terraform version — an exact version, "latest", or a constraint
+  # like "~> 1.11". Quote it (so YAML keeps 1.10 as text, not the number 1.1).
+  # Iltero requires >= 1.10 (S3 native state locking). Default: newest 1.10.x.
+  version: "1.10"
 
   # Optional: Backend configuration hints
   backend:

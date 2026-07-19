@@ -122,6 +122,15 @@ EOF
     assert_exit_code 1
 }
 
+@test "prepare_terraform_plan fails closed below the Terraform version floor" {
+    export TF_VERSION_OVERRIDE="1.9.0"
+    ILTERO_TF_FLOOR_CHECKED=""
+    local out status=0
+    out="$(prepare_terraform_plan "${UNIT_DIR}" "unit-x" "${VALID_ENV}" 2>&1)" || status=$?
+    [ "${status}" -eq 2 ]
+    [[ "${out}" == *"below the minimum"* ]]
+}
+
 @test "prepare_terraform_plan returns 1 on init failure" {
     _mock_terraform 1 0 true
 

@@ -72,6 +72,15 @@ EOF
 
 HEX_DIGEST="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+@test "run_deployment fails closed below the Terraform version floor" {
+    export TF_VERSION_OVERRIDE="1.9.0"
+    ILTERO_TF_FLOOR_CHECKED=""
+    local out status=0
+    out="$(run_deployment "${UNIT_DIR}" "unit-x" "prod" "run-1" "scan-1" "stack-1" 2>&1)" || status=$?
+    [ "${status}" -eq 2 ]
+    [[ "${out}" == *"below the minimum"* ]]
+}
+
 @test "run_deployment re-plans when attestation is off" {
     _mock_terraform
     unset ILTERO_ATTEST

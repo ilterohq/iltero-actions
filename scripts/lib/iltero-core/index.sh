@@ -44,6 +44,9 @@ fi
 # Source utils early (exit codes, progress indicators)
 source "${ILTERO_CORE_DIR}/utils.sh"
 
+# Terraform version floor (used by terraform.sh + deployment.sh)
+source "${ILTERO_CORE_DIR}/tf-floor.sh"
+
 # Source remote state tracking (needed before evaluation)
 source "${ILTERO_CORE_DIR}/remote-state.sh"
 

@@ -106,6 +106,16 @@ inputs:
     required: false
     default: ''
 
+  terraform_version:
+    description: |
+      Terraform version to install (accepts an exact version, `latest`, a
+      Terraform constraint like `~> 1.11`, or a semver range). Overrides
+      terraform.version in config.yml. When empty, the version is taken from
+      config.yml, falling back to the newest 1.10.x patch. Iltero requires
+      Terraform >= 1.10 (S3 native state locking).
+    required: false
+    default: ''
+
   verify_authorization:
     description: |
       If true, verify deployment authorization via Iltero backend.
@@ -193,6 +203,12 @@ outputs:
   environment:
     description: The environment that was detected or used
     value: ${{ steps.pipeline.outputs.environment }}
+
+  terraform_version:
+    description: |
+      The concrete Terraform version that was installed and used (a range or
+      `latest` resolves to a specific patch). Recorded for the audit trail.
+    value: ${{ steps.setup.outputs.terraform-version }}
 
   run_id:
     description: Iltero run ID for workflow chaining
@@ -377,13 +393,48 @@ runs:
         echo "  jq installed"
 
     # -------------------------------------------------------------------------
+    # Resolve Terraform version
+    # -------------------------------------------------------------------------
+    # Runs BEFORE the install so the version can come from config.yml: detection
+    # is git + YAML only (no Terraform binary needed). Precedence: action input
+    # > config.yml terraform.version > default (~1.10). Fails closed if selected
+    # stacks pin different versions. Needs yq/jq, installed above.
+    - name: Resolve Terraform version
+      id: resolve-tf
+      shell: bash
+      env:
+        INPUT_TERRAFORM_VERSION: ${{ inputs.terraform_version }}
+        STACKS_PATH: ${{ inputs.stacks_path }}
+        STACKS_CONFIG: ${{ inputs.stacks_config }}
+        CONFIG_PATH: ${{ inputs.config_path }}
+        STACK: ${{ inputs.stack }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+        GITHUB_BASE_REF: ${{ github.base_ref }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        "${ACTION_PATH}/scripts/terraform-version.sh" resolve
+
+    # -------------------------------------------------------------------------
     # Setup Terraform
     # -------------------------------------------------------------------------
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
       with:
-        terraform_version: '1.5.7'
+        terraform_version: ${{ steps.resolve-tf.outputs.terraform-version }}
         terraform_wrapper: false
+
+    # -------------------------------------------------------------------------
+    # Enforce Terraform version floor
+    # -------------------------------------------------------------------------
+    # Checks the CONCRETE installed version (resolution above may accept a
+    # range). Iltero requires >= 1.10 for S3 native state locking; fails closed
+    # below it. Needs jq, installed above.
+    - name: Enforce Terraform version floor
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        "${ACTION_PATH}/scripts/terraform-version.sh" enforce-floor
 
     # -------------------------------------------------------------------------
     # Install Python dependencies
@@ -519,6 +570,9 @@ runs:
 
         TF_VERSION=$(terraform version -json 2>/dev/null | jq -r '.terraform_version' || echo "not installed")
         echo "   Terraform: $TF_VERSION"
+        # Record the CONCRETE installed version (a range like ~1.10 resolves to a
+        # specific patch) for the audit trail — exposed as an action output.
+        echo "terraform-version=$TF_VERSION" >> "$GITHUB_OUTPUT"
 
     # =========================================================================
     # OIDC AUTHENTICATION (optional, when oidc input is true)
@@ -651,6 +705,7 @@ runs:
         EVALUATION_PASSED: ${{ steps.pipeline.outputs.evaluation_passed }}
         ENVIRONMENT: ${{ steps.pipeline.outputs.environment }}
         UNIT_RESULTS: ${{ steps.pipeline.outputs.unit_results }}
+        TERRAFORM_VERSION: ${{ steps.setup.outputs.terraform-version }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         "${ACTION_PATH}/scripts/generate-summary.sh"
