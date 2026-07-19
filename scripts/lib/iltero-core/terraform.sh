@@ -404,12 +404,6 @@ prepare_terraform_plan() {
         return 1
     fi
 
-    # Fail closed if the installed Terraform is below the supported floor —
-    # gates the plan path (scan/evaluate) regardless of entrypoint.
-    if ! assert_terraform_floor; then
-        return 2
-    fi
-
     # Resolve to an absolute path before the pushd below. Callers may pass a
     # path relative to the repo root (e.g. STACKS_PATH=infra/stacks); once we
     # pushd into it, a relative eval_path would no longer resolve, leaving
@@ -454,6 +448,16 @@ prepare_terraform_plan() {
             popd > /dev/null
             return 2
         fi
+    fi
+
+    # Fail closed if the installed Terraform is below the supported floor — gates
+    # every path that runs terraform init/plan, regardless of entrypoint. Placed
+    # after the credential-less-preview resolution (whose no-adapter path returns
+    # without ever invoking terraform) and before the first terraform call.
+    if ! assert_terraform_floor; then
+        [[ -n "${preview_override}" ]] && rm -f "${preview_override}"
+        popd > /dev/null
+        return 2
     fi
 
     # -------------------------------------------------------------------------
