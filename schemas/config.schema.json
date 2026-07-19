@@ -97,8 +97,7 @@
       "properties": {
         "version": {
           "type": "string",
-          "description": "Terraform version to install. Accepts an exact version (\"1.12.3\"), a minor line (\"1.10\" = newest 1.10.x), \"latest\", or a constraint (\"~> 1.11\", \">= 1.10\"). Iltero requires Terraform >= 1.10 for S3 native state locking (use_lockfile). Quote the value so YAML keeps it as text.",
-          "default": "1.10"
+          "description": "Not used for Terraform installation and ignored by the installer. Set the Terraform version via the action's `terraform_version` input; otherwise the default (newest 1.10.x) applies. Retained for backward compatibility. Iltero requires Terraform >= 1.10 (S3 native state locking)."
         },
         "backend": {
           "type": "object",

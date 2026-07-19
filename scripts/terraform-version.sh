@@ -7,10 +7,8 @@
 #
 #   resolve         Pick the version to install and normalize it into the
 #                   semver-range syntax hashicorp/setup-terraform expects.
-#                   Runs BEFORE the install (detection is git + YAML only).
-#                   Precedence: action input > config.yml terraform.version >
-#                   default (~1.10, newest 1.10.x). Fails closed (exit 2) when
-#                   selected stacks pin different versions. Writes
+#                   Runs BEFORE the install. Precedence: action input
+#                   `terraform_version` > default (~1.10, newest 1.10.x). Writes
 #                   `terraform-version=<value>` to GITHUB_OUTPUT.
 #
 #   enforce-floor   Fail the job (exit 2) when the CONCRETE installed Terraform
@@ -26,19 +24,13 @@
 # Environment variables:
 #   resolve:
 #     INPUT_TERRAFORM_VERSION  Explicit version/constraint (may be empty)
-#     STACKS_PATH              Greenfield stacks code dir (empty => brownfield)
-#     STACKS_CONFIG            Greenfield stacks metadata dir
-#     CONFIG_PATH              Brownfield config file
-#     STACK                    Manual single stack (optional)
-#     GITHUB_EVENT_NAME, GITHUB_BASE_REF  Consumed by stack detection
 #   enforce-floor:
 #     TF_VERSION_OVERRIDE      Test hook: version to check instead of invoking
 #                              `terraform`.
 #
 # Exit codes:
 #   0 - Success
-#   2 - resolve: conflicting versions across stacks; enforce-floor: below floor;
-#       or unknown subcommand
+#   2 - enforce-floor: below floor; or unknown subcommand
 # =============================================================================
 
 set -euo pipefail
@@ -46,8 +38,6 @@ set -euo pipefail
 TF_VERSION_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/logging.sh
 source "${TF_VERSION_SCRIPT_DIR}/lib/logging.sh"
-# shellcheck source=scripts/detect-stacks.sh
-source "${TF_VERSION_SCRIPT_DIR}/detect-stacks.sh"
 # The floor (FLOOR_*, version_below_floor, assert_terraform_floor) lives in the
 # core so it is shared with the pipeline; this script owns only resolution.
 # shellcheck source=scripts/lib/iltero-core/tf-floor.sh
@@ -123,89 +113,21 @@ normalize_tf_version() {
     printf '%s' "${v}"
 }
 
-# collect_config_files
-# Echoes the config.yml paths whose terraform.version should be considered,
-# one per line. Greenfield: the changed (or manually selected) stacks under
-# STACKS_CONFIG. Brownfield: the single CONFIG_PATH file.
-collect_config_files() {
-    if [[ -z "${STACKS_PATH:-}" ]]; then
-        local cfg="${CONFIG_PATH:-.iltero/config.yml}"
-        [[ -f "${cfg}" ]] && printf '%s\n' "${cfg}"
-        return 0
-    fi
-
-    # Greenfield: resolve the config dir the same way run-pipeline.sh does.
-    local stacks_config="${STACKS_CONFIG:-.iltero/stacks}"
-    export STACKS_CONFIG="${stacks_config}"
-
-    local stacks_json
-    if [[ -n "${STACK:-}" ]]; then
-        stacks_json="$(jq -nc --arg s "${STACK}" '[$s]')"
-    elif [[ -d "${STACKS_PATH}" ]]; then
-        stacks_json="$(detect_stacks "${STACKS_PATH}")"
-    else
-        stacks_json="[]"
-    fi
-
-    local stack cfg
-    while IFS= read -r stack; do
-        [[ -z "${stack}" ]] && continue
-        cfg="${stacks_config%/}/${stack}/config.yml"
-        [[ -f "${cfg}" ]] && printf '%s\n' "${cfg}"
-    done < <(printf '%s' "${stacks_json}" | jq -r '.[]?' 2>/dev/null || true)
-}
-
 # resolve_terraform_version
-# Applies the documented precedence and sets RESOLVED_TF_VERSION.
-# Returns 0 on success, 2 on a multi-stack version conflict.
+# Precedence: action input `terraform_version` > default (~1.10). Sets
+# RESOLVED_TF_VERSION. config.yml `terraform.version` is intentionally NOT
+# consulted — the Terraform version is a CI/workflow concern set via the action
+# input; stale per-stack config values must not drive the install.
 resolve_terraform_version() {
-    RESOLVED_TF_VERSION=""
-
-    # 1. Explicit action input wins (CI-wide override).
     local input
     input="$(trim "${INPUT_TERRAFORM_VERSION:-}")"
     if [[ -n "${input}" ]]; then
         log_info "Terraform version from action input: ${input}"
         RESOLVED_TF_VERSION="$(normalize_tf_version "${input}")"
-        return 0
-    fi
-
-    # 2. config.yml terraform.version across the selected stacks. Conflict
-    # detection is scoped to the stacks selected for THIS run (changed, or the
-    # manual STACK) — a single job installs one binary, so only co-running
-    # stacks can conflict. Dedup on the NORMALIZED form so equivalent
-    # constraints written differently (e.g. "~> 1.10" vs "~>1.10") are not
-    # mistaken for a conflict.
-    local -a versions=()
-    local seen="" cfg raw nrm
-    while IFS= read -r cfg; do
-        [[ -z "${cfg}" ]] && continue
-        raw="$(yq eval '.terraform.version // ""' "${cfg}" 2>/dev/null || true)"
-        raw="$(trim "${raw}")"
-        [[ -z "${raw}" || "${raw}" == "null" ]] && continue
-        nrm="$(normalize_tf_version "${raw}")"
-        if [[ "${seen}" != *"|${nrm}|"* ]]; then
-            versions+=("${nrm}")
-            seen="${seen}|${nrm}|"
-        fi
-    done < <(collect_config_files)
-
-    # 3. Nothing declared -> default.
-    if [[ "${#versions[@]}" -eq 0 ]]; then
-        log_info "No terraform.version declared; using default ${DEFAULT_TF_VERSION}"
+    else
+        log_info "No terraform_version input; using default ${DEFAULT_TF_VERSION}"
         RESOLVED_TF_VERSION="${DEFAULT_TF_VERSION}"
-        return 0
     fi
-
-    # A single job installs one Terraform binary — divergent pins are a hard error.
-    if [[ "${#versions[@]}" -gt 1 ]]; then
-        log_error "Selected stacks declare different terraform.version values: ${versions[*]}"
-        log_error "One job installs a single Terraform binary. Pin an explicit version via the 'terraform_version' input, or split these stacks into separate jobs."
-        return 2
-    fi
-
-    log_info "Terraform version from config.yml: ${versions[0]}"
-    RESOLVED_TF_VERSION="${versions[0]}"  # already normalized above
     return 0
 }
 

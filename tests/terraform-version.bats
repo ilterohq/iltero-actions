@@ -2,9 +2,8 @@
 # =============================================================================
 # Tests for terraform-version.sh (resolve + enforce-floor)
 # =============================================================================
-# resolve:       precedence (input > config.yml > default), fail-closed on
-#                divergent stack pins, and Terraform-constraint -> semver
-#                normalization handed to setup-terraform.
+# resolve:       precedence (input > default ~1.10; config.yml is ignored) and
+#                Terraform-constraint -> semver normalization for setup-terraform.
 # enforce-floor: the >= 1.10 floor — below fails closed (exit 2), at/above
 #                passes, unparseable warns without blocking.
 
@@ -82,15 +81,13 @@ SCRIPT() { echo "${PROJECT_ROOT}/scripts/terraform-version.sh"; }
 # resolve_terraform_version — precedence + conflict
 # =============================================================================
 
-@test "resolve: default when nothing declared" {
-    collect_config_files() { :; }
+@test "resolve: default when no input" {
     resolve_terraform_version
     [ "${RESOLVED_TF_VERSION}" = "~1.10" ]
 }
 
-@test "resolve: explicit input overrides config" {
+@test "resolve: explicit input is used" {
     export INPUT_TERRAFORM_VERSION="1.13.2"
-    collect_config_files() { printf '%s\n' "/nope/a.yml" "/nope/b.yml"; }
     resolve_terraform_version
     [ "${RESOLVED_TF_VERSION}" = "1.13.2" ]
 }
@@ -101,59 +98,30 @@ SCRIPT() { echo "${PROJECT_ROOT}/scripts/terraform-version.sh"; }
     [ "${RESOLVED_TF_VERSION}" = ">=1.11.0 <2.0.0" ]
 }
 
-@test "resolve: single config.yml version is used and normalized" {
-    local cfgfile="${BATS_TEST_TMPDIR}/config.yml"
-    printf 'terraform:\n  version: "~> 1.12"\n' > "${cfgfile}"
-    collect_config_files() { printf '%s\n' "${cfgfile}"; }
-    resolve_terraform_version
-    [ "${RESOLVED_TF_VERSION}" = ">=1.12.0 <2.0.0" ]
-}
-
-@test "resolve: same version across stacks is not a conflict" {
-    local a="${BATS_TEST_TMPDIR}/a.yml" b="${BATS_TEST_TMPDIR}/b.yml"
-    printf 'terraform:\n  version: "1.12.0"\n' > "${a}"
-    printf 'terraform:\n  version: "1.12.0"\n' > "${b}"
-    collect_config_files() { printf '%s\n' "${a}" "${b}"; }
-    run resolve_terraform_version
-    [ "${status}" -eq 0 ]
-}
-
-@test "resolve: equivalent constraints written differently do not conflict" {
-    local a="${BATS_TEST_TMPDIR}/a.yml" b="${BATS_TEST_TMPDIR}/b.yml"
-    printf 'terraform:\n  version: "~> 1.11"\n' > "${a}"
-    printf 'terraform:\n  version: "~>1.11"\n' > "${b}"
-    collect_config_files() { printf '%s\n' "${a}" "${b}"; }
-    resolve_terraform_version
-    [ "${RESOLVED_TF_VERSION}" = ">=1.11.0 <2.0.0" ]
-}
-
-@test "resolve: divergent versions across stacks fail closed (exit 2)" {
-    local a="${BATS_TEST_TMPDIR}/a.yml" b="${BATS_TEST_TMPDIR}/b.yml"
-    printf 'terraform:\n  version: "1.12.0"\n' > "${a}"
-    printf 'terraform:\n  version: "1.13.0"\n' > "${b}"
-    collect_config_files() { printf '%s\n' "${a}" "${b}"; }
-    run resolve_terraform_version
-    [ "${status}" -eq 2 ]
-}
-
-@test "resolve: config without terraform.version falls back to default" {
-    local cfgfile="${BATS_TEST_TMPDIR}/config.yml"
-    printf 'stack:\n  id: abc\n' > "${cfgfile}"
-    collect_config_files() { printf '%s\n' "${cfgfile}"; }
+@test "resolve: config.yml terraform.version is ignored" {
+    # A stack config with an old version exists, but resolve must not read it.
+    local root="${BATS_TEST_TMPDIR}/repo"
+    mkdir -p "${root}/code/s1" "${root}/cfg/s1"
+    printf 'terraform:\n  version: "1.5.7"\n' > "${root}/cfg/s1/config.yml"
+    export STACKS_PATH="${root}/code" STACKS_CONFIG="${root}/cfg" STACK="s1"
     resolve_terraform_version
     [ "${RESOLVED_TF_VERSION}" = "~1.10" ]
 }
 
-@test "resolve e2e: writes terraform-version to GITHUB_OUTPUT" {
-    local root="${BATS_TEST_TMPDIR}/repo"
-    mkdir -p "${root}/code/s1" "${root}/cfg/s1"
-    printf 'terraform:\n  version: "1.14.1"\n' > "${root}/cfg/s1/config.yml"
-    run env INPUT_TERRAFORM_VERSION="" \
-        STACKS_PATH="${root}/code" STACKS_CONFIG="${root}/cfg" STACK="s1" \
+@test "resolve e2e: input written to GITHUB_OUTPUT" {
+    run env INPUT_TERRAFORM_VERSION="1.14.1" \
         GITHUB_OUTPUT="${BATS_TEST_TMPDIR}/out" \
         bash "$(SCRIPT)" resolve
     [ "${status}" -eq 0 ]
     grep -qx "terraform-version=1.14.1" "${BATS_TEST_TMPDIR}/out"
+}
+
+@test "resolve e2e: default written to GITHUB_OUTPUT when no input" {
+    run env INPUT_TERRAFORM_VERSION="" \
+        GITHUB_OUTPUT="${BATS_TEST_TMPDIR}/out" \
+        bash "$(SCRIPT)" resolve
+    [ "${status}" -eq 0 ]
+    grep -qx "terraform-version=~1.10" "${BATS_TEST_TMPDIR}/out"
 }
 
 # =============================================================================
