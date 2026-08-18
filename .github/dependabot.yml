@@ -4,8 +4,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # A cooldown holds an update back for a few days after publication. That
+    # window is when a compromised release is most likely to still be live and
+    # unreported, and this repository pins third-party actions by commit, so a
+    # bump here changes what runs in every consumer's pipeline. Seven days is
+    # the shortest the workflow security linter treats as sufficient.
     cooldown:
-      default-days: 3
+      default-days: 7
     labels:
       - "dependencies"
     commit-message:
