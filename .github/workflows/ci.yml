@@ -212,7 +212,7 @@ jobs:
       # TruffleHog - Free, open source secret scanner
       # Supports 800+ credential detectors, verification, and entropy analysis
       - name: Scan for secrets (trufflehog)
-        uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55 # main
+        uses: trufflesecurity/trufflehog@bcfcf73aaf4759d4dadc2783177c245a02792318 # main
         with:
           extra_args: --only-verified
 
