@@ -55,6 +55,13 @@ jobs:
           org_id: ${{ vars.ILTERO_ORG_ID }}
 ```
 
+**Replace `RELEASE_COMMIT_SHA`** with the commit SHA of the release you want to
+pin to — it is shown on that release's page under
+[Releases](https://github.com/ilterohq/iltero-actions/releases). The examples
+carry a placeholder on purpose: a version written into an example is a value
+people copy long after it has gone stale, and this project asks the same
+commit-level pinning of its own dependencies.
+
 > **Not using OIDC?** Set `ILTERO_TOKEN` and `ILTERO_REGISTRY_TOKEN` as repository
 > secrets and pass them via `env:` instead of `oidc`/`stack_id`/`org_id`.
 > OIDC is strongly recommended — see [docs/authentication.md](docs/authentication.md).

@@ -211,24 +211,16 @@ show as "Unverified".
 
 ### Cutting a release
 
-Documentation pins this action to the commit a release was cut from, so the pin
-can only be filled in once that commit exists. Between releases the examples
-carry the literal `RELEASE_COMMIT_SHA`, which is replaced as the last step:
+Publish a signed `vX.Y.Z` tag; CI runs automatically on publish. Nothing in the
+documentation needs editing: the examples carry the literal
+`RELEASE_COMMIT_SHA` rather than a specific commit, so they do not go stale and
+there is no per-release substitution step.
 
-```bash
-# 1. Land everything else, then find the commit the release will be cut from
-git rev-parse HEAD
-
-# 2. Substitute it into every example and doc
-grep -rl 'RELEASE_COMMIT_SHA' --include='*.md' --include='*.yml' . \
-  | xargs sed -i '' "s/RELEASE_COMMIT_SHA/$(git rev-parse HEAD)/g"
-
-# 3. Update the '# vX.Y.Z' comments to the version being released, commit,
-#    then tag that commit and publish the release
-```
-
-The release workflow refuses to publish while the placeholder is still present,
-so a release cannot ship examples that cannot run.
+That placeholder is deliberate. A reader must replace it with the commit SHA of
+the release they want, which is shown on that release's page. Pinning to a
+commit rather than a tag is what this project asks of its own dependencies, and
+a version in an example is a value someone will copy without noticing it is a
+year old.
 
 ## Pull Request Process
 

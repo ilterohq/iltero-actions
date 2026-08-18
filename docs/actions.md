@@ -2,6 +2,12 @@
 
 Complete reference for every action in this toolkit. For an overview and quick start, see the [README](../README.md).
 
+**Replace `RELEASE_COMMIT_SHA`** in every example below with the commit SHA of
+the release you want to pin to — it is shown on that release's page under
+[Releases](https://github.com/ilterohq/iltero-actions/releases). The placeholder
+is deliberate: a version written into an example is a value people copy long
+after it has gone stale.
+
 ## Table of Contents
 
 - [Pipeline Action](#pipeline-action) — Full orchestration (most users)
