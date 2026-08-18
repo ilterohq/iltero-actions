@@ -11,7 +11,7 @@
 #   - Result submission to Iltero
 #
 # Usage (OIDC — recommended for push/deploy):
-#   - uses: ilterohq/iltero-actions@v1
+#   - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       stacks_path: infra/stacks
 #       stacks_config: .iltero/stacks
@@ -19,7 +19,7 @@
 #       org_id: ${{ vars.ILTERO_ORG_ID }}
 #
 # PR-Preview (bearer — advisory scan on pull requests):
-#   - uses: ilterohq/iltero-actions@v1
+#   - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       mode: preview
 #       stacks_path: infra/stacks
@@ -29,10 +29,10 @@
 #       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
 #
 # For granular control, use individual actions:
-#   - ilterohq/iltero-actions/setup@v1
-#   - ilterohq/iltero-actions/configure-registry@v1
-#   - ilterohq/iltero-actions/scan@v1
-#   - ilterohq/iltero-actions/evaluate@v1
+#   - ilterohq/iltero-actions/setup
+#   - ilterohq/iltero-actions/configure-registry
+#   - ilterohq/iltero-actions/scan
+#   - ilterohq/iltero-actions/evaluate
 # =============================================================================
 
 name: Iltero Pipeline
@@ -114,6 +114,28 @@ inputs:
       (S3 native state locking).
     required: false
     default: ''
+
+  cli_version:
+    description: |
+      Iltero CLI version to install. Pinned by default so a new CLI release
+      cannot change what blocks a deployment without an explicit change here.
+      `latest` is accepted but not recommended, for the same reason. Must be
+      0.7.0 or newer: below that the CLI exits cleanly when a scan reached no
+      compliance verdict, which this action cannot tell apart from a pass. The
+      version actually installed is reported as the `cli_version` output.
+    required: false
+    default: '0.7.1'
+
+  strict_framework_scope:
+    description: |
+      Fail the run when a compliance framework declared for the environment was
+      not evaluated. Off by default: a shortfall can also mean Iltero has no
+      policy content for that framework yet, and blocking on that would turn a
+      gap on our side into an outage on yours. The shortfall is reported either
+      way, so turning this on decides whether it stops the run rather than
+      whether you are told. Requires Iltero CLI 0.7.0 or newer.
+    required: false
+    default: 'false'
 
   verify_authorization:
     description: |
@@ -208,6 +230,15 @@ outputs:
       The concrete Terraform version that was installed and used (a range or
       `latest` resolves to a specific patch). Recorded for the audit trail.
     value: ${{ steps.setup.outputs.terraform-version }}
+
+  cli_version:
+    description: |
+      The Iltero CLI version that was installed and used, read from the
+      installed package's own record. Shown in the run summary so a verdict can
+      be traced to the version that produced it. Note that the workflow run — and
+      so this value — is retained for far less time than the compliance record it
+      describes.
+    value: ${{ steps.install-cli.outputs.cli-version }}
 
   run_id:
     description: Iltero run ID for workflow chaining
@@ -359,9 +390,19 @@ runs:
           aarch64|arm64) ARCH="arm64" ;;
         esac
 
-        curl -sSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_${OS}_${ARCH}" -o /tmp/yq 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        # --fail: without it curl writes an error page body to the
+        # destination and still exits 0, so an HTTP 404 gets installed as
+        # the binary and the step below reports success.
+        if ! curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_${OS}_${ARCH}" -o /tmp/yq; then
+          echo "::error::Failed to download yq"
+          exit 1
+        fi
         sudo mv /tmp/yq /usr/local/bin/yq
         sudo chmod +x /usr/local/bin/yq
+        if ! yq --version > /dev/null 2>&1; then
+          echo "::error::yq was downloaded but does not run"
+          exit 1
+        fi
 
         echo "  yq installed"
 
@@ -385,9 +426,19 @@ runs:
           aarch64|arm64) ARCH="arm64" ;;
         esac
 
-        curl -sSL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-${ARCH}" -o /tmp/jq 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        # --fail: without it curl writes an error page body to the
+        # destination and still exits 0, so an HTTP 404 gets installed as
+        # the binary and the step below reports success.
+        if ! curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-${ARCH}" -o /tmp/jq; then
+          echo "::error::Failed to download jq"
+          exit 1
+        fi
         sudo mv /tmp/jq /usr/local/bin/jq
         sudo chmod +x /usr/local/bin/jq
+        if ! jq --version > /dev/null 2>&1; then
+          echo "::error::jq was downloaded but does not run"
+          exit 1
+        fi
 
         echo "  jq installed"
 
@@ -442,7 +493,7 @@ runs:
     # Setup Python
     # -------------------------------------------------------------------------
     - name: Setup Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: '3.11'
 
@@ -450,21 +501,133 @@ runs:
     # Install Iltero CLI
     # -------------------------------------------------------------------------
     - name: Install Iltero CLI
+      id: install-cli
       shell: bash
+      env:
+        INPUT_CLI_VERSION: ${{ inputs.cli_version }}
       run: |
         set -euo pipefail
-        pip install --quiet --upgrade iltero-cli 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
-        echo "  Iltero CLI installed"
+
+        # Constrain the version before it is used anywhere. It reaches the run
+        # log, and a value carrying a newline is emitted there as further
+        # workflow commands rather than as text — `::stop-commands::` would
+        # silence every command after it, including a later secret mask. Match
+        # with [[ =~ ]], whose anchors bind the whole string rather than one
+        # line.
+        if [[ "${INPUT_CLI_VERSION}" != "latest" && -n "${INPUT_CLI_VERSION}" ]] &&
+           [[ ! "${INPUT_CLI_VERSION}" =~ ^[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$ ]]; then
+          echo "::error::cli_version must be 'latest' or an exact version such as 0.6.3"
+          exit 1
+        fi
+
+        if [ "${INPUT_CLI_VERSION}" = "latest" ] || [ -z "${INPUT_CLI_VERSION}" ]; then
+          PIP_ARGS=(--quiet --upgrade iltero-cli)
+        else
+          PIP_ARGS=(--quiet "iltero-cli==${INPUT_CLI_VERSION}")
+        fi
+
+        # Install to a log rather than through a filter. Piping into grep hands
+        # the pipeline grep's status — "nothing left to print" — and the `|| true`
+        # that silences it then swallows a failed install too. When an older CLI
+        # is already on PATH, that combination runs the whole job on a version
+        # nobody selected.
+        #
+        # `python -m pip` rather than `pip`: the version is read back from the
+        # installed package's metadata below, so both must be the same
+        # interpreter rather than coincidentally the same by PATH order.
+        PIP_LOG=$(mktemp)
+        if ! python -m pip install "${PIP_ARGS[@]}" > "${PIP_LOG}" 2>&1; then
+          cat "${PIP_LOG}"
+          echo "::error::Iltero CLI install failed"
+          exit 1
+        fi
+        grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" \
+          "${PIP_LOG}" || true
+
+        # Capture the absolute path of the just-installed CLI so the pipeline
+        # invokes it directly rather than via PATH lookup. Without this the
+        # pipeline falls back to whatever PATH resolves first — including for
+        # the deployment authorization gate.
+        ILTERO_CLI_BIN_PATH=$(command -v iltero || true)
+        if [ -z "${ILTERO_CLI_BIN_PATH}" ] || [ ! -x "${ILTERO_CLI_BIN_PATH}" ]; then
+          echo "::error::Iltero CLI install reported success but binary is not on PATH"
+          exit 1
+        fi
+
+        # Assert the resolved path is under the Python install prefix exported
+        # by actions/setup-python, so a pre-existing iltero elsewhere on PATH
+        # cannot be silently adopted.
+        if [ -n "${pythonLocation:-}" ] && [[ "${ILTERO_CLI_BIN_PATH}" != "${pythonLocation}"/* ]]; then
+          echo "::error::Iltero CLI binary ${ILTERO_CLI_BIN_PATH} is outside the expected Python prefix ${pythonLocation}"
+          exit 1
+        fi
+
+        {
+          echo "ILTERO_CLI_BIN<<GHEOF"
+          echo "${ILTERO_CLI_BIN_PATH}"
+          echo "GHEOF"
+        } >> "$GITHUB_ENV"
+
+        # Record which version actually ran. A pipeline that installs the newest
+        # CLI on every run otherwise leaves no way to tell, after the fact, which
+        # version produced a given verdict.
+        #
+        # Read from the installed package's metadata, which the installer wrote,
+        # rather than asking the program to describe itself: a substituted binary
+        # would answer that question about itself. It also bounds the value —
+        # a version string cannot contain a newline, so it cannot break out of
+        # the block below and write further outputs.
+        CLI_VERSION=$(python -c 'import importlib.metadata as m; print(m.version("iltero-cli"))' 2>/dev/null || true)
+        if [[ ! "${CLI_VERSION}" =~ ^[0-9A-Za-z.!+-]+$ ]]; then
+          echo "::error::Could not read the installed Iltero CLI version from its package metadata"
+          exit 1
+        fi
+        {
+          echo "cli-version<<GHEOF"
+          echo "${CLI_VERSION}"
+          echo "GHEOF"
+        } >> "$GITHUB_OUTPUT"
+
+
+        # The gate reads the CLI's exit code to decide whether a deployment may
+        # proceed, and an older CLI exits cleanly in states where no verdict was
+        # reached. Fail closed rather than gate on a signal that is not there.
+        "${GITHUB_ACTION_PATH}/scripts/cli-floor.sh" enforce-floor
+
+        echo "  Iltero CLI ${CLI_VERSION} installed at ${ILTERO_CLI_BIN_PATH}"
 
     # -------------------------------------------------------------------------
     # Install Checkov
     # -------------------------------------------------------------------------
     - name: Install Checkov
+      id: install-checkov
       shell: bash
       run: |
         set -euo pipefail
-        pip install --quiet --upgrade --break-system-packages checkov 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || \
-          pip install --quiet --upgrade checkov 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
+        # Install to a log rather than through a filter. Piping into grep hands
+        # the pipeline grep's status, and the `|| true` that silences it then
+        # let a failed install be announced below as a successful one — leaving
+        # the scanner missing and the run log saying otherwise.
+        # Two attempts, two logs: the fallback differs only by
+        # --break-system-packages, so the first attempt's reason is usually the
+        # real one and must not be overwritten by the second.
+        PIP_LOG_1=$(mktemp)
+        PIP_LOG_2=$(mktemp)
+        if ! python -m pip install --quiet --upgrade --break-system-packages checkov > "${PIP_LOG_1}" 2>&1 &&
+           ! python -m pip install --quiet --upgrade checkov > "${PIP_LOG_2}" 2>&1; then
+          cat "${PIP_LOG_1}" "${PIP_LOG_2}"
+          echo "::error::Checkov install failed"
+          exit 1
+        fi
+        grep -hv "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" \
+          "${PIP_LOG_1}" "${PIP_LOG_2}" || true
+
+        # Checkov performs the static checks, so "pip exited 0" is not enough:
+        # confirm the scanner actually runs before anything reports it installed.
+        if ! CHECKOV_VERSION=$(checkov --version 2>/dev/null) || [ -z "${CHECKOV_VERSION}" ]; then
+          echo "::error::Checkov install reported success but the scanner does not run"
+          exit 1
+        fi
         echo "  Checkov installed"
 
     # -------------------------------------------------------------------------
@@ -484,9 +647,19 @@ runs:
           aarch64|arm64) ARCH="arm64" ;;
         esac
 
-        curl -sSL -o /usr/local/bin/opa \
-          "https://openpolicyagent.org/downloads/v${OPA_VERSION}/opa_${OS}_${ARCH}_static" 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        # --fail: without it curl writes an error page body to the
+        # destination and still exits 0, so an HTTP 404 gets installed as
+        # the policy engine and the step below reports success.
+        if ! curl -fsSL -o /usr/local/bin/opa \
+          "https://openpolicyagent.org/downloads/v${OPA_VERSION}/opa_${OS}_${ARCH}_static"; then
+          echo "::error::Failed to download OPA"
+          exit 1
+        fi
         chmod +x /usr/local/bin/opa
+        if ! opa version > /dev/null 2>&1; then
+          echo "::error::OPA was downloaded but does not run"
+          exit 1
+        fi
 
         echo "  OPA installed"
 
@@ -550,7 +723,7 @@ runs:
 
         echo "  Installation Summary:"
 
-        CLI_VERSION=$(iltero --version 2>/dev/null || echo "not installed")
+        CLI_VERSION=$("${ILTERO_CLI_BIN:-iltero}" --version 2>/dev/null || echo "not installed")
         echo "   Iltero CLI: $CLI_VERSION"
 
         CHECKOV_VERSION=$(checkov --version 2>/dev/null || echo "not installed")
@@ -647,7 +820,7 @@ runs:
     # Step 4: Run Pipeline
     # -------------------------------------------------------------------------
     # Cloud credentials must be configured by the calling job before this
-    # step runs (e.g. via ilterohq/iltero-actions/resolve-credentials@v1
+    # step runs (e.g. via ilterohq/iltero-actions/resolve-credentials
     # or a hand-written aws-actions/configure-aws-credentials block). The
     # pipeline does not resolve or rotate cloud credentials itself —
     # workflow-topology decisions live in the workflow YAML.
@@ -664,6 +837,7 @@ runs:
         MODE: ${{ inputs.mode }}
         RUN_ID: ${{ inputs.run_id }}
         VERIFY_AUTHORIZATION: ${{ inputs.verify_authorization }}
+        STRICT_FRAMEWORK_SCOPE: ${{ inputs.strict_framework_scope }}
         DEBUG: ${{ inputs.debug }}
         REGISTRY_HOST: ${{ inputs.registry_host }}
         OIDC_ENABLED: ${{ inputs.oidc }}
@@ -697,6 +871,7 @@ runs:
         ENVIRONMENT: ${{ steps.pipeline.outputs.environment }}
         UNIT_RESULTS: ${{ steps.pipeline.outputs.unit_results }}
         TERRAFORM_VERSION: ${{ steps.setup.outputs.terraform-version }}
+        CLI_VERSION: ${{ steps.install-cli.outputs.cli-version }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         "${ACTION_PATH}/scripts/generate-summary.sh"
@@ -751,6 +926,18 @@ runs:
           const allPassed = status === 'success';
           const emoji = allPassed ? '✅' : '❌';
 
+          let unitResults = [];
+          try { unitResults = JSON.parse(process.env.UNIT_RESULTS || '[]'); } catch (e) { /* counts-only */ }
+          // A phase that produced no verdict must not be labelled "Failed" —
+          // that is what invites it to be treated as an accepted finding.
+          const noVerdict = (phase) => unitResults.some((r) => {
+            const p = (r && r[phase]) || {};
+            return p.status === 'infra_error' || p.status === 'needs_review';
+          });
+          const phaseLabel = (passed, phase) => passed ? '✅ Passed'
+            : noVerdict(phase) ? '⚠️ No verdict produced'
+            : '❌ Failed';
+
           const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
           const shortSha = (context.sha || '').slice(0, 7);
 
@@ -790,10 +977,16 @@ runs:
 
           // ---- Zone A: verdict + context strip ----
           let body = `${MARKER}\n## ${emoji} Iltero Infrastructure Pipeline\n\n`;
-          body += `**Static Analysis:** ${scanPassed ? '✅ Passed' : '❌ Failed'}  •  `;
-          body += `**Plan Evaluation:** ${evalPassed ? '✅ Passed' : '❌ Failed'}\n\n`;
+          body += `**Static Analysis:** ${phaseLabel(scanPassed, 'scan')}  •  `;
+          body += `**Plan Evaluation:** ${phaseLabel(evalPassed, 'evaluation')}\n\n`;
 
-          if (allPassed) {
+          if (allPassed && fdata.total_blocking > 0) {
+            // The run succeeded with findings at or above the threshold, which
+            // only happens when block_on_violations accepted them. Saying "no
+            // findings" here would contradict the table below.
+            body += `> **${fdata.total_blocking} finding(s)** at or above the \`${threshold}\` threshold were accepted under \`block_on_violations: false\`.`;
+            body += `\n\n`;
+          } else if (allPassed) {
             body += `> No findings at or above the \`${threshold}\` threshold.`;
             if (fdata.total_below > 0) body += ` ${fdata.total_below} finding(s) below threshold (awareness only).`;
             body += `\n\n`;
@@ -815,18 +1008,25 @@ runs:
           if (shortSha) body += `  ·  \`Commit\` ${shortSha}`;
           body += `  ·  [⬇ Download full results](${runUrl})\n\n`;
 
-          // ---- Zone B: per-unit summary table ----
-          let unitResults = [];
-          try { unitResults = JSON.parse(process.env.UNIT_RESULTS || '[]'); } catch (e) { /* counts-only */ }
+          // ---- Zone B: per-unit summary table ---- (unitResults parsed above)
           if (unitResults.length > 0) {
             body += `### Units\n\n`;
             body += `| Unit | Static | Plan Evaluation | Blocking | Below |\n`;
             body += `|------|--------|-----------------|---------:|------:|\n`;
+            // An outcome that produced no verdict must not read as a compliance
+            // failure — that is what invites it to be waived. A phase that did
+            // not run at all renders as '--', matching the job summary.
+            const cellStatus = (p) => (!p || Object.keys(p).length === 0) ? '--'
+              : p.skipped ? '⏭️ Skip'
+              : p.passed ? '✅ Pass'
+              : p.status === 'infra_error' ? '⚠️ Error — no verdict'
+              : p.status === 'needs_review' ? '⚠️ Needs review'
+              : '❌ Fail';
             for (const r of unitResults) {
               const scan = r.scan || {};
               const evl = r.evaluation || {};
-              const scanStatus = scan.skipped ? '⏭️ Skip' : (scan.passed ? '✅ Pass' : '❌ Fail');
-              const evalStatus = evl.skipped ? '⏭️ Skip' : (evl.passed ? '✅ Pass' : '❌ Fail');
+              const scanStatus = cellStatus(scan);
+              const evalStatus = cellStatus(evl);
               const u = byUnit[r.unit] || { blocking: 0, below: 0 };
               const blk = u.blocking > 0 ? `**${u.blocking}**` : '0';
               body += `| \`${cell(r.unit)}\` | ${scanStatus} | ${evalStatus} | ${blk} | ${u.below || 0} |\n`;

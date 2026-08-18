@@ -11,15 +11,18 @@
 #   - config/{env}.tfvars (optional)
 #   - config/backend/{env}.hcl (optional)
 #
-# Requires: ilterohq/iltero-actions/setup@v1 to be run first.
+# Requires: ilterohq/iltero-actions/setup to be run first.
 #
 # Usage:
-#   - uses: ilterohq/iltero-actions/evaluate@v1
+#   - uses: ilterohq/iltero-actions/evaluate@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       path: infra/stacks/my-stack/units/network
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
 #       unit: network-baseline
 #       environment: production
+#       # Point at the stack's config.yml so the evaluation is checked against
+#       # the compliance frameworks that file declares for this environment.
+#       config-path: .iltero/stacks/my-stack/config.yml
 #     env:
 #       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
 #       # ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
@@ -93,10 +96,87 @@ inputs:
     required: false
     default: ''
 
+  stack-name:
+    description: |
+      Stack name or slug, used to group this stack's result files on disk.
+      Defaults to the stack UUID when not given.
+    required: false
+    default: ''
+
+  stacks-config:
+    description: |
+      Directory this action writes result files under, as
+      <stacks-config>/<stack-name>/evaluation/. Must match the value used by
+      the other Iltero actions in the same workflow so a later step finds them.
+    required: false
+    default: '.iltero/stacks'
+
+  config-path:
+    description: |
+      Path to the stack's config.yml, read to pick up the compliance frameworks
+      declared for this environment. Leave empty to skip that and either
+      evaluate against the `frameworks` input or let Iltero decide from the
+      stack's own registration. When set, the file must exist and must declare
+      the environment being evaluated, or the run stops — a wrong path would
+      otherwise evaluate against no frameworks and report success.
+    required: false
+    default: ''
+
+  frameworks:
+    description: |
+      Comma-separated compliance frameworks to evaluate against,
+      e.g. 'SOC2,ISO27001,CIS-AWS'. Leave empty to use the frameworks the
+      stack declares for this environment in config.yml — the same value the
+      all-in-one pipeline action uses. When neither is set, Iltero decides
+      which policies apply from the stack's own registration.
+    required: false
+    default: ''
+
+  strict-framework-scope:
+    description: |
+      Fail the run when a compliance framework declared for the environment was
+      not evaluated. Off by default: a shortfall can also mean Iltero has no
+      policy content for that framework yet, and blocking on that would turn a
+      gap on our side into an outage on yours. The shortfall is reported either
+      way, so turning this on decides whether it stops the run rather than
+      whether you are told. Requires Iltero CLI 0.7.0 or newer.
+    required: false
+    default: 'false'
+
+  preview:
+    description: |
+      Evaluate without submitting results or binding the plan for provenance.
+      Use on pull requests.
+    required: false
+    default: 'false'
+
+  depends-on:
+    description: |
+      JSON array naming the units this unit reads state from, e.g.
+      '["network", "security"]'.
+
+      This action has no record of whether those units' state is readable — the
+      all-in-one pipeline action tracks that across units, a hand-assembled
+      workflow does not. So naming any dependency here plans with remote state
+      dependencies switched off, which evaluates a reduced set of resources. Use
+      the all-in-one action when the full graph must be evaluated.
+
+      Leave empty when the unit has no upstream units.
+    required: false
+    default: ''
+
 outputs:
   passed:
     description: Whether the evaluation passed (true/false)
     value: ${{ steps.evaluate.outputs.passed }}
+
+  status:
+    description: |
+      What the evaluation produced: 'pass', 'violations' (findings at or above
+      the threshold), 'needs_review' (nothing could be evaluated), or
+      'infra_error' (the evaluation did not run to a verdict). Only
+      'violations' is a compliance verdict a caller may choose to accept.
+    value: ${{ steps.evaluate.outputs.status }}
 
   run-id:
     description: Iltero run ID for chaining subsequent operations
@@ -119,7 +199,7 @@ runs:
     # NOTE: Cloud credentials are not configured by this action. terraform
     # plan needs cloud access to read remote state and refresh data
     # sources, so configure credentials at the job level via
-    # `ilterohq/iltero-actions/resolve-credentials@v1` or a hand-written
+    # `ilterohq/iltero-actions/resolve-credentials` or a hand-written
     # `aws-actions/configure-aws-credentials` block (or supply a
     # pre-generated plan-file input that skips terraform plan).
     - name: Evaluate Terraform Plan
@@ -128,6 +208,8 @@ runs:
       env:
         EVAL_PATH: ${{ inputs.path }}
         STACK_ID: ${{ inputs.stack-id }}
+        STACK_NAME: ${{ inputs.stack-name }}
+        STACKS_CONFIG: ${{ inputs.stacks-config }}
         UNIT_NAME: ${{ inputs.unit }}
         ENVIRONMENT: ${{ inputs.environment }}
         FAIL_ON: ${{ inputs.fail-on }}
@@ -136,27 +218,80 @@ runs:
         # Provenance (opt-in): the evaluate side fingerprints the plan and stores
         # the saved plan binary; signing happens on deploy. Set explicitly from
         # inputs so an ambient ILTERO_ATTEST can't silently change behavior.
+        PREVIEW_MODE: ${{ inputs.preview }}
+        STRICT_FRAMEWORK_SCOPE: ${{ inputs.strict-framework-scope }}
         ILTERO_ATTEST: ${{ inputs.attest }}
         ILTERO_S3_SSE: ${{ inputs.s3-sse }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+        FRAMEWORKS: ${{ inputs.frameworks }}
+        DEPENDS_ON: ${{ inputs.depends-on }}
       run: |
         set -euo pipefail
+
+        # Where result files are written. The shared library requires both, and
+        # without them this step aborts before the evaluation is ever invoked.
+        export STACKS_CONFIG
+        export ILTERO_STACK_NAME="${STACK_NAME:-${STACK_ID}}"
 
         # Source shared library
         ACTION_DIR="${GITHUB_ACTION_PATH:-$(dirname "$0")/..}"
         source "${ACTION_DIR}/../scripts/lib/iltero-core/index.sh"
 
+        # These become directory components under the workspace; a traversal
+        # would put results where a workspace-relative artifact upload cannot
+        # find them, while the run still reports success.
+        reject_path stacks-config "${STACKS_CONFIG}"
+        reject_path stack-name "${ILTERO_STACK_NAME}"
+        reject_path config-path "${CONFIG_PATH}"
+
         # Validate structure (brownfield uses relaxed validation)
-        if [[ "${PIPELINE_MODE:-}" == "brownfield" ]] || [[ -f ".iltero/config.yml" && "$UNIT_NAME" == "default" ]]; then
-          validate_brownfield_structure "$EVAL_PATH"
+        if [[ "${PIPELINE_MODE:-}" == "brownfield" ]] || [[ -f ".iltero/config.yml" && "${UNIT_NAME}" == "default" ]]; then
+          validate_brownfield_structure "${EVAL_PATH}"
         else
-          validate_unit_structure "$EVAL_PATH"
+          validate_unit_structure "${EVAL_PATH}"
         fi
 
-        # Run plan evaluation
-        set +e
-        run_plan_evaluation "$EVAL_PATH" "$STACK_ID" "$UNIT_NAME" "$ENVIRONMENT" "$FAIL_ON" "$CHAIN_RUN_ID" "$EXISTING_PLAN"
-        EXIT_CODE=$?
-        set -e
+        # A dependency list that cannot be parsed reads as "every dependency's
+        # state is available" further down, which selects full remote-state mode
+        # against dependencies that were never checked.
+        if [[ -n "${DEPENDS_ON}" ]] && ! jq -e 'type == "array"' <<< "${DEPENDS_ON}" > /dev/null 2>&1; then
+          echo "::error::depends-on must be a JSON array, e.g. '[\"network\"]' — got: ${DEPENDS_ON}"
+          exit 1
+        fi
+
+        # A config path that was asked for but cannot be used is an error, not a
+        # reason to evaluate against nothing.
+        if [[ -n "${CONFIG_PATH}" ]]; then
+          if [[ ! -f "${CONFIG_PATH}" ]]; then
+            echo "::error::config-path not found: ${CONFIG_PATH}"
+            exit 1
+          fi
+          if ! environment_declared "${CONFIG_PATH}" "${ENVIRONMENT}"; then
+            echo "::error::Environment '${ENVIRONMENT}' is not declared in ${CONFIG_PATH}"
+            exit 1
+          fi
+          if [[ -z "${FRAMEWORKS}" ]]; then
+            FRAMEWORKS=$(read_environment_frameworks "${CONFIG_PATH}" "${ENVIRONMENT}")
+          fi
+        fi
+
+        if [[ -n "${FRAMEWORKS}" ]]; then
+          echo "Compliance frameworks: ${FRAMEWORKS}"
+        else
+          echo "No framework scope set for this evaluation; Iltero decides from the stack's registration."
+        fi
+
+        # Naming a dependency here always selects the reduced-scope plan (this
+        # action has no cross-unit state record), so say so rather than letting a
+        # narrower evaluation pass as a full one.
+        if [[ -n "${DEPENDS_ON}" ]] && [[ "${DEPENDS_ON}" != "[]" ]]; then
+          echo "::warning::depends-on is set, so this evaluation plans with remote state dependencies switched off and covers fewer resources than a full plan."
+        fi
+
+        # Run plan evaluation. See the note in scan/action.yml: the `|| ` form
+        # is required because the library re-enables errexit internally.
+        EXIT_CODE=0
+        run_plan_evaluation "${EVAL_PATH}" "${STACK_ID}" "${UNIT_NAME}" "${ENVIRONMENT}" "${FAIL_ON}" "${CHAIN_RUN_ID}" "${EXISTING_PLAN}" "${DEPENDS_ON:-[]}" "${FRAMEWORKS}" || EXIT_CODE=$?
 
         # Set outputs using helper
         set_eval_outputs
@@ -174,6 +309,9 @@ runs:
         ENVIRONMENT: ${{ inputs.environment }}
         VIOLATIONS: ${{ steps.evaluate.outputs.violations }}
         PASSED: ${{ steps.evaluate.outputs.passed }}
+        # An empty value means the step aborted before recording a verdict —
+        # treat that as no verdict, not as a compliance failure.
+        EVAL_STATUS: ${{ steps.evaluate.outputs.status || 'infra_error' }}
         RUN_ID: ${{ steps.evaluate.outputs.run-id }}
       with:
         github-token: ${{ github.token }}
@@ -182,21 +320,34 @@ runs:
           const environment = process.env.ENVIRONMENT;
           const violations = process.env.VIOLATIONS || '0';
           const passed = process.env.PASSED === 'true';
+          const evalStatus = process.env.EVAL_STATUS || '';
           const runId = process.env.RUN_ID || '';
 
-          const status = passed ? 'Passed' : 'Failed';
+          // An evaluation that produced no verdict must not be reported as a
+          // failure with zero violations, and must not tell a reviewer to fix
+          // violations that were never assessed.
+          // Positive allowlist: only these two are verdicts. Anything else —
+          // including an unset value from a step that aborted early — means
+          // nothing was assessed.
+          const noVerdict = !(evalStatus === 'pass' || evalStatus === 'violations');
+          const status = passed ? 'Passed'
+            : evalStatus === 'needs_review' ? 'Needs review — nothing could be evaluated'
+            : evalStatus === 'infra_error' ? 'Did not complete'
+            : 'Failed';
 
           let comment = `## Plan Evaluation: \`${unitName}\`\n\n`;
           comment += `**Environment:** ${environment}\n`;
           comment += `**Result:** ${status}\n\n`;
           comment += `| Metric | Value |\n`;
           comment += `|--------|-------|\n`;
-          comment += `| Policy Violations | ${violations} |\n`;
+          comment += `| Policy Violations | ${noVerdict ? 'not assessed' : violations} |\n`;
           comment += `| Status | ${status} |\n`;
           if (runId) {
             comment += `| Run ID | \`${runId}\` |\n`;
           }
-          if (!passed) {
+          if (noVerdict) {
+            comment += `\n**Action Required:** No compliance verdict was produced, so this plan was not checked. See the run log for the reason — re-running only helps if it was transient.\n`;
+          } else if (!passed) {
             comment += `\n**Action Required:** This plan has policy violations that must be resolved before deployment.\n`;
           }
           comment += `\n---\n`;
@@ -239,5 +390,7 @@ runs:
       if: always()
       shell: bash
       env:
-        EXIT_CODE: ${{ steps.evaluate.outputs.exit_code || 0 }}
+        # Default to failure: a missing exit code means the evaluation step did
+        # not finish, which must not gate as success.
+        EXIT_CODE: ${{ steps.evaluate.outputs.exit_code || 1 }}
       run: exit "${EXIT_CODE}"

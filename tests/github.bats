@@ -341,3 +341,45 @@ teardown() {
     # the table is not broken and the link syntax renders literally.
     grep -qF '`evil\|name[x](http://h)`' "$GITHUB_STEP_SUMMARY"
 }
+
+# =============================================================================
+# Verdict rendering — an outcome with no verdict must not read as "Fail (0)"
+# =============================================================================
+
+_summary_with() {
+    printf '{"stacks":["infra"],"environment":"dev","unit_results":[{"unit":"vpc",%s,"deploy":null}]}' "$1"
+}
+
+@test "write_pipeline_summary v2 shows a scan infra error as an error, not Fail (0)" {
+    write_pipeline_summary "$(_summary_with '"scan":{"passed":false,"skipped":false,"violations":0,"status":"infra_error"}')"
+
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "Error"
+    ! grep -q "Fail (0)" "$GITHUB_STEP_SUMMARY"
+}
+
+@test "write_pipeline_summary v2 shows an evaluation needs_review distinctly" {
+    write_pipeline_summary "$(_summary_with '"evaluation":{"passed":false,"skipped":false,"violations":0,"status":"needs_review","eval_mode":"full"}')"
+
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "Needs review"
+}
+
+@test "write_pipeline_summary v2 still shows Fail (n) for a violations verdict" {
+    write_pipeline_summary "$(_summary_with '"scan":{"passed":false,"skipped":false,"violations":4,"status":"violations"}')"
+
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "Fail (4)"
+}
+
+@test "write_pipeline_summary v2 renders a result with no status field as before" {
+    # Back-compat: payloads written before SCAN_STATUS existed carry no status.
+    write_pipeline_summary "$(_summary_with '"scan":{"passed":false,"skipped":false,"violations":2}')"
+
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "Fail (2)"
+}
+
+@test "write_pipeline_summary v2 shows a unit that failed validation as an error, not Fail (0)" {
+    # No scan ran at all — the record must not read as a zero-finding failure.
+    write_pipeline_summary "$(_summary_with '"scan":{"passed":false,"status":"infra_error","skipped":false,"violations":0,"error":"validation_failed"}')"
+
+    assert_file_contains "$GITHUB_STEP_SUMMARY" "Error"
+    ! grep -q "Fail (0)" "$GITHUB_STEP_SUMMARY"
+}

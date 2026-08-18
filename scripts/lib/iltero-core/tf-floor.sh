@@ -21,6 +21,7 @@
 # without the functions (functions are not exported), then skip re-sourcing and
 # hit "command not found". A child that re-sources instead is correct and cheap.
 if [[ -n "${ILTERO_TF_FLOOR_SOURCED:-}" ]]; then
+    # shellcheck disable=SC2317  # dual-mode: returns when sourced, exits when run
     return 0 2>/dev/null || exit 0
 fi
 ILTERO_TF_FLOOR_SOURCED=1

@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
 
 # Colors
 RED='\033[0;31m'
@@ -63,17 +63,17 @@ run_syntax_check() {
     
     local failed=0
     while IFS= read -r -d '' script; do
-        if bash -n "$script" 2>/dev/null; then
-            log_success "$script"
+        if bash -n "${script}" 2>/dev/null; then
+            log_success "${script}"
         else
-            log_error "$script"
-            bash -n "$script" 2>&1 | sed 's/^/    /'
+            log_error "${script}"
+            bash -n "${script}" 2>&1 | sed 's/^/    /'
             ((failed++))
         fi
-    done < <(find "$PROJECT_ROOT/scripts" -name '*.sh' -type f -print0)
+    done < <(find "${PROJECT_ROOT}/scripts" -name '*.sh' -type f -print0)
     
-    if [[ $failed -gt 0 ]]; then
-        log_error "Syntax check failed: $failed file(s) with errors"
+    if [[ ${failed} -gt 0 ]]; then
+        log_error "Syntax check failed: ${failed} file(s) with errors"
         return 1
     fi
     log_success "All syntax checks passed"
@@ -88,17 +88,17 @@ run_shellcheck() {
     
     local failed=0
     while IFS= read -r -d '' script; do
-        if shellcheck --severity=warning "$script" 2>/dev/null; then
-            log_success "$script"
+        if shellcheck --severity=style "${script}" 2>/dev/null; then
+            log_success "${script}"
         else
-            log_error "$script"
-            shellcheck --severity=warning --format=tty "$script" 2>&1 | sed 's/^/    /'
+            log_error "${script}"
+            shellcheck --severity=style --format=tty "${script}" 2>&1 | sed 's/^/    /'
             ((failed++))
         fi
-    done < <(find "$PROJECT_ROOT/scripts" -name '*.sh' -type f -print0)
+    done < <(find "${PROJECT_ROOT}/scripts" -name '*.sh' -type f -print0)
     
-    if [[ $failed -gt 0 ]]; then
-        log_error "ShellCheck found issues in $failed file(s)"
+    if [[ ${failed} -gt 0 ]]; then
+        log_error "ShellCheck found issues in ${failed} file(s)"
         return 1
     fi
     log_success "All files passed ShellCheck"
@@ -112,14 +112,14 @@ run_unit_tests() {
         return 0
     fi
     
-    local test_dir="$PROJECT_ROOT/tests"
+    local test_dir="${PROJECT_ROOT}/tests"
     
-    if [[ ! -d "$test_dir" ]] || [[ -z "$(ls -A "$test_dir"/*.bats 2>/dev/null)" ]]; then
-        log_warning "No test files found in $test_dir"
+    if [[ ! -d "${test_dir}" ]] || [[ -z "$(ls -A "${test_dir}"/*.bats 2>/dev/null)" ]]; then
+        log_warning "No test files found in ${test_dir}"
         return 0
     fi
     
-    cd "$PROJECT_ROOT"
+    cd "${PROJECT_ROOT}"
     if bats --tap tests/*.bats; then
         log_success "All unit tests passed"
     else
@@ -136,16 +136,22 @@ run_yaml_lint() {
         return 0
     fi
     
-    local config="$PROJECT_ROOT/.yamllint.yml"
-    if [[ -f "$config" ]]; then
-        yamllint -c "$config" "$PROJECT_ROOT" && log_success "YAML lint passed" || {
+    local config="${PROJECT_ROOT}/.yamllint.yml"
+    if [[ ! -f "${config}" ]]; then
+        log_warning "No .yamllint.yml found, using defaults"
+        if ! yamllint "${PROJECT_ROOT}"; then
             log_error "YAML lint failed"
             return 1
-        }
-    else
-        log_warning "No .yamllint.yml found, using defaults"
-        yamllint "$PROJECT_ROOT" && log_success "YAML lint passed" || return 1
+        fi
+        log_success "YAML lint passed"
+        return 0
     fi
+
+    if ! yamllint -c "${config}" "${PROJECT_ROOT}"; then
+        log_error "YAML lint failed"
+        return 1
+    fi
+    log_success "YAML lint passed"
 }
 
 # =============================================================================
@@ -156,7 +162,7 @@ main() {
     local mode="${1:-all}"
     local exit_code=0
     
-    case "$mode" in
+    case "${mode}" in
         lint)
             run_shellcheck || exit_code=1
             run_yaml_lint || exit_code=1
@@ -175,13 +181,13 @@ main() {
     esac
     
     echo ""
-    if [[ $exit_code -eq 0 ]]; then
+    if [[ ${exit_code} -eq 0 ]]; then
         log_header "All Checks Passed ✓"
     else
         log_header "Some Checks Failed ✗"
     fi
     
-    return $exit_code
+    return ${exit_code}
 }
 
 main "$@"

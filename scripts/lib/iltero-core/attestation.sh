@@ -20,6 +20,7 @@
 # =============================================================================
 
 if [[ -n "${ILTERO_ATTESTATION_SOURCED:-}" ]]; then
+    # shellcheck disable=SC2317  # dual-mode: returns when sourced, exits when run
     return 0 2>/dev/null || exit 0
 fi
 export ILTERO_ATTESTATION_SOURCED=1

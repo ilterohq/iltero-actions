@@ -9,6 +9,7 @@
 #
 # Modules:
 #   utils.sh         - Exit codes, progress indicators, helpers
+#   compliance-config.sh - Compliance settings read from a stack's config.yml
 #   validation.sh    - Unit structure validation
 #   scanning.sh      - Static compliance scanning
 #   evaluation.sh    - Plan evaluation
@@ -43,6 +44,9 @@ fi
 
 # Source utils early (exit codes, progress indicators)
 source "${ILTERO_CORE_DIR}/utils.sh"
+
+# Compliance settings read from config.yml (used by scanning + evaluation)
+source "${ILTERO_CORE_DIR}/compliance-config.sh"
 
 # Terraform version floor (used by terraform.sh + deployment.sh)
 source "${ILTERO_CORE_DIR}/tf-floor.sh"

@@ -12,7 +12,7 @@
 #   6. Submits metrics to Iltero API
 #   7. Creates alerts on drift detection
 #
-# Requires: ilterohq/iltero-actions/setup@v1 to be run first.
+# Requires: ilterohq/iltero-actions/setup to be run first.
 #
 # IMPORTANT: Uses self-contained units architecture where each unit has:
 #   - main.tf, providers.tf, versions.tf, backend.tf in the unit directory
@@ -20,7 +20,7 @@
 #   - config/backend/{environment}.hcl for backend configuration
 #
 # Usage:
-#   - uses: ilterohq/iltero-actions/monitor@v1
+#   - uses: ilterohq/iltero-actions/monitor@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       path: infra/stacks/my-stack/units/network
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -209,10 +209,10 @@ runs:
         # Check for backend config
         BACKEND_CONFIG="$UNIT_PATH/config/backend/${ENVIRONMENT}.hcl"
         if [[ -f "$BACKEND_CONFIG" ]]; then
-          echo "backend-config=$BACKEND_CONFIG" >> $GITHUB_OUTPUT
+          echo "backend-config=$BACKEND_CONFIG" >> "${GITHUB_OUTPUT}"
         else
           echo "::warning::No backend config found at $BACKEND_CONFIG"
-          echo "backend-config=" >> $GITHUB_OUTPUT
+          echo "backend-config=" >> "${GITHUB_OUTPUT}"
         fi
 
         echo "[PASS] Unit structure validated"
@@ -223,7 +223,7 @@ runs:
     # -------------------------------------------------------------------------
     # NOTE: Cloud credentials are not configured by this action. Drift
     # detection requires reading remote state, so configure credentials
-    # at the job level via `ilterohq/iltero-actions/resolve-credentials@v1`
+    # at the job level via `ilterohq/iltero-actions/resolve-credentials`
     # or a hand-written `aws-actions/configure-aws-credentials` block.
     # terraform init/refresh will fail without valid AWS_* env vars.
     #
@@ -297,9 +297,9 @@ runs:
         # Export outputs for other steps
         terraform output -json > /tmp/${UNIT_NAME}_outputs.json 2>/dev/null || echo "{}" > /tmp/${UNIT_NAME}_outputs.json
 
-        echo "drift-detected=$DRIFT_DETECTED" >> $GITHUB_OUTPUT
-        echo "resources-count=$RESOURCES_COUNT" >> $GITHUB_OUTPUT
-        echo "outputs-file=/tmp/${UNIT_NAME}_outputs.json" >> $GITHUB_OUTPUT
+        echo "drift-detected=$DRIFT_DETECTED" >> "${GITHUB_OUTPUT}"
+        echo "resources-count=$RESOURCES_COUNT" >> "${GITHUB_OUTPUT}"
+        echo "outputs-file=/tmp/${UNIT_NAME}_outputs.json" >> "${GITHUB_OUTPUT}"
 
         echo "::endgroup::"
 
@@ -320,23 +320,25 @@ runs:
 
         echo "::group::Runtime Compliance Scan"
 
-        # Skip if CLI not available or API not configured
-        if ! command -v iltero &> /dev/null; then
+        # Skip if CLI not available or API not configured. Check the binary that
+        # will actually be invoked below, not whatever the search path resolves —
+        # otherwise one binary answers "is it installed?" and another runs.
+        if ! command -v "${ILTERO_CLI_BIN:-iltero}" &> /dev/null; then
           echo "::warning::Iltero CLI not installed, skipping compliance scan"
-          echo "passed=skipped" >> $GITHUB_OUTPUT
+          echo "passed=skipped" >> "${GITHUB_OUTPUT}"
           exit 0
         fi
 
         if [[ -z "${ILTERO_API_URL:-}" ]] || [[ -z "${ILTERO_TOKEN:-}" ]]; then
           echo "::warning::ILTERO_API_URL or ILTERO_TOKEN not set, skipping compliance scan"
-          echo "passed=skipped" >> $GITHUB_OUTPUT
+          echo "passed=skipped" >> "${GITHUB_OUTPUT}"
           exit 0
         fi
 
         RESULTS_FILE="/tmp/runtime-compliance-${UNIT_NAME}.json"
 
         set +e
-        iltero scan runtime "$UNIT_PATH" \
+        "${ILTERO_CLI_BIN:-iltero}" scan runtime "$UNIT_PATH" \
           --stack-id "$STACK_ID" \
           --unit "$UNIT_NAME" \
           --environment "$ENVIRONMENT" \
@@ -348,10 +350,10 @@ runs:
 
         if [[ $EXIT_CODE -eq 0 ]]; then
           echo "[PASS] Runtime compliance scan passed"
-          echo "passed=true" >> $GITHUB_OUTPUT
+          echo "passed=true" >> "${GITHUB_OUTPUT}"
         else
           echo "::warning::Runtime compliance scan found issues (exit code: $EXIT_CODE)"
-          echo "passed=false" >> $GITHUB_OUTPUT
+          echo "passed=false" >> "${GITHUB_OUTPUT}"
         fi
 
         echo "::endgroup::"
@@ -374,7 +376,7 @@ runs:
 
         if [[ ! -f "$OUTPUTS_FILE" ]]; then
           echo "::warning::No outputs file found"
-          echo "status=skipped" >> $GITHUB_OUTPUT
+          echo "status=skipped" >> "${GITHUB_OUTPUT}"
           exit 0
         fi
 
@@ -383,7 +385,7 @@ runs:
 
         if [[ -z "$ENDPOINTS" ]]; then
           echo "::warning::No endpoints found in output key: $OUTPUT_KEY"
-          echo "status=skipped" >> $GITHUB_OUTPUT
+          echo "status=skipped" >> "${GITHUB_OUTPUT}"
           exit 0
         fi
 
@@ -414,9 +416,9 @@ runs:
         done
 
         if [[ "$ALL_HEALTHY" == "true" ]]; then
-          echo "status=healthy" >> $GITHUB_OUTPUT
+          echo "status=healthy" >> "${GITHUB_OUTPUT}"
         else
-          echo "status=unhealthy" >> $GITHUB_OUTPUT
+          echo "status=unhealthy" >> "${GITHUB_OUTPUT}"
         fi
 
         echo "::endgroup::"
@@ -468,7 +470,7 @@ runs:
         # If "skipped" or empty, don't include compliance flag
 
         # Use CLI command for proper retry logic and auth handling
-        if iltero monitor submit-metrics "${CLI_ARGS[@]}"; then
+        if "${ILTERO_CLI_BIN:-iltero}" monitor submit-metrics "${CLI_ARGS[@]}"; then
           echo "[PASS] Metrics submitted successfully"
         else
           echo "::warning::Failed to submit metrics via CLI"

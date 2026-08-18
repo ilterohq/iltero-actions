@@ -18,7 +18,7 @@ Complete reference for every action in this toolkit. For an overview and quick s
 
 ## Pipeline Action
 
-**`ilterohq/iltero-actions@v1`** — Full orchestration for most users.
+**`ilterohq/iltero-actions`** — Full orchestration for most users.
 
 ### Features
 
@@ -44,6 +44,9 @@ Complete reference for every action in this toolkit. For an overview and quick s
 | `mode` | No | `full` | Pipeline mode: `full`, `preview`, `scan`, `evaluate`, `scan_evaluate`, `deploy` |
 | `run_id` | No | — | Chain to a previous compliance run (required when `mode` is `deploy`) |
 | `verify_authorization` | No | `true` | Verify deployment authorization via Iltero |
+| `terraform_version` | No | newest 1.10.x | Terraform version to install (exact, `latest`, or a constraint). `terraform.version` in `config.yml` is not used for installation |
+| `cli_version` | No | `0.7.1` | Iltero CLI version to install. Pinned by default so a CLI release cannot change what blocks a deployment without an explicit change. Must be `0.7.0` or newer |
+| `strict_framework_scope` | No | `false` | Fail the run when a compliance framework declared for the environment was not evaluated. The shortfall is reported either way; this decides whether it stops the run |
 | `debug` | No | `false` | Enable debug output |
 
 ### Outputs
@@ -61,15 +64,17 @@ Complete reference for every action in this toolkit. For an overview and quick s
 | `require_approval` | Whether deployment requires manual approval |
 | `approval_id` | Iltero approval ID (when approval is required) |
 | `deployment_ready` | Whether pipeline passed and deployment can proceed |
+| `terraform_version` | The Terraform version that was installed and used |
+| `cli_version` | The Iltero CLI version that was installed and used |
 
 ---
 
 ## Setup Action
 
-**`ilterohq/iltero-actions/setup@v1`** — Install Iltero CLI and tools.
+**`ilterohq/iltero-actions/setup`** — Install Iltero CLI and tools.
 
 ```yaml
-- uses: ilterohq/iltero-actions/setup@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+- uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
   with:
     install-checkov: 'true'
     install-opa: 'true'
@@ -92,11 +97,11 @@ Complete reference for every action in this toolkit. For an overview and quick s
 
 ## Setup OIDC Action
 
-**`ilterohq/iltero-actions/setup-oidc@v1`** — Exchange GitHub OIDC token for short-lived Iltero API tokens.
+**`ilterohq/iltero-actions/setup-oidc`** — Exchange GitHub OIDC token for short-lived Iltero API tokens.
 
 ```yaml
-- uses: ilterohq/iltero-actions/setup@41bada1ab6681a6de40b2584a109a177f7345d06 # v1       # CLI must be installed first
-- uses: ilterohq/iltero-actions/setup-oidc@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+- uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0       # CLI must be installed first
+- uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
   with:
     stack-id: ${{ vars.ILTERO_STACK_ID }}
     org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -104,7 +109,9 @@ Complete reference for every action in this toolkit. For an overview and quick s
   #   ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
 ```
 
-Replaces long-lived `ILTERO_TOKEN` and `ILTERO_REGISTRY_TOKEN` secrets with ephemeral 10-minute tokens. Requires a PipelinePrincipal configured in Iltero for the repository and `permissions: { id-token: write }` on the workflow or job.
+Replaces long-lived `ILTERO_TOKEN` and `ILTERO_REGISTRY_TOKEN` secrets with
+ephemeral 10-minute tokens. Requires a pipeline principal configured in Iltero
+for the repository and `permissions: { id-token: write }` on the workflow or job.
 
 See [Authentication](authentication.md) for full setup details.
 
@@ -130,10 +137,10 @@ See [Authentication](authentication.md) for full setup details.
 
 ## Configure Registry Action
 
-**`ilterohq/iltero-actions/configure-registry@v1`** — Configure private module registry.
+**`ilterohq/iltero-actions/configure-registry`** — Configure private module registry.
 
 ```yaml
-- uses: ilterohq/iltero-actions/configure-registry@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+- uses: ilterohq/iltero-actions/configure-registry@RELEASE_COMMIT_SHA # v0.2.0
   with:
     registry-host: registry.iltero.io  # default
   env:
@@ -146,51 +153,124 @@ Configures `.netrc` and git URL rewriting so Terraform can access private module
 
 ## Scan Action
 
-**`ilterohq/iltero-actions/scan@v1`** — Run static analysis (Checkov via Iltero CLI).
+**`ilterohq/iltero-actions/scan`** — Run static analysis (Checkov via Iltero CLI).
 
 ```yaml
-- uses: ilterohq/iltero-actions/scan@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+- uses: ilterohq/iltero-actions/scan@RELEASE_COMMIT_SHA # v0.2.0
   with:
-    path: infra/stacks/network/units/baseline
+    path: infra/stacks/my-stack/units/network
     stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
-    unit: network-baseline
+    stack-name: my-stack
+    unit: network
     environment: production
     fail-on: high
+    # config.yml belongs to the stack, not to a unit.
+    config-path: .iltero/stacks/my-stack/config.yml
 ```
+
+### Compliance frameworks
+
+A stack names the compliance frameworks it must be checked against, per
+environment, in its `config.yml`:
+
+```yaml
+environments:
+  production:
+    compliance:
+      frameworks: [SOC2, ISO27001, CIS-AWS]
+```
+
+Point `config-path` at that file and the scan is checked against exactly those
+frameworks — the same behaviour as the all-in-one pipeline action. The file is
+only read; the scan action never writes to it.
+
+`config-path` has no default: leave it unset and no framework list is read. When
+you do set it, the file must exist and must declare the environment being
+scanned, or the run stops. A path that pointed nowhere would otherwise scan
+against no frameworks and report success.
+
+To bypass `config.yml`, set `frameworks` directly to a comma-separated list
+(`SOC2,ISO27001`). When neither is set, no framework list is sent and Iltero
+decides which policies apply from the stack's own registration — which the run
+log states explicitly, so a missing scope is never silent.
+
+Both actions also accept `stacks-config` and `stack-name`, which decide where
+result files are written (`<stacks-config>/<stack-name>/`). Use the same values
+across the actions in a workflow so a later step finds the earlier step's
+results. `stack-name` defaults to the stack UUID.
+
+A `frameworks` value written as a single item instead of a list
+(`frameworks: SOC2` rather than `frameworks: [SOC2]`) fails the run. It is not
+treated as "no frameworks", because that would report a passing scan that had
+checked nothing.
 
 ### Outputs
 
 | Output | Description |
 |--------|-------------|
 | `passed` | Whether scan passed |
+| `status` | `pass`, `violations`, or `infra_error` — see below |
 | `run-id` | Iltero run ID for chaining |
 | `violations` | Number of findings above threshold |
 | `results-file` | Path to JSON results |
+
+`status` distinguishes a compliance verdict from a scan that did not produce
+one. `violations` means the scan ran and found findings at or above the
+threshold — a result you may choose to accept. `infra_error` means no verdict
+exists: the scan did not complete, so there is nothing to accept. Gate on
+`status` rather than `passed` when that difference matters.
 
 ---
 
 ## Evaluate Action
 
-**`ilterohq/iltero-actions/evaluate@v1`** — Evaluate IaC plans against OPA policies.
+**`ilterohq/iltero-actions/evaluate`** — Evaluate IaC plans against OPA policies.
 
 ```yaml
-- uses: ilterohq/iltero-actions/evaluate@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+- uses: ilterohq/iltero-actions/evaluate@RELEASE_COMMIT_SHA # v0.2.0
   with:
-    path: infra/stacks/network/units/baseline
+    path: infra/stacks/my-stack/units/app
     stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
-    unit: network-baseline
+    stack-name: my-stack
+    unit: app
     environment: production
     run-id: ${{ steps.scan.outputs.run-id }}  # Chain to static analysis
+    config-path: .iltero/stacks/my-stack/config.yml
+    depends-on: '["network"]'                  # Units this one reads state from
 ```
+
+`config-path` and `frameworks` work exactly as described under
+[Scan Action](#compliance-frameworks).
+
+`depends-on` lists the units this unit reads Terraform state from. Terraform
+needs that state to be readable to produce a plan; when one of those units'
+state is not available, the plan is re-run with remote state dependencies
+switched off so the evaluation still produces a result instead of failing. Leave
+it out when the unit has no upstream units.
+
+### Outputs
+
+| Output | Description |
+|--------|-------------|
+| `passed` | Whether evaluation passed |
+| `status` | `pass`, `violations`, `needs_review`, or `infra_error` — see below |
+| `run-id` | Iltero run ID for chaining |
+| `violations` | Number of policy violations found |
+| `plan-file` | Path to the generated plan JSON |
+
+`status` carries the same meaning as on the scan action, with one extra value:
+`needs_review` means the evaluation ran but nothing could be confirmed — for
+example a plan whose checks cannot be resolved until apply. It is not a pass and
+is never waivable.
 
 ---
 
 ## Deploy Action
 
-**`ilterohq/iltero-actions/deploy@v1`** — Apply IaC changes with Iltero tracking.
+**`ilterohq/iltero-actions/deploy`** — Apply IaC changes with Iltero tracking.
 
 ```yaml
-- uses: ilterohq/iltero-actions/deploy@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+- uses: ilterohq/iltero-actions/deploy@RELEASE_COMMIT_SHA # v0.2.0
   with:
     path: infra/stacks/network/units/baseline
     stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -232,10 +312,10 @@ Configures `.netrc` and git URL rewriting so Terraform can access private module
 
 ## Monitor Action
 
-**`ilterohq/iltero-actions/monitor@v1`** — Drift detection and runtime compliance.
+**`ilterohq/iltero-actions/monitor`** — Drift detection and runtime compliance.
 
 ```yaml
-- uses: ilterohq/iltero-actions/monitor@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+- uses: ilterohq/iltero-actions/monitor@RELEASE_COMMIT_SHA # v0.2.0
   with:
     path: infra/stacks/network/units/baseline
     stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -327,9 +407,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: ilterohq/iltero-actions/setup@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
 
-      - uses: ilterohq/iltero-actions/setup-oidc@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
         with:
           stack-id: ${{ vars.ILTERO_STACK_ID }}
           org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -339,7 +419,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - uses: ilterohq/iltero-actions/monitor@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions/monitor@RELEASE_COMMIT_SHA # v0.2.0
         with:
           path: infra/stacks/my-stack/units/network
           stack-id: ${{ vars.STACK_ID }}
@@ -370,13 +450,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # 1. Install tools
-      - uses: ilterohq/iltero-actions/setup@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
         with:
           install-checkov: 'true'
           install-opa: 'true'
 
       # 2. OIDC authentication (replaces ILTERO_TOKEN secrets)
-      - uses: ilterohq/iltero-actions/setup-oidc@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
         with:
           stack-id: ${{ vars.ILTERO_STACK_ID }}
           org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -385,24 +465,28 @@ jobs:
       - run: ./scripts/custom-validation.sh
 
       # 4. Run static analysis
-      - uses: ilterohq/iltero-actions/scan@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions/scan@RELEASE_COMMIT_SHA # v0.2.0
         id: compliance
         with:
-          path: infra/stacks/network/units/baseline
+          path: infra/stacks/my-stack/units/network
           stack-id: ${{ vars.STACK_ID }}
-          unit: network-baseline
+          stack-name: my-stack
+          unit: network
           environment: production
+          config-path: .iltero/stacks/my-stack/config.yml
 
       # 5. Custom notification on failure
       - if: failure()
         run: ./scripts/notify-slack.sh "Compliance failed"
 
       # 6. Evaluate plan (chained to scan)
-      - uses: ilterohq/iltero-actions/evaluate@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions/evaluate@RELEASE_COMMIT_SHA # v0.2.0
         with:
-          path: infra/stacks/network/units/baseline
+          path: infra/stacks/my-stack/units/network
           stack-id: ${{ vars.STACK_ID }}
-          unit: network-baseline
+          stack-name: my-stack
+          unit: network
           environment: production
           run-id: ${{ steps.compliance.outputs.run-id }}
+          config-path: .iltero/stacks/my-stack/config.yml
 ```

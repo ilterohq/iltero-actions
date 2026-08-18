@@ -33,7 +33,8 @@
 #   "needs_review" - Nothing confirmable: resource-less+check-less plan, all-
 #                    unknown checks (exit 1, count 0), or exit 0 with no results
 #                    — never treated as a pass, always blocks
-#   "infra_error"  - Scanner/config/input or terraform error (exit 2/4/5)
+#   "infra_error"  - no verdict: a scanner, config, input or terraform error,
+#                    or any exit code this contract does not name
 #
 # EVAL_MODE values:
 #   "full"        - Full evaluation with backend (remote state available)
@@ -111,10 +112,12 @@ run_plan_evaluation() {
         if [[ ${prep_exit} -ne 0 ]]; then
             local failure_step="terraform init"
             [[ ${prep_exit} -eq 2 ]] && failure_step="terraform plan"
-            log_result "FAIL" "Plan evaluation aborted: ${failure_step} failed for ${unit_name}"
+            # Terraform could not produce a plan, so nothing was evaluated.
+            log_result "ERROR" "Plan evaluation aborted: ${failure_step} failed for ${unit_name}. No compliance verdict was produced."
             log_group_end
             EVAL_EXIT_CODE=2
             EVAL_PASSED="false"
+            EVAL_STATUS="infra_error"
             return 1
         fi
 
@@ -166,7 +169,7 @@ run_plan_evaluation() {
     local source_map_file="${eval_path}/resource_source_map.json"
     log_info "Generating resource source map..."
     set +e
-    iltero scan generate-source-map --path "${eval_path}" --output "${source_map_file}"
+    "${ILTERO_CLI_BIN:-iltero}" scan generate-source-map --path "${eval_path}" --output "${source_map_file}"
     local source_map_exit=$?
     set -e
 
@@ -177,7 +180,7 @@ run_plan_evaluation() {
 
     # Run evaluation
     local cmd=(
-        iltero scan evaluation "${PLAN_JSON_FILE}"
+        "${ILTERO_CLI_BIN:-iltero}" scan evaluation "${PLAN_JSON_FILE}"
         --stack-id "${stack_id}"
         --unit "${unit_name}"
         --environment "${environment}"
@@ -242,11 +245,32 @@ run_plan_evaluation() {
     # Note: Upload happens via Compliance API using scan_id from policy resolution
     # No --skip-upload needed - the CLI handles this automatically
 
+    # Opt-in: fail the run when a compliance framework declared for this
+    # environment was not evaluated. Off by default, matching the CLI — a gap
+    # can also mean Iltero has no policy content for that framework yet, and
+    # blocking on that would turn our shortfall into the caller's outage. The
+    # shortfall is reported either way.
+    if [[ "${STRICT_FRAMEWORK_SCOPE:-false}" == "true" ]]; then
+        cmd+=(--strict-framework-scope)
+    fi
+
     log_info "Running: ${cmd[*]}"
+    # Keep a copy of what it said: when no verdict is produced the evaluator's
+    # own last line is the only thing that names the cause.
+    local cli_log cli_rc_file
+    cli_log=$(mktemp)
+    cli_rc_file=$(mktemp)
     set +e
-    "${cmd[@]}"
-    EVAL_EXIT_CODE=$?
+    # The command records its own status rather than the shell reading
+    # PIPESTATUS afterwards: anything that runs between the pipeline and the
+    # read — a debug trap, for one — replaces PIPESTATUS, and the evaluator's
+    # exit code is what decides the verdict. Piping keeps the output live.
+    { "${cmd[@]}"; echo $? > "${cli_rc_file}"; } 2>&1 | tee "${cli_log}"
     set -e
+    # Fail closed: no recorded status means no verdict, never a pass.
+    EVAL_EXIT_CODE=$(cat "${cli_rc_file}" 2>/dev/null)
+    [[ "${EVAL_EXIT_CODE}" =~ ^[0-9]+$ ]] || EVAL_EXIT_CODE="${EXIT_ERROR}"
+    rm -f "${cli_rc_file}"
 
     PLAN_URL="${plan_s3_url:-}"
     EVAL_PLAN_DIGEST="${plan_digest:-}"
@@ -318,7 +342,9 @@ run_plan_evaluation() {
     #   exit 1 and total == 0   -> nothing confirmable (incl. all-unknown checks)
     #                              -> needs_review (never a pass, not an error)
     #   exit 1                  -> OPA and/or native check{} failure(s) -> waivable
-    #   exit 2/4/5              -> genuine scanner/config/input error -> infra_error
+    #   any other code          -> no verdict was produced -> infra_error.
+#                              Deliberately open-ended: a code this contract
+#                              does not name must block here without an edit.
     local evaluated_total="${total_evaluated:-0}"
     local native_failed
     native_failed=$(jq -r '[.native_checks[]? | select(.status == "fail")] | length' "${results_file}" 2>/dev/null || echo "0")
@@ -351,10 +377,12 @@ run_plan_evaluation() {
         EVAL_VIOLATIONS=$((EVAL_VIOLATIONS + native_failed))
         log_result "FAIL" "${EVAL_VIOLATIONS} violation(s) at or above '${fail_on}' threshold (incl. ${native_failed} failing control check(s))"
     else
-        # exit 2/4/5 — genuine scanner/config/input error, not a compliance verdict.
+        # Any other code — no compliance verdict was produced.
         EVAL_PASSED="false"
         EVAL_STATUS="infra_error"
-        log_result "FAIL" "Plan evaluation failed for ${unit_name} (exit code: ${EVAL_EXIT_CODE})"
+        local cli_detail
+        cli_detail=$(last_diagnostic_line "${cli_log}")
+        log_result "ERROR" "Plan evaluation produced no compliance verdict for ${unit_name} (exit ${EVAL_EXIT_CODE}) — this is not a clean evaluation.${cli_detail:+ Reported: ${cli_detail}}"
     fi
 
     if [[ -n "${APPROVAL_ID}" ]]; then
@@ -362,5 +390,6 @@ run_plan_evaluation() {
     fi
 
     log_group_end
-    return ${EVAL_EXIT_CODE}
+    rm -f "${cli_log}"
+    return "${EVAL_EXIT_CODE}"
 }
