@@ -12,14 +12,14 @@
 #   - PipelinePrincipal must exist for this repository in Iltero
 #
 # Usage (stack mode — deploy-authorizing per-stack token):
-#   - uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
-#   - uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
+#   - uses: ilterohq/iltero-actions/setup@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+#   - uses: ilterohq/iltero-actions/setup-oidc@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
 #     with:
 #       stack-id: ${{ vars.ILTERO_STACK_ID }}
 #       org-id: ${{ vars.ILTERO_ORG_ID }}
 #
 # Usage (repo mode — repo-scoped token for a job-level resolve):
-#   - uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
+#   - uses: ilterohq/iltero-actions/setup-oidc@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
 #     with:
 #       workspace-id: ${{ vars.ILTERO_WORKSPACE_ID }}
 #       org-id: ${{ vars.ILTERO_ORG_ID }}

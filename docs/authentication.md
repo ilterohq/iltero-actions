@@ -30,7 +30,7 @@ OIDC exchanges a GitHub Actions token for short-lived Iltero credentials. No sec
 **Root action** (simplest):
 
 ```yaml
-- uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
+- uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
   with:
     oidc: 'true'
     org_id: ${{ vars.ILTERO_ORG_ID }}
@@ -41,8 +41,8 @@ OIDC exchanges a GitHub Actions token for short-lived Iltero credentials. No sec
 **Granular actions** (setup + setup-oidc):
 
 ```yaml
-- uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
-- uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
+- uses: ilterohq/iltero-actions/setup@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+- uses: ilterohq/iltero-actions/setup-oidc@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
   with:
     stack-id: ${{ vars.ILTERO_STACK_ID }}
     org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -64,7 +64,7 @@ If OIDC is not an option, use long-lived secrets. Less secure because these toke
 | `ILTERO_REGISTRY_TOKEN` | Private modules | Iltero Console |
 
 ```yaml
-- uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
+- uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
   with:
     stacks_path: infra/stacks
   env:

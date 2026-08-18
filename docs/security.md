@@ -27,7 +27,7 @@ This page covers supply-chain and workflow-security practices for Iltero Actions
 steps:
   - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
   - uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
-  - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
+  - uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
 ```
 
 Include the version comment (`# v6.0.2`) so reviewers can read intent without decoding the SHA, and so Dependabot can parse and update it.
@@ -38,7 +38,7 @@ Include the version comment (`# v6.0.2`) so reviewers can read intent without de
 steps:
   - uses: actions/checkout@v4                          # tag can be moved
   - uses: aws-actions/configure-aws-credentials@v4     # tag can be moved
-  - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0                   # tag can be moved
+  - uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0                   # tag can be moved
 ```
 
 ### Finding the SHA for an action

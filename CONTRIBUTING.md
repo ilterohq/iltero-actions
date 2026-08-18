@@ -213,15 +213,15 @@ show as "Unverified".
 
 Documentation pins this action to the commit a release was cut from, so the pin
 can only be filled in once that commit exists. Between releases the examples
-carry the literal `RELEASE_COMMIT_SHA`, which is replaced as the last step:
+carry the literal `ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a`, which is replaced as the last step:
 
 ```bash
 # 1. Land everything else, then find the commit the release will be cut from
 git rev-parse HEAD
 
 # 2. Substitute it into every example and doc
-grep -rl 'RELEASE_COMMIT_SHA' --include='*.md' --include='*.yml' . \
-  | xargs sed -i '' "s/RELEASE_COMMIT_SHA/$(git rev-parse HEAD)/g"
+grep -rl 'ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a' --include='*.md' --include='*.yml' . \
+  | xargs sed -i '' "s/ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a/$(git rev-parse HEAD)/g"
 
 # 3. Update the '# vX.Y.Z' comments to the version being released, commit,
 #    then tag that commit and publish the release

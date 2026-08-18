@@ -47,7 +47,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
+      - uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
         with:
           stacks_path: infra/stacks
           oidc: 'true'

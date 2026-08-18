@@ -56,8 +56,8 @@ jobs:
       # which is how a nonexistent commit came to be referenced 40 times.
       - name: Refuse to publish with an unresolved pin placeholder
         run: |
-          if grep -rl 'RELEASE_COMMIT_SHA' --include='*.md' --include='*.yml' . ; then
-            echo "::error::Documentation still contains the RELEASE_COMMIT_SHA placeholder."
+          if grep -rl 'ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a' --include='*.md' --include='*.yml' . ; then
+            echo "::error::Documentation still contains the ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a placeholder."
             echo "::error::Replace it with this release's commit SHA before publishing."
             exit 1
           fi
