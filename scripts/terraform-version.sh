@@ -180,7 +180,13 @@ resolve_terraform_version() {
     local seen="" cfg raw nrm
     while IFS= read -r cfg; do
         [[ -z "${cfg}" ]] && continue
-        raw="$(yq eval '.terraform.version // ""' "${cfg}" 2>/dev/null || true)"
+        # A yq that cannot run returns nothing, which reads as "no version
+        # declared" — a stack pinning 1.12 would silently get the default and
+        # the recorded version would not be the declared one.
+        if ! raw="$(yq eval '.terraform.version // ""' "${cfg}" 2>/dev/null)"; then
+            log_error "Could not read terraform.version from ${cfg}"
+            return "${EXIT_ERROR}"
+        fi
         raw="$(trim "${raw}")"
         [[ -z "${raw}" || "${raw}" == "null" ]] && continue
         nrm="$(normalize_tf_version "${raw}")"

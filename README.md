@@ -47,7 +47,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
         with:
           stacks_path: infra/stacks
           oidc: 'true'
@@ -73,14 +73,14 @@ jobs:
 
 | Action | Use case |
 |--------|----------|
-| [`ilterohq/iltero-actions@v1`](docs/actions.md#pipeline-action) | Full orchestration — most users |
-| [`ilterohq/iltero-actions/setup@v1`](docs/actions.md#setup-action) | Install CLI, Checkov, OPA, Terraform |
-| [`ilterohq/iltero-actions/setup-oidc@v1`](docs/actions.md#setup-oidc-action) | Exchange GitHub OIDC for Iltero tokens |
-| [`ilterohq/iltero-actions/configure-registry@v1`](docs/actions.md#configure-registry-action) | Private module registry auth |
-| [`ilterohq/iltero-actions/scan@v1`](docs/actions.md#scan-action) | Static analysis |
-| [`ilterohq/iltero-actions/evaluate@v1`](docs/actions.md#evaluate-action) | Plan evaluation |
-| [`ilterohq/iltero-actions/deploy@v1`](docs/actions.md#deploy-action) | Apply IaC changes with Iltero tracking |
-| [`ilterohq/iltero-actions/monitor@v1`](docs/actions.md#monitor-action) | Drift detection and runtime compliance |
+| [`ilterohq/iltero-actions`](docs/actions.md#pipeline-action) | Full orchestration — most users |
+| [`ilterohq/iltero-actions/setup`](docs/actions.md#setup-action) | Install CLI, Checkov, OPA, Terraform |
+| [`ilterohq/iltero-actions/setup-oidc`](docs/actions.md#setup-oidc-action) | Exchange GitHub OIDC for Iltero tokens |
+| [`ilterohq/iltero-actions/configure-registry`](docs/actions.md#configure-registry-action) | Private module registry auth |
+| [`ilterohq/iltero-actions/scan`](docs/actions.md#scan-action) | Static analysis |
+| [`ilterohq/iltero-actions/evaluate`](docs/actions.md#evaluate-action) | Plan evaluation |
+| [`ilterohq/iltero-actions/deploy`](docs/actions.md#deploy-action) | Apply IaC changes with Iltero tracking |
+| [`ilterohq/iltero-actions/monitor`](docs/actions.md#monitor-action) | Drift detection and runtime compliance |
 
 ## Examples
 

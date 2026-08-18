@@ -1,12 +1,18 @@
 # =============================================================================
 # Iltero Actions - CI Pipeline
 # =============================================================================
-# Quality checks for the iltero-actions repository:
-#   - YAML/Action linting (actionlint, yamllint)
-#   - Shell script analysis (shellcheck)
-#   - JSON schema validation
-#   - Security scanning (gitleaks)
-#   - Markdown linting
+# Quality checks for the iltero-actions repository. Each line states what the
+# check actually covers, because a check that reads less than its name suggests
+# is worse than no check — it reports success over the part it never looked at:
+#   - Workflow linting (actionlint) — .github/workflows only. It cannot parse
+#     composite action files; those are covered by yamllint and the schema job.
+#   - YAML linting (yamllint) — every YAML file in the repository.
+#   - Shell script analysis (shellcheck) — scripts/, at style severity, which is
+#     the severity the repository's own rules require.
+#   - JSON schema validation — the schema files themselves, not configurations
+#     written against them.
+#   - Secret scanning (TruffleHog) and workflow security analysis (zizmor).
+#   - Markdown linting — the five top-level documents named in the job.
 #
 # =============================================================================
 
@@ -46,11 +52,42 @@ jobs:
       # -----------------------------------------------------------------------
       # Action & YAML Linting
       # -----------------------------------------------------------------------
+      # Pinned to an exact release and checksum-verified: the upstream installer
+      # script lives on a moving branch, and `curl` without `-f` turns a fetch
+      # failure into an empty script that `bash` exits 0 on.
+      # VERSION and SHA256 are a pair — bump both together, or the build fails
+      # closed on a checksum mismatch. Dependabot cannot see either of them.
       - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
-          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          echo "$PWD" >> "$GITHUB_PATH"
+          archive="${RUNNER_TEMP}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 -o "${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/actionlint-bin"
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}/actionlint-bin" actionlint
+          rm -f "${archive}"
+          echo "${RUNNER_TEMP}/actionlint-bin" >> "${GITHUB_PATH}"
 
+      # Lints .github/workflows only. Composite action.yml files are not a
+      # supported input — actionlint parses them as workflows and reports
+      # spurious errors — so their run: bodies remain unlinted.
+      # Deliberately ungrouped: a collapsed group would hide the findings.
+      # -verbose records the tool version and the files actually linted, so a
+      # passing run is distinguishable in the log from one that linted nothing.
+      - name: Lint GitHub Actions workflows
+        run: |
+          # actionlint shells out to shellcheck to analyse run: blocks, and
+          # silently skips that analysis — still exiting 0 — when the binary is
+          # missing. Assert it is present rather than inheriting it from the
+          # runner image. (pyflakes is also optional; no workflow here uses
+          # shell: python, so its absence is not asserted.)
+          command -v shellcheck > /dev/null \
+            || { echo "::error::shellcheck not found; actionlint would skip run: block analysis"; exit 1; }
+          actionlint -version
+          actionlint -color -verbose
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -67,12 +104,22 @@ jobs:
       # -----------------------------------------------------------------------
       # Shell Script Linting
       # -----------------------------------------------------------------------
+      # --severity=style is required for .shellcheckrc's require-variable-braces
+      # (SC2250) to be reported at all — at --severity=warning it is filtered
+      # out, so the rule .shellcheckrc enables went unenforced.
+      # Deliberately ungrouped: a collapsed group would hide the findings.
+      # shellcheck comes from the runner image and is not pinned; the version
+      # and the file list are printed so a passing run records what it checked.
       - name: Lint Shell Scripts
         run: |
-          echo "::group::Running ShellCheck"
+          shellcheck --version
+          # An unrecognised name in .shellcheckrc's enable= is ignored silently,
+          # which would switch the brace rule back off with CI still green.
+          shellcheck --list-optional | grep -q 'require-variable-braces' \
+            || { echo "::error::require-variable-braces unavailable in this shellcheck"; exit 1; }
+          find scripts -name '*.sh' -type f -print | sort
           find scripts -name '*.sh' -type f -print0 | \
-            xargs -0 shellcheck --severity=warning --format=gcc
-          echo "::endgroup::"
+            xargs -0 shellcheck --severity=style --format=gcc
 
       # -----------------------------------------------------------------------
       # Markdown Linting
@@ -172,12 +219,22 @@ jobs:
       # Dedicated GitHub Actions security linter
       # Catches: injection, pwn requests, excessive permissions, credential exposure
       - name: Scan workflows for security issues
+        env:
+          ZIZMOR_VERSION: 1.29.0
         run: |
-          # Install zizmor CLI directly
-          pip install zizmor
-          echo "::group::Running zizmor security scan"
-          zizmor --format sarif . > results.sarif
+          pip install "zizmor==${ZIZMOR_VERSION}"
+
+          # Print the findings before writing the machine-readable copy. Only
+          # the SARIF file was produced before, and its upload is allowed to
+          # fail — so a failing scan could leave nothing a reader could act on
+          # in either place.
+          rc=0
+          echo "::group::zizmor findings"
+          zizmor --format plain . || rc=$?
           echo "::endgroup::"
+
+          zizmor --format sarif . > results.sarif || true
+          exit "${rc}"
 
       - name: Upload SARIF results
         if: always()

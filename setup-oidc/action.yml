@@ -12,14 +12,14 @@
 #   - PipelinePrincipal must exist for this repository in Iltero
 #
 # Usage (stack mode — deploy-authorizing per-stack token):
-#   - uses: ilterohq/iltero-actions/setup@v1
-#   - uses: ilterohq/iltero-actions/setup-oidc@v1
+#   - uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
+#   - uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       stack-id: ${{ vars.ILTERO_STACK_ID }}
 #       org-id: ${{ vars.ILTERO_ORG_ID }}
 #
 # Usage (repo mode — repo-scoped token for a job-level resolve):
-#   - uses: ilterohq/iltero-actions/setup-oidc@v1
+#   - uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       workspace-id: ${{ vars.ILTERO_WORKSPACE_ID }}
 #       org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -99,7 +99,10 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        if ! command -v iltero &>/dev/null; then
+        # Check the binary the exchange will actually invoke, not whatever the
+        # search path resolves — otherwise one binary answers "is it installed?"
+        # and another runs.
+        if ! command -v "${ILTERO_CLI_BIN:-iltero}" &>/dev/null; then
           echo "::error::Iltero CLI not found. Run ilterohq/iltero-actions/setup first."
           exit 1
         fi

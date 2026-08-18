@@ -16,8 +16,8 @@
 
 ## Checklist
 
-- [ ] Scripts pass `shellcheck --severity=warning`
-- [ ] Action YAML files are valid (`yamllint`, `actionlint`)
+- [ ] Scripts and YAML pass `./scripts/test.sh lint` (same checks CI runs)
+- [ ] Workflows pass `actionlint`; action YAML passes `yamllint`
 - [ ] Tests pass (`bats tests/*.bats`)
 - [ ] Documentation updated (if applicable)
 - [ ] All commits are signed off (DCO)

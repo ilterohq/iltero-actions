@@ -80,7 +80,7 @@ if [[ ! "${SCOPE_VALUE}" =~ ${UUID_RE} ]]; then
 fi
 scope_args=("${SCOPE_FLAG}" "${SCOPE_VALUE}")
 
-iltero auth oidc \
+"${ILTERO_CLI_BIN:-iltero}" auth oidc \
   "${scope_args[@]}" \
   --org-id "${ILTERO_ORG_ID}" \
   --api-url "${RESOLVED_API_URL}" \

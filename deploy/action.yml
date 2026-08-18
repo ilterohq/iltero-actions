@@ -5,7 +5,7 @@
 #
 # NOTE: This is a low-level single-unit deployment action. For production
 # deployments with compliance checks and authorization, use:
-#   ilterohq/iltero-actions@v1 with mode: deploy
+#   ilterohq/iltero-actions with mode: deploy
 #
 # This action:
 #   1. Validates self-contained unit structure
@@ -20,7 +20,7 @@
 # calling workflow (pipeline action) to verify authorization before
 # invoking this action. This follows single-responsibility principle.
 #
-# Requires: ilterohq/iltero-actions/setup@v1 to be run first.
+# Requires: ilterohq/iltero-actions/setup to be run first.
 #
 # IMPORTANT: Uses self-contained units architecture where each unit has:
 #   - main.tf, providers.tf, versions.tf, backend.tf in the unit directory
@@ -28,7 +28,7 @@
 #   - config/backend/{environment}.hcl for backend configuration
 #
 # Usage (via pipeline - recommended):
-#   - uses: ilterohq/iltero-actions@v1
+#   - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       path: infra/stacks/my-stack
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -37,7 +37,7 @@
 #       run-id: ${{ needs.compliance.outputs.run-id }}
 #
 # Usage (direct - no authorization):
-#   - uses: ilterohq/iltero-actions/deploy@v1
+#   - uses: ilterohq/iltero-actions/deploy@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       path: infra/stacks/my-stack/units/network
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -136,7 +136,7 @@ runs:
     # -------------------------------------------------------------------------
     # NOTE: Cloud credentials are not configured by this action. Configure
     # them at the job level before invoking — either via
-    # `ilterohq/iltero-actions/resolve-credentials@v1` (recommended; looks
+    # `ilterohq/iltero-actions/resolve-credentials` (recommended; looks
     # up the role bound to the stack/environment) or a hand-written
     # `aws-actions/configure-aws-credentials` block. terraform
     # init/plan/apply read AWS_* from the job env.
@@ -169,10 +169,11 @@ runs:
 
         # Run deployment. scan_id ($5) falls back to ILTERO_SCAN_ID inside the
         # function; stack_id ($6) is required by the attested path's authorize.
-        set +e
-        run_deployment "${DEPLOY_PATH}" "${UNIT_NAME}" "${ENVIRONMENT}" "${RUN_ID}" "${ILTERO_SCAN_ID:-}" "${STACK_ID}"
-        EXIT_CODE=$?
-        set -e
+        # `|| ` rather than a `set +e` bracket: the library re-enables errexit
+        # around its own commands, which would clobber the guard and kill this
+        # step before any output is written.
+        EXIT_CODE=0
+        run_deployment "${DEPLOY_PATH}" "${UNIT_NAME}" "${ENVIRONMENT}" "${RUN_ID}" "${ILTERO_SCAN_ID:-}" "${STACK_ID}" || EXIT_CODE=$?
 
         # Set outputs using helper
         set_deploy_outputs

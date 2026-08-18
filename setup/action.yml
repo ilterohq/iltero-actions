@@ -10,7 +10,7 @@
 #   - Infrastructure toolchain: Terraform, yq, jq (optional)
 #
 # Usage:
-#   - uses: ilterohq/iltero-actions/setup@v1
+#   - uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       install-checkov: 'true'
 #       install-opa: 'true'
@@ -26,9 +26,12 @@ branding:
 
 inputs:
   version:
-    description: Iltero CLI version to install
+    description: |
+      Iltero CLI version to install. Pinned by default so a new CLI release
+      cannot change what blocks a deployment without an explicit change here.
+      Must be 0.7.0 or newer.
     required: false
-    default: 'latest'
+    default: '0.7.1'
 
   python-version:
     description: Python version to use
@@ -105,9 +108,19 @@ runs:
           aarch64|arm64) ARCH="arm64" ;;
         esac
 
-        curl -sSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_${OS}_${ARCH}" -o /tmp/yq 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        # --fail: without it curl writes an error page body to the
+        # destination and still exits 0, so an HTTP 404 gets installed as
+        # the binary and the step below reports success.
+        if ! curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_${OS}_${ARCH}" -o /tmp/yq; then
+          echo "::error::Failed to download yq"
+          exit 1
+        fi
         sudo mv /tmp/yq /usr/local/bin/yq
         sudo chmod +x /usr/local/bin/yq
+        if ! yq --version > /dev/null 2>&1; then
+          echo "::error::yq was downloaded but does not run"
+          exit 1
+        fi
 
         echo "✅ yq installed"
 
@@ -132,9 +145,19 @@ runs:
           aarch64|arm64) ARCH="arm64" ;;
         esac
 
-        curl -sSL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-${ARCH}" -o /tmp/jq 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        # --fail: without it curl writes an error page body to the
+        # destination and still exits 0, so an HTTP 404 gets installed as
+        # the binary and the step below reports success.
+        if ! curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-${JQ_VERSION}/jq-linux-${ARCH}" -o /tmp/jq; then
+          echo "::error::Failed to download jq"
+          exit 1
+        fi
         sudo mv /tmp/jq /usr/local/bin/jq
         sudo chmod +x /usr/local/bin/jq
+        if ! jq --version > /dev/null 2>&1; then
+          echo "::error::jq was downloaded but does not run"
+          exit 1
+        fi
 
         echo "✅ jq installed"
 
@@ -182,11 +205,41 @@ runs:
       run: |
         set -euo pipefail
 
-        if [ "$INPUT_VERSION" = "latest" ]; then
-          pip install --quiet --upgrade iltero-cli 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
-        else
-          pip install --quiet "iltero-cli==${INPUT_VERSION}" 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
+        # Constrain the version before it is used anywhere. It reaches the run
+        # log, and a value carrying a newline is emitted there as further
+        # workflow commands rather than as text — `::stop-commands::` would
+        # silence every command after it, including a later secret mask. Match
+        # with [[ =~ ]], whose anchors bind the whole string rather than one
+        # line.
+        if [[ "${INPUT_VERSION}" != "latest" && -n "${INPUT_VERSION}" ]] &&
+           [[ ! "${INPUT_VERSION}" =~ ^[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$ ]]; then
+          echo "::error::version must be 'latest' or an exact version such as 0.6.3"
+          exit 1
         fi
+
+        if [ "$INPUT_VERSION" = "latest" ]; then
+          PIP_ARGS=(--quiet --upgrade iltero-cli)
+        else
+          PIP_ARGS=(--quiet "iltero-cli==${INPUT_VERSION}")
+        fi
+
+        # Install to a log rather than through a filter. Piping into grep hands
+        # the pipeline grep's status — "nothing left to print" — and the `|| true`
+        # that silences it then swallows a failed install too. When an older CLI
+        # is already on PATH, that combination runs the whole job on a version
+        # nobody selected.
+        #
+        # `python -m pip` rather than `pip`: the version is read back from the
+        # installed package's metadata, so both must be the same interpreter
+        # rather than coincidentally the same by PATH order.
+        PIP_LOG=$(mktemp)
+        if ! python -m pip install "${PIP_ARGS[@]}" > "${PIP_LOG}" 2>&1; then
+          cat "${PIP_LOG}"
+          echo "::error::Iltero CLI install failed"
+          exit 1
+        fi
+        grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" \
+          "${PIP_LOG}" || true
 
         # Capture the absolute path of the just-installed CLI so downstream
         # steps invoke it directly rather than via PATH lookup.
@@ -210,6 +263,12 @@ runs:
           echo "GHEOF"
         } >> "$GITHUB_ENV"
 
+
+        # The gate reads the CLI's exit code to decide whether a deployment may
+        # proceed, and an older CLI exits cleanly in states where no verdict was
+        # reached. Fail closed rather than gate on a signal that is not there.
+        "${GITHUB_ACTION_PATH}/../scripts/cli-floor.sh" enforce-floor
+
         echo "✅ Iltero CLI installed at ${ILTERO_CLI_BIN_PATH}"
 
     # -------------------------------------------------------------------------
@@ -221,8 +280,30 @@ runs:
       run: |
         set -euo pipefail
 
-        pip install --quiet --upgrade --break-system-packages checkov 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || \
-          pip install --quiet --upgrade checkov 2>&1 | grep -v "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" || true
+        # Install to a log rather than through a filter. Piping into grep hands
+        # the pipeline grep's status, and the `|| true` that silences it then
+        # let a failed install be announced below as a successful one — leaving
+        # the scanner missing and the run log saying otherwise.
+        # Two attempts, two logs: the fallback differs only by
+        # --break-system-packages, so the first attempt's reason is usually the
+        # real one and must not be overwritten by the second.
+        PIP_LOG_1=$(mktemp)
+        PIP_LOG_2=$(mktemp)
+        if ! python -m pip install --quiet --upgrade --break-system-packages checkov > "${PIP_LOG_1}" 2>&1 &&
+           ! python -m pip install --quiet --upgrade checkov > "${PIP_LOG_2}" 2>&1; then
+          cat "${PIP_LOG_1}" "${PIP_LOG_2}"
+          echo "::error::Checkov install failed"
+          exit 1
+        fi
+        grep -hv "^Requirement\|^Collecting\|^Downloading\|^Using cached\|^Installing" \
+          "${PIP_LOG_1}" "${PIP_LOG_2}" || true
+
+        # Checkov performs the static checks, so "pip exited 0" is not enough:
+        # confirm the scanner actually runs before anything reports it installed.
+        if ! CHECKOV_VERSION=$(checkov --version 2>/dev/null) || [ -z "${CHECKOV_VERSION}" ]; then
+          echo "::error::Checkov install reported success but the scanner does not run"
+          exit 1
+        fi
 
         echo "✅ Checkov installed"
 
@@ -246,9 +327,19 @@ runs:
           aarch64|arm64) ARCH="arm64" ;;
         esac
 
-        curl -sSL -o /usr/local/bin/opa \
-          "https://openpolicyagent.org/downloads/v${OPA_VERSION}/opa_${OS}_${ARCH}_static" 2>&1 | grep -v "^  %\|^Dload\|^Total" || true
+        # --fail: without it curl writes an error page body to the
+        # destination and still exits 0, so an HTTP 404 gets installed as
+        # the policy engine and the step below reports success.
+        if ! curl -fsSL -o /usr/local/bin/opa \
+          "https://openpolicyagent.org/downloads/v${OPA_VERSION}/opa_${OS}_${ARCH}_static"; then
+          echo "::error::Failed to download OPA"
+          exit 1
+        fi
         chmod +x /usr/local/bin/opa
+        if ! opa version > /dev/null 2>&1; then
+          echo "::error::OPA was downloaded but does not run"
+          exit 1
+        fi
 
         echo "✅ OPA installed"
 
@@ -316,9 +407,21 @@ runs:
         echo "✅ Installation Summary:"
 
         # Iltero CLI
-        CLI_VERSION=$(iltero --version 2>/dev/null || echo "not installed")
+        # Read from the installed package's metadata, which the installer wrote,
+        # rather than asking the program to describe itself. "not installed" was
+        # previously recorded here as though it were a version, and the step
+        # still reported success.
+        CLI_VERSION=$(python -c 'import importlib.metadata as m; print(m.version("iltero-cli"))' 2>/dev/null || true)
+        if [[ ! "${CLI_VERSION}" =~ ^[0-9A-Za-z.!+-]+$ ]]; then
+          echo "::error::Could not read the installed Iltero CLI version from its package metadata"
+          exit 1
+        fi
         echo "   Iltero CLI: $CLI_VERSION"
-        echo "cli-version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
+        {
+          echo "cli-version<<GHEOF"
+          echo "${CLI_VERSION}"
+          echo "GHEOF"
+        } >> "$GITHUB_OUTPUT"
 
         # Checkov
         if [ "$INPUT_INSTALL_CHECKOV" = "true" ]; then

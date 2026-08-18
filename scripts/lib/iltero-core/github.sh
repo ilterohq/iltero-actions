@@ -20,6 +20,7 @@ set_output() {
 # Set multiple outputs from scan results
 set_scan_outputs() {
     set_output "passed" "${SCAN_PASSED}"
+    set_output "status" "${SCAN_STATUS:-infra_error}"
     set_output "run-id" "${SCAN_RUN_ID}"
     set_output "violations" "${SCAN_VIOLATIONS}"
 }
@@ -27,6 +28,7 @@ set_scan_outputs() {
 # Set multiple outputs from evaluation results
 set_eval_outputs() {
     set_output "passed" "${EVAL_PASSED}"
+    set_output "status" "${EVAL_STATUS:-infra_error}"
     set_output "run-id" "${EVAL_RUN_ID}"
     set_output "violations" "${EVAL_VIOLATIONS}"
     set_output "approval-id" "${APPROVAL_ID}"
@@ -245,17 +247,24 @@ _write_pipeline_summary_v2() {
 
     local has_best_effort=false
     local rows
+    # Both columns handle the same status values so they stay symmetric.
+    # Both columns handle the same status values so they stay symmetric.
+    # "needs_review" is only produced on the evaluation side.
     rows=$(echo "${unit_results}" | jq -r '.[] |
         "\(.unit) | \(
             if .scan == null then "--"
             elif .scan.skipped then "Skip"
             elif .scan.passed then "Pass"
+            elif .scan.status == "infra_error" then "Error — no verdict"
+            elif .scan.status == "needs_review" then "Needs review"
             else "Fail (\(.scan.violations // 0))"
             end
         ) | \(
             if .evaluation == null then "--"
             elif .evaluation.skipped then "Skip"
             elif .evaluation.passed then "Pass"
+            elif .evaluation.status == "infra_error" then "Error — no verdict"
+            elif .evaluation.status == "needs_review" then "Needs review"
             else "Fail (\(.evaluation.violations // 0))"
             end
         ) | \(

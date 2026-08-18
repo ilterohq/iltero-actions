@@ -43,8 +43,8 @@ jobs:
   deploy:
     steps:
       - uses: actions/checkout@<sha>
-      - uses: ilterohq/iltero-actions/setup@<sha>
-      - uses: ilterohq/iltero-actions@<sha>
+      - uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
+      - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
         with:
           mode: deploy
           # attest defaults to true; set attest: false to opt out

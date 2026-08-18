@@ -25,28 +25,30 @@ EVALUATION="${EVALUATION_PASSED:-unknown}"
 ENV="${ENVIRONMENT:-unknown}"
 UNIT_RESULTS_JSON="${UNIT_RESULTS:-}"
 TF_VER="${TERRAFORM_VERSION:-unknown}"
+# Which scanner version produced the verdict below.
+CLI_VER="${CLI_VERSION:-unknown}"
 
 # Get stack count
-STACK_COUNT=$(echo "$STACKS" | jq 'length' 2>/dev/null || echo "0")
+STACK_COUNT=$(echo "${STACKS}" | jq 'length' 2>/dev/null || echo "0")
 
 # -------------------------------------------------------------------------
 # Rich summary (when per-unit results are available)
 # -------------------------------------------------------------------------
-if [[ -n "$UNIT_RESULTS_JSON" ]] && echo "$UNIT_RESULTS_JSON" | jq empty 2>/dev/null; then
+if [[ -n "${UNIT_RESULTS_JSON}" ]] && echo "${UNIT_RESULTS_JSON}" | jq empty 2>/dev/null; then
     # Source the iltero-core library for write_pipeline_summary
     source "${SCRIPT_DIR}/lib/iltero-core/index.sh"
 
     # Build the v2 pipeline summary JSON
-    local_stacks_array="$STACKS"
+    local_stacks_array="${STACKS}"
     summary_json=$(jq -n \
-        --argjson stacks "$local_stacks_array" \
-        --arg environment "$ENV" \
-        --argjson unit_results "$UNIT_RESULTS_JSON" \
+        --argjson stacks "${local_stacks_array}" \
+        --arg environment "${ENV}" \
+        --argjson unit_results "${UNIT_RESULTS_JSON}" \
         '{stacks: $stacks, environment: $environment, unit_results: $unit_results}')
 
-    write_pipeline_summary "$summary_json"
+    write_pipeline_summary "${summary_json}"
 
-    write_provenance_section "$UNIT_RESULTS_JSON"
+    write_provenance_section "${UNIT_RESULTS_JSON}"
 
     # Add timestamp
     cat >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}" << EOF
@@ -62,7 +64,7 @@ fi
 # -------------------------------------------------------------------------
 
 # Determine status text
-case "$STATUS" in
+case "${STATUS}" in
     success)
         STATUS_TEXT="Passed"
         ;;
@@ -85,28 +87,28 @@ esac
 
 # Generate summary
 cat >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}" << EOF
-# Iltero Pipeline — $ENV
+# Iltero Pipeline — ${ENV}
 
-**Result: $STATUS_TEXT** | $STACK_COUNT stack(s) processed | Terraform \`$TF_VER\`
+**Result: ${STATUS_TEXT}** | ${STACK_COUNT} stack(s) processed | Terraform \`${TF_VER}\` | Iltero CLI \`${CLI_VER}\`
 
 ## Summary
 
 | Phase | Status |
 |-------|--------|
-| **Static Analysis** | $([ "$STATIC_SCAN" == "true" ] && echo "Pass" || echo "Fail") |
-| **Plan Evaluation** | $([ "$EVALUATION" == "true" ] && echo "Pass" || echo "Fail") |
+| **Static Analysis** | $([ "${STATIC_SCAN}" == "true" ] && echo "Pass" || echo "Fail") |
+| **Plan Evaluation** | $([ "${EVALUATION}" == "true" ] && echo "Pass" || echo "Fail") |
 
 EOF
 
 # List processed stacks
-if [[ "$STACK_COUNT" -gt 0 ]]; then
+if [[ "${STACK_COUNT}" -gt 0 ]]; then
     cat >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}" << EOF
 ## Stacks Processed
 
 EOF
 
-    echo "$STACKS" | jq -r '.[]' 2>/dev/null | while read -r stack; do
-        echo "- \`$stack\`" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+    echo "${STACKS}" | jq -r '.[]' 2>/dev/null | while read -r stack; do
+        echo "- \`${stack}\`" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
     done
 
     echo "" >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
