@@ -50,8 +50,18 @@ verify_authorization() {
         fi
     fi
 
+    # This gate decides whether an apply may proceed, so it will not ask a
+    # binary chosen by search-path lookup. Every action that installs the CLI
+    # records its absolute path; if that is missing we cannot tell which binary
+    # would answer, and "cannot tell" must deny rather than proceed.
+    if [[ -z "${ILTERO_CLI_BIN:-}" ]] || [[ ! -x "${ILTERO_CLI_BIN}" ]]; then
+        log_error "Deployment authorization needs the Iltero CLI path recorded at setup (ILTERO_CLI_BIN)."
+        log_error "  Run the setup action before deploying, or set ILTERO_CLI_BIN to the installed binary."
+        return "${EXIT_ERROR}"
+    fi
+
     set +e
-    iltero stack authorize-deployment "${cli_args[@]}"
+    "${ILTERO_CLI_BIN}" stack authorize-deployment "${cli_args[@]}"
     local auth_exit=$?
     set -e
 

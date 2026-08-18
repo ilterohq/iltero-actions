@@ -70,7 +70,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
         id: pipeline
         with:
           stacks_path: infra/stacks
@@ -104,7 +104,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       # Deploy using the pipeline action with chained run_id
-      - uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
         with:
           stacks_path: infra/stacks
           mode: deploy

@@ -257,7 +257,7 @@ notify_apply_result() {
     fi
 
     local cmd=(
-        iltero scan apply
+        "${ILTERO_CLI_BIN:-iltero}" scan apply
         --run-id "${run_id}"
         --unit "${unit_name}"
         --environment "${environment}"

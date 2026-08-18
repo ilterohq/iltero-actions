@@ -55,7 +55,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source helper scripts
 source "${SCRIPT_DIR}/lib/iltero-core/index.sh"
-source "${SCRIPT_DIR}/lib/config-parser.sh"
 source "${SCRIPT_DIR}/detect-environment.sh"
 source "${SCRIPT_DIR}/detect-stacks.sh"
 
@@ -289,8 +288,9 @@ process_unit() {
 
     # Validate unit structure first
     if ! validate_unit_structure "${full_path}"; then
+        # No scan ran, so this is not a zero-finding compliance failure.
         scan_result_json=$(jq -n --arg unit "${unit_name}" \
-            '{passed: false, skipped: false, violations: 0, error: "validation_failed"}')
+            '{passed: false, status: "infra_error", skipped: false, violations: 0, error: "validation_failed"}')
         append_unit_result "${stack}" "${unit_name}" "${scan_result_json}" "${eval_result_json}" "${deploy_result_json}"
         FAILED_UNITS["${unit_name}"]="validation_failed"
         return 1
@@ -323,21 +323,28 @@ process_unit() {
             # Collect scan result
             local scan_passed="true"
             if [[ ${scan_exit} -ne 0 ]]; then
-                if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                # Only a completed scan reporting findings is waivable; a scan
+                # that produced no verdict blocks regardless.
+                apply_static_scan_verdict "${SCAN_STATUS:-infra_error}" "${BLOCK_ON_VIOLATIONS}"
+                if [[ "${SCAN_GATE_BLOCK}" == "true" ]]; then
                     STATIC_SCAN_FAILED=true
+                    if [[ "${SCAN_GATE_REASON}" == "scan_error" ]]; then
+                        log_warning "Unit ${unit_name} produced no compliance verdict — not waivable by block_on_violations"
+                    fi
                 else
-                    log_warning "Compliance violations found but block_on_violations is false - continuing"
+                    log_warning "Static findings present but block_on_violations is false — continuing"
                 fi
-                FAILED_UNITS["${unit_name}"]="static_scan_failed"
+                FAILED_UNITS["${unit_name}"]="${SCAN_GATE_REASON}"
                 scan_passed="false"
             fi
 
             scan_result_json=$(jq -n \
                 --arg passed "${scan_passed}" \
+                --arg status "${SCAN_STATUS:-infra_error}" \
                 --argjson violations "${SCAN_VIOLATIONS:-0}" \
                 --arg scan_id "${SCAN_ID:-}" \
                 --arg run_id "${SCAN_RUN_ID:-}" \
-                '{passed: ($passed == "true"), skipped: false, violations: $violations, scan_id: $scan_id, run_id: $run_id}')
+                '{passed: ($passed == "true"), status: $status, skipped: false, violations: $violations, scan_id: $scan_id, run_id: $run_id}')
         else
             scan_result_json=$(jq -n '{passed: true, skipped: true, violations: 0}')
         fi
@@ -404,6 +411,7 @@ process_unit() {
 
             eval_result_json=$(jq -n \
                 --arg passed "${eval_passed}" \
+                --arg status "${EVAL_STATUS:-infra_error}" \
                 --argjson violations "${EVAL_VIOLATIONS:-0}" \
                 --arg eval_mode "${EVAL_MODE:-full}" \
                 --arg run_id "${EVAL_RUN_ID:-}" \
@@ -411,7 +419,7 @@ process_unit() {
                 --arg approval_id "${APPROVAL_ID:-}" \
                 --arg plan_digest "${EVAL_PLAN_DIGEST:-}" \
                 --arg canon "${EVAL_CANON_VERSION:-}" \
-                '{passed: ($passed == "true"), skipped: false, violations: $violations, eval_mode: $eval_mode, run_id: $run_id, scan_id: $scan_id, approval_id: $approval_id, plan_digest: $plan_digest, canonicalization_version: $canon}')
+                '{passed: ($passed == "true"), status: $status, skipped: false, violations: $violations, eval_mode: $eval_mode, run_id: $run_id, scan_id: $scan_id, approval_id: $approval_id, plan_digest: $plan_digest, canonicalization_version: $canon}')
         else
             eval_result_json=$(jq -n '{passed: true, skipped: true, violations: 0}')
         fi
@@ -593,26 +601,16 @@ process_stack() {
     # -------------------------------------------------------------------------
     # Environment-specific settings
     local scan_types severity_threshold require_approval frameworks_csv
-    scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "${config_file}" -o json)
-    severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "${config_file}")
+    # Each read is checked: a yq that cannot run returns an empty string, and
+    # an empty value here silently relaxes the gate it configures.
+    scan_types=$(ILTERO_ENV_KEY="${environment}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].compliance.scan_types // ["static"]' "${config_file}" -o json) || return "${EXIT_ERROR}"
+    severity_threshold=$(ILTERO_ENV_KEY="${environment}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].security.severity_threshold // "high"' "${config_file}") || return "${EXIT_ERROR}"
     GLOBAL_SEVERITY_THRESHOLD="${severity_threshold}"
-    require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "${config_file}")
-    BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "${config_file}")
-    frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "${config_file}" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
-
-    # Default framework based on cloud provider if none explicitly configured
-    if [[ -z "${frameworks_csv}" ]]; then
-        local cloud_provider
-        cloud_provider=$(yq eval ".environments.${environment}.cloud.provider // \"\"" "${config_file}" 2>/dev/null || echo "")
-        case "${cloud_provider}" in
-            aws)   frameworks_csv="CIS-AWS" ;;
-            azure) frameworks_csv="CIS-Azure" ;;
-            gcp)   frameworks_csv="CIS-GCP" ;;
-        esac
-        if [[ -n "${frameworks_csv}" ]]; then
-            log_info "No frameworks configured, defaulting to ${frameworks_csv} based on provider: ${cloud_provider}"
-        fi
-    fi
+    require_approval=$(ILTERO_ENV_KEY="${environment}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].deployment.require_approval // false' "${config_file}") || return "${EXIT_ERROR}"
+    BLOCK_ON_VIOLATIONS=$(ILTERO_ENV_KEY="${environment}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].compliance.block_on_violations // true' "${config_file}") || return "${EXIT_ERROR}"
+    # Halt the stack on a malformed frameworks list rather than scanning against
+    # none: an empty framework set produces a pass that proves nothing.
+    frameworks_csv=$(read_environment_frameworks "${config_file}" "${environment}") || return "${EXIT_ERROR}"
 
     log_info "Stack ID: ${stack_id}"
     log_info "Stack Name: ${stack_name}"
@@ -710,7 +708,8 @@ process_brownfield_unit() {
 
     # Validate brownfield structure (relaxed — only check .tf files exist)
     if ! validate_brownfield_structure "${tf_dir}"; then
-        scan_result_json=$(jq -n '{passed: false, skipped: false, violations: 0, error: "validation_failed"}')
+        # No scan ran, so this is not a zero-finding compliance failure.
+        scan_result_json=$(jq -n '{passed: false, status: "infra_error", skipped: false, violations: 0, error: "validation_failed"}')
         append_unit_result "${stack_name}" "${unit_name}" "${scan_result_json}" "${eval_result_json}" "${deploy_result_json}"
         return 1
     fi
@@ -737,20 +736,27 @@ process_brownfield_unit() {
 
             local scan_passed="true"
             if [[ ${scan_exit} -ne 0 ]]; then
-                if [[ "${BLOCK_ON_VIOLATIONS}" == "true" ]]; then
+                # Same rule as the greenfield path above.
+                apply_static_scan_verdict "${SCAN_STATUS:-infra_error}" "${BLOCK_ON_VIOLATIONS}"
+                if [[ "${SCAN_GATE_BLOCK}" == "true" ]]; then
                     STATIC_SCAN_FAILED=true
+                    if [[ "${SCAN_GATE_REASON}" == "scan_error" ]]; then
+                        log_warning "Unit ${unit_name} produced no compliance verdict — not waivable by block_on_violations"
+                    fi
                 else
-                    log_warning "Compliance violations found but block_on_violations is false — continuing"
+                    log_warning "Static findings present but block_on_violations is false — continuing"
                 fi
+                FAILED_UNITS["${unit_name}"]="${SCAN_GATE_REASON}"
                 scan_passed="false"
             fi
 
             scan_result_json=$(jq -n \
                 --arg passed "${scan_passed}" \
+                --arg status "${SCAN_STATUS:-infra_error}" \
                 --argjson violations "${SCAN_VIOLATIONS:-0}" \
                 --arg scan_id "${SCAN_ID:-}" \
                 --arg run_id "${SCAN_RUN_ID:-}" \
-                '{passed: ($passed == "true"), skipped: false, violations: $violations, scan_id: $scan_id, run_id: $run_id}')
+                '{passed: ($passed == "true"), status: $status, skipped: false, violations: $violations, scan_id: $scan_id, run_id: $run_id}')
         else
             scan_result_json=$(jq -n '{passed: true, skipped: true, violations: 0}')
         fi
@@ -805,11 +811,12 @@ process_brownfield_unit() {
 
             eval_result_json=$(jq -n \
                 --arg passed "${eval_passed}" \
+                --arg status "${EVAL_STATUS:-infra_error}" \
                 --argjson violations "${EVAL_VIOLATIONS:-0}" \
                 --arg eval_mode "${EVAL_MODE:-full}" \
                 --arg run_id "${EVAL_RUN_ID:-}" \
                 --arg scan_id "${EVAL_SCAN_ID:-}" \
-                '{passed: ($passed == "true"), skipped: false, violations: $violations, eval_mode: $eval_mode, run_id: $run_id, scan_id: $scan_id}')
+                '{passed: ($passed == "true"), status: $status, skipped: false, violations: $violations, eval_mode: $eval_mode, run_id: $run_id, scan_id: $scan_id}')
         else
             eval_result_json=$(jq -n '{passed: true, skipped: true, violations: 0}')
         fi
@@ -961,12 +968,16 @@ process_brownfield_stack() {
 
     # Extract environment-specific config
     local scan_types severity_threshold require_approval frameworks_csv
-    scan_types=$(yq eval ".environments.${environment}.compliance.scan_types // [\"static\"]" "${config_file}" -o json)
-    severity_threshold=$(yq eval ".environments.${environment}.security.severity_threshold // \"high\"" "${config_file}")
+    # Each read is checked: a yq that cannot run returns an empty string, and
+    # an empty value here silently relaxes the gate it configures.
+    scan_types=$(ILTERO_ENV_KEY="${environment}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].compliance.scan_types // ["static"]' "${config_file}" -o json) || return "${EXIT_ERROR}"
+    severity_threshold=$(ILTERO_ENV_KEY="${environment}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].security.severity_threshold // "high"' "${config_file}") || return "${EXIT_ERROR}"
     GLOBAL_SEVERITY_THRESHOLD="${severity_threshold}"
-    require_approval=$(yq eval ".environments.${environment}.deployment.require_approval // false" "${config_file}")
-    BLOCK_ON_VIOLATIONS=$(yq eval ".environments.${environment}.compliance.block_on_violations // true" "${config_file}")
-    frameworks_csv=$(yq eval ".environments.${environment}.compliance.frameworks // []" "${config_file}" -o json | jq -r 'join(",")' 2>/dev/null || echo "")
+    require_approval=$(ILTERO_ENV_KEY="${environment}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].deployment.require_approval // false' "${config_file}") || return "${EXIT_ERROR}"
+    BLOCK_ON_VIOLATIONS=$(ILTERO_ENV_KEY="${environment}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].compliance.block_on_violations // true' "${config_file}") || return "${EXIT_ERROR}"
+    # Halt the stack on a malformed frameworks list rather than scanning against
+    # none: an empty framework set produces a pass that proves nothing.
+    frameworks_csv=$(read_environment_frameworks "${config_file}" "${environment}") || return "${EXIT_ERROR}"
 
     log_info "Stack ID: ${stack_id}"
     log_info "Stack Name: ${stack_name}"
@@ -1187,17 +1198,34 @@ main() {
     set_output "static_scan_passed" "${static_scan_passed}"
     set_output "evaluation_passed" "${evaluation_passed}"
 
+    # Units that produced no compliance verdict at all. Reported separately from
+    # findings: quoting a count of 0 for a phase that never ran is what made an
+    # infrastructure error read as a clean compliance failure.
+    local scan_no_verdict eval_no_verdict
+    scan_no_verdict=$(echo "${all_unit_results}" | jq '[.[] | select((.scan.status? // "") == "infra_error")] | length' 2>/dev/null || echo "0")
+    eval_no_verdict=$(echo "${all_unit_results}" | jq '[.[] | select((.evaluation.status? // "") == "infra_error" or (.evaluation.status? // "") == "needs_review")] | length' 2>/dev/null || echo "0")
+
     # Determine phase statuses for summary
     local scan_status="[PASS]" eval_status="[PASS]" deploy_status="--"
     local scan_detail="0 findings above threshold" eval_detail="0 policy violations" deploy_detail=""
 
     if [[ "${STATIC_SCAN_FAILED}" == "true" ]]; then
-        scan_status="[FAIL]"
-        scan_detail="${total_scan_violations} findings above threshold"
+        if [[ "${scan_no_verdict}" -gt 0 ]]; then
+            scan_status="[ERROR]"
+            scan_detail="${scan_no_verdict} unit(s) produced no compliance verdict"
+        else
+            scan_status="[FAIL]"
+            scan_detail="${total_scan_violations} findings above threshold"
+        fi
     fi
     if [[ "${EVALUATION_FAILED}" == "true" ]]; then
-        eval_status="[FAIL]"
-        eval_detail="${total_eval_violations} policy violations above threshold"
+        if [[ "${eval_no_verdict}" -gt 0 ]]; then
+            eval_status="[ERROR]"
+            eval_detail="${eval_no_verdict} unit(s) produced no compliance verdict"
+        else
+            eval_status="[FAIL]"
+            eval_detail="${total_eval_violations} policy violations above threshold"
+        fi
     fi
     if [[ "${DEPLOY_FAILED}" == "true" ]]; then
         deploy_status="[FAIL]"
@@ -1239,7 +1267,11 @@ main() {
             set_output "overall_status" "evaluation_failed"
         fi
         set_output "deployment_ready" "false"
-        echo "Result: FAILED — ${total_violations} violation(s) detected"
+        if [[ "${scan_no_verdict}" -gt 0 ]] || [[ "${eval_no_verdict}" -gt 0 ]]; then
+            echo "Result: FAILED — no compliance verdict was produced (see per-unit results)"
+        else
+            echo "Result: FAILED — ${total_violations} violation(s) detected"
+        fi
         echo ""
         echo "  Run ID: ${GLOBAL_RUN_ID:-N/A}"
         echo "==============================================================================="
@@ -1277,4 +1309,8 @@ main() {
     fi
 }
 
-main "$@"
+# Only run when executed, not when sourced — so tests can exercise the
+# per-unit gate wiring directly rather than only the helpers it calls.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

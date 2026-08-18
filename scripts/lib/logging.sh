@@ -30,36 +30,36 @@ NC='\033[0m' # No Color
 log_info() {
     local message="$1"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-        echo "  $message"
+        echo "  ${message}"
     else
-        echo -e "${BLUE}  $message${NC}"
+        echo -e "${BLUE}  ${message}${NC}"
     fi
 }
 
 log_success() {
     local message="$1"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-        echo "[PASS] $message"
+        echo "[PASS] ${message}"
     else
-        echo -e "${GREEN}[PASS] $message${NC}"
+        echo -e "${GREEN}[PASS] ${message}${NC}"
     fi
 }
 
 log_warning() {
     local message="$1"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-        echo "::warning::$message"
+        echo "::warning::${message}"
     else
-        echo -e "${YELLOW}[WARN] $message${NC}"
+        echo -e "${YELLOW}[WARN] ${message}${NC}"
     fi
 }
 
 log_error() {
     local message="$1"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-        echo "::error::$message"
+        echo "::error::${message}"
     else
-        echo -e "${RED}[FAIL] $message${NC}"
+        echo -e "${RED}[FAIL] ${message}${NC}"
     fi
 }
 
@@ -67,9 +67,9 @@ log_debug() {
     local message="$1"
     if [[ "${DEBUG:-}" == "true" ]]; then
         if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-            echo "::debug::$message"
+            echo "::debug::${message}"
         else
-            echo "[DEBUG] $message"
+            echo "[DEBUG] ${message}"
         fi
     fi
 }
@@ -79,30 +79,29 @@ log_step() {
     local step="$1"
     local status="$2"
     local detail="${3:-}"
-    if [[ -n "$detail" ]]; then
+    if [[ -n "${detail}" ]]; then
         echo "  ${step} ... ${status} (${detail})"
     else
         echo "  ${step} ... ${status}"
     fi
 }
 
-# Final verdict line with pass/fail tag
+# Render a final verdict line. The tag is printed as given: an ERROR or
+# NEEDS_REVIEW result must not surface as a compliance failure, because that is
+# what invites it to be waived like one.
 log_result() {
-    local status="$1"  # "PASS" or "FAIL"
-    local message="$2"
-    if [[ "$status" == "PASS" ]]; then
-        if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-            echo "[PASS] ${message}"
-        else
-            echo -e "${GREEN}[PASS] ${message}${NC}"
-        fi
-    else
-        if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-            echo "[FAIL] ${message}"
-        else
-            echo -e "${RED}[FAIL] ${message}${NC}"
-        fi
+    local status="${1}"  # PASS | FAIL | NEEDS_REVIEW | ERROR
+    local message="${2}"
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+        echo "[${status}] ${message}"
+        return 0
     fi
+    local colour="${RED}"
+    case "${status}" in
+        PASS) colour="${GREEN}" ;;
+        NEEDS_REVIEW) colour="${YELLOW}" ;;
+    esac
+    echo -e "${colour}[${status}] ${message}${NC}"
 }
 
 # =============================================================================
@@ -112,7 +111,7 @@ log_result() {
 log_group() {
     local title="$1"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-        echo "::group::$title"
+        echo "::group::${title}"
     else
         echo ""
         echo "--- ${title} $(printf '%0.s-' $(seq 1 $((60 - ${#title}))))"
@@ -135,7 +134,7 @@ log_banner() {
     local title="$1"
     echo ""
     echo "==============================================================================="
-    echo "$title"
+    echo "${title}"
     echo "==============================================================================="
     echo ""
 }
@@ -147,7 +146,7 @@ log_banner() {
 log_mask() {
     local value="$1"
     if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-        echo "::add-mask::$value"
+        echo "::add-mask::${value}"
     fi
 }
 
@@ -161,16 +160,16 @@ set_output() {
 
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         # Check if value contains newlines - use heredoc format if so
-        if [[ "$value" == *$'\n'* ]]; then
+        if [[ "${value}" == *$'\n'* ]]; then
             {
                 echo "${name}<<EOF"
-                echo "$value"
+                echo "${value}"
                 echo "EOF"
-            } >> "$GITHUB_OUTPUT"
+            } >> "${GITHUB_OUTPUT}"
         else
-            echo "$name=$value" >> "$GITHUB_OUTPUT"
+            echo "${name}=${value}" >> "${GITHUB_OUTPUT}"
         fi
     else
-        echo "OUTPUT: $name=$value"
+        echo "OUTPUT: ${name}=${value}"
     fi
 }

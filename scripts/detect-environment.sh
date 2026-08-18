@@ -29,6 +29,7 @@
 # second source. Not exported: an exported guard would make a child shell skip
 # the function definitions.
 if [[ -n "${ILTERO_DETECT_ENVIRONMENT_SOURCED:-}" ]]; then
+    # shellcheck disable=SC2317  # dual-mode: returns when sourced, exits when run
     return 0 2>/dev/null || exit 0
 fi
 ILTERO_DETECT_ENVIRONMENT_SOURCED=1
@@ -93,6 +94,21 @@ get_current_branch() {
     echo "${branch}"
 }
 
+# Is an environment name a literal key rather than a pattern?
+#
+# yq matches keys by glob, so a name containing * or ? answers for environments
+# the caller never asked about: "prod?" reads its own settings and "prod1"'s
+# together, and the two-line result then equals neither. Every setting read that
+# way falls back to its default — an approval requirement silently becomes
+# "not required". Names come from config.yml, so a pattern there is a config
+# error and callers stop rather than read the wrong environment's settings.
+#
+# Args:    $1=environment name
+# Returns: 0 when the name is a literal key, 1 when it would glob.
+env_name_is_literal() {
+    [[ "${1}" != *[*?]* ]]
+}
+
 # =============================================================================
 # Detect environment from config.yml git_ref mapping
 #
@@ -137,11 +153,29 @@ detect_environment() {
         return "${DETECT_ENV_ERROR}"
     fi
 
-    for env in ${envs}; do
+    # Reject pattern names before matching anything, so that which environment
+    # happens to be listed first does not decide whether a malformed config is
+    # caught. An empty `environments:` map yields one empty line here, not none.
+    local env
+    while IFS= read -r env; do
+        [[ -n "${env}" ]] || continue
+        if ! env_name_is_literal "${env}"; then
+            echo "ERROR: Environment name '${env}' contains * or ?; names must be literal keys" >&2
+            echo ""
+            return "${DETECT_ENV_ERROR}"
+        fi
+    done <<< "${envs}"
+
+    # Read line by line rather than splitting on whitespace: an environment
+    # name containing a space would otherwise be split into two names, which
+    # match nothing — the same failure the strenv() lookup below fixes, one
+    # layer up. Unquoted expansion would also glob-expand a name.
+    while IFS= read -r env; do
+        [[ -n "${env}" ]] || continue
         local ref_type
-        ref_type=$(yq eval ".environments.${env}.git_ref.type // \"branch\"" "${config_file}")
+        ref_type=$(ILTERO_ENV_KEY="${env}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].git_ref.type // "branch"' "${config_file}")
         local ref_name
-        ref_name=$(yq eval ".environments.${env}.git_ref.name // \"\"" "${config_file}")
+        ref_name=$(ILTERO_ENV_KEY="${env}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].git_ref.name // ""' "${config_file}")
 
         if [[ -z "${ref_name}" ]]; then
             continue
@@ -179,19 +213,25 @@ detect_environment() {
                 fi
                 ;;
         esac
-    done
+    done <<< "${envs}"
 
     # No environment maps to the current ref. This is a benign "skip" signal,
     # distinct from a config error — callers may skip the stack gracefully.
     echo "WARNING: No environment matched for branch '${current_branch}'" >&2
     echo "Available git_ref mappings:" >&2
 
-    for env in ${envs}; do
+    # Read line by line rather than splitting on whitespace: an environment
+    # name containing a space would otherwise be split into two names, which
+    # match nothing — the same failure the strenv() lookup below fixes, one
+    # layer up. Unquoted expansion would also glob-expand a name.
+    while IFS= read -r env; do
+        # An empty `environments:` map yields one empty line here, not none.
+        [[ -n "${env}" ]] || continue
         local ref_name ref_type
-        ref_name=$(yq eval ".environments.${env}.git_ref.name // \"(not configured)\"" "${config_file}")
-        ref_type=$(yq eval ".environments.${env}.git_ref.type // \"branch\"" "${config_file}")
+        ref_name=$(ILTERO_ENV_KEY="${env}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].git_ref.name // "(not configured)"' "${config_file}")
+        ref_type=$(ILTERO_ENV_KEY="${env}" yq eval '.environments[strenv(ILTERO_ENV_KEY)].git_ref.type // "branch"' "${config_file}")
         echo "  - ${env}: ${ref_name} (${ref_type})" >&2
-    done
+    done <<< "${envs}"
 
     echo ""
     return "${DETECT_ENV_NO_MATCH}"
@@ -213,14 +253,24 @@ validate_environment() {
         return 1
     fi
 
-    local env_exists
-    env_exists=$(yq eval ".environments.${environment} // null" "${config_file}")
+    # A pattern is not a key. has() below answers exactly, but every setting the
+    # caller goes on to read is indexed, and indexing globs — so admitting a
+    # name that globs hands back another environment's settings.
+    env_name_is_literal "${environment}" || return 1
 
-    if [[ "${env_exists}" == "null" ]]; then
+    # strenv() rather than env(): env() parses its value as YAML, so a name that
+    # is not a valid scalar makes yq fail — and an unchecked failure would leave
+    # this empty, which any "is it declared" comparison reads as yes.
+    #
+    # has() rather than indexing: [] does glob matching, so a name of "*" would
+    # match every environment and answer for one the caller never asked about.
+    local env_exists
+    if ! env_exists=$(ILTERO_ENV_KEY="${environment}" yq eval \
+        '(.environments // {}) | has(strenv(ILTERO_ENV_KEY))' "${config_file}"); then
         return 1
     fi
 
-    return 0
+    [[ "${env_exists}" == "true" ]]
 }
 
 # =============================================================================

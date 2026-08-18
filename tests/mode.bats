@@ -438,3 +438,19 @@ MOCK
     [[ "${EVAL_STATUS}" == "infra_error" ]]
     [[ "${EVAL_PASSED}" == "false" ]]
 }
+
+@test "evaluation: an unrecognised exit code is infra_error, never waivable" {
+    # Exit 1 is the only code an operator may waive. Anything outside the codes
+    # this file enumerates must land in infra_error without the runner being
+    # changed first.
+    export PREVIEW_MODE="false"
+    _setup_cli_mock_exit 6 '{}'
+    source_iltero_core
+    _mock_tf_with_resource
+    init_remote_state_tracking "test-stack"
+
+    run_plan_evaluation "${TEST_TEMP}/unit" "stack-123" "vpc" "dev" "high" "" "" "[]" "" || true
+
+    [[ "${EVAL_STATUS}" == "infra_error" ]] || return 1
+    [[ "${EVAL_PASSED}" == "false" ]] || return 1
+}

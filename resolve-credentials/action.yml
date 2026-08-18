@@ -8,21 +8,21 @@
 # stacks in the run because the binding is per-(workspace, environment).
 #
 # Requires:
-#   - ilterohq/iltero-actions/setup@v1 has run (provides iltero CLI,
+#   - ilterohq/iltero-actions/setup has run (provides iltero CLI,
 #     ILTERO_TOKEN, ILTERO_API_URL).
 #   - Calling job grants `permissions: { id-token: write }`.
 #
 # Usage (workspace-id — preferred for generated workflows):
-#   - uses: ilterohq/iltero-actions/setup@v1
-#   - uses: ilterohq/iltero-actions/resolve-credentials@v1
+#   - uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
+#   - uses: ilterohq/iltero-actions/resolve-credentials@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       workspace-id: 0b278217-a809-465a-b9df-00eda8414cb8
 #       environment: production
-#   - uses: ilterohq/iltero-actions/deploy@v1
+#   - uses: ilterohq/iltero-actions/deploy@RELEASE_COMMIT_SHA # v0.2.0
 #     with: { stack-id: ..., environment: ..., ... }
 #
 # Usage (stack-id — for hand-authored workflows):
-#   - uses: ilterohq/iltero-actions/resolve-credentials@v1
+#   - uses: ilterohq/iltero-actions/resolve-credentials@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
 #       environment: production

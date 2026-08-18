@@ -18,6 +18,8 @@ teardown() {
 }
 
 # Install a fake `iltero` that records its argv and exits with the given code.
+# The deploy gate refuses to run a binary it cannot identify, so the recorded
+# path is set as well as PATH — see verify_authorization.
 _mock_iltero_authz() {
     local exit_code="${1:-0}"
     cat > "${TEST_TEMP}/iltero" <<EOF
@@ -27,6 +29,7 @@ exit ${exit_code}
 EOF
     chmod +x "${TEST_TEMP}/iltero"
     export PATH="${TEST_TEMP}:${PATH}"
+    export ILTERO_CLI_BIN="${TEST_TEMP}/iltero"
 }
 
 HEX_DIGEST="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

@@ -77,8 +77,8 @@ Test scripts locally:
 # Test environment detection
 ./scripts/detect-environment.sh /path/to/config.yml
 
-# Run shellcheck on scripts
-shellcheck scripts/*.sh scripts/lib/*.sh
+# Run the lint checks CI runs (shellcheck over all of scripts/, plus yamllint)
+./scripts/test.sh lint
 ```
 
 ## Making Changes
@@ -201,13 +201,34 @@ show as "Unverified".
 - **No floating major tags.** Pin to an exact version or a commit SHA:
 
   ```yaml
-  uses: ilterohq/iltero-actions@v0.1.0
-  uses: ilterohq/iltero-actions@<sha>   # v0.1.0
+  uses: ilterohq/iltero-actions@v0.2.0
+  uses: ilterohq/iltero-actions@<commit-sha>  # v0.2.0
   ```
 
 - **Published tags are immutable** — a ruleset blocks moving or deleting any tag,
   so a given version always points at the same commit. Releases are cut by
   publishing a signed `vX.Y.Z` tag; CI runs automatically on publish.
+
+### Cutting a release
+
+Documentation pins this action to the commit a release was cut from, so the pin
+can only be filled in once that commit exists. Between releases the examples
+carry the literal `RELEASE_COMMIT_SHA`, which is replaced as the last step:
+
+```bash
+# 1. Land everything else, then find the commit the release will be cut from
+git rev-parse HEAD
+
+# 2. Substitute it into every example and doc
+grep -rl 'RELEASE_COMMIT_SHA' --include='*.md' --include='*.yml' . \
+  | xargs sed -i '' "s/RELEASE_COMMIT_SHA/$(git rev-parse HEAD)/g"
+
+# 3. Update the '# vX.Y.Z' comments to the version being released, commit,
+#    then tag that commit and publish the release
+```
+
+The release workflow refuses to publish while the placeholder is still present,
+so a release cannot ship examples that cannot run.
 
 ## Pull Request Process
 
@@ -223,16 +244,16 @@ show as "Unverified".
 2. **Run shellcheck on scripts:**
 
    ```bash
-   shellcheck scripts/*.sh scripts/lib/*.sh
+   ./scripts/test.sh lint
    ```
 
 3. **Validate action.yml files:**
 
    ```bash
-   # Use actionlint if available
-   actionlint action.yml setup/action.yml setup-oidc/action.yml \
-       scan/action.yml evaluate/action.yml deploy/action.yml \
-       monitor/action.yml configure-registry/action.yml
+   # yamllint covers every action.yml; actionlint reads workflows only, so
+   # passing it an action.yml reports errors that are not real.
+   yamllint -c .yamllint.yml .
+   actionlint
    ```
 
 4. **Test locally** if possible
@@ -282,7 +303,9 @@ We follow Google's [Shell Style Guide](https://google.github.io/styleguide/shell
 
 - Use `#!/bin/bash` shebang
 - Use `set -euo pipefail` for error handling
-- Quote all variables: `"$var"` not `$var`
+- Quote all variables: `"${var}"` not `$var`
+- Brace all variable references: `"${var}"` not `"$var"` — enforced in CI via
+  `require-variable-braces` in `.shellcheckrc`
 - Use `$(command)` instead of backticks
 - Functions should be lowercase with underscores
 
@@ -294,13 +317,18 @@ set -euo pipefail
 
 # Detect environment from git ref
 detect_environment() {
-    local config_file="$1"
+    local config_file="${1}"
     local current_branch
 
     current_branch=$(git rev-parse --abbrev-ref HEAD)
 
-    # Search environments for matching git_ref.name
-    yq eval ".environments | to_entries | .[] | select(.value.git_ref.name == \"$current_branch\") | .key" "$config_file"
+    # Search environments for matching git_ref.name. Hand the branch to yq as a
+    # value with strenv() rather than splicing it into the query text: a name
+    # containing a dot or a yq operator would otherwise change what is asked.
+    ILTERO_BRANCH="${current_branch}" yq eval \
+        '.environments | to_entries | .[]
+         | select(.value.git_ref.name == strenv(ILTERO_BRANCH)) | .key' \
+        "${config_file}"
 }
 ```
 
@@ -344,8 +372,8 @@ export STACKS_PATH="test/fixtures/stacks"
 export GITHUB_REF="refs/heads/main"
 ./scripts/detect-environment.sh test/fixtures/stacks/sample/config.yml
 
-# Run shellcheck
-shellcheck -x scripts/*.sh scripts/lib/*.sh
+# Run the lint checks CI runs
+./scripts/test.sh lint
 ```
 
 ## Documentation

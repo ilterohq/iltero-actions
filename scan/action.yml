@@ -6,15 +6,18 @@
 # This action runs static analysis using Checkov and submits results to Iltero.
 # It can scan individual units or auto-detect from config.yml.
 #
-# Requires: ilterohq/iltero-actions/setup@v1 to be run first.
+# Requires: ilterohq/iltero-actions/setup to be run first.
 #
 # Usage:
-#   - uses: ilterohq/iltero-actions/scan@v1
+#   - uses: ilterohq/iltero-actions/scan@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       path: infra/stacks/my-stack/units/network
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
 #       unit: network-baseline
 #       environment: production
+#       # Point at the stack's config.yml so the scan is checked against the
+#       # compliance frameworks that file declares for this environment.
+#       config-path: .iltero/stacks/my-stack/config.yml
 #     env:
 #       ILTERO_TOKEN: ${{ secrets.ILTERO_TOKEN }}
 #       # ILTERO_API_URL: ${{ vars.ILTERO_API_URL }}  # Optional, defaults to https://api.iltero.io
@@ -39,6 +42,21 @@ inputs:
     description: |
       Iltero stack UUID. Get this from your stack's config.yml or the dashboard.
     required: true
+
+  stack-name:
+    description: |
+      Stack name or slug, used to group this stack's result files on disk.
+      Defaults to the stack UUID when not given.
+    required: false
+    default: ''
+
+  stacks-config:
+    description: |
+      Directory this action writes result files under, as
+      <stacks-config>/<stack-name>/static/. Must match the value used by the
+      other Iltero actions in the same workflow so a later step finds them.
+    required: false
+    default: '.iltero/stacks'
 
   unit:
     description: |
@@ -72,10 +90,59 @@ inputs:
     required: false
     default: ''
 
+  config-path:
+    description: |
+      Path to the stack's config.yml, read to pick up the compliance frameworks
+      declared for this environment. Leave empty to skip that and either scan
+      against the `frameworks` input or let Iltero decide from the stack's own
+      registration. When set, the file must exist and must declare the
+      environment being scanned, or the run stops — a wrong path would
+      otherwise scan against no frameworks and report success.
+
+      This action only reads the file; it never writes to it.
+    required: false
+    default: ''
+
+  strict-framework-scope:
+    description: |
+      Fail the run when a compliance framework declared for the environment was
+      not evaluated. Off by default: a shortfall can also mean Iltero has no
+      policy content for that framework yet, and blocking on that would turn a
+      gap on our side into an outage on yours. The shortfall is reported either
+      way, so turning this on decides whether it stops the run rather than
+      whether you are told. Requires Iltero CLI 0.7.0 or newer.
+    required: false
+    default: 'false'
+
+  preview:
+    description: |
+      Scan without submitting results or writing anything back. Use on
+      pull requests.
+    required: false
+    default: 'false'
+
+  frameworks:
+    description: |
+      Comma-separated compliance frameworks to scan against,
+      e.g. 'SOC2,ISO27001,CIS-AWS'. Leave empty to use the frameworks the
+      stack declares for this environment in config.yml — the same value the
+      all-in-one pipeline action uses. When neither is set, Iltero decides
+      which policies apply from the stack's own registration.
+    required: false
+    default: ''
+
 outputs:
   passed:
     description: Whether the scan passed (true/false)
     value: ${{ steps.scan.outputs.passed }}
+
+  status:
+    description: |
+      What the scan produced: 'pass', 'violations' (findings at or above the
+      threshold), or 'infra_error' (the scan did not run to a verdict). Only
+      'violations' is a compliance verdict a caller may choose to accept —
+      'infra_error' means no verdict exists to accept.
+    value: ${{ steps.scan.outputs.status }}
 
   run-id:
     description: Iltero run ID for chaining subsequent scans
@@ -97,7 +164,7 @@ runs:
     # -------------------------------------------------------------------------
     # NOTE: Cloud credentials are not configured by this action. If a
     # plan-mode scan needs cloud access, configure credentials at the
-    # job level via `ilterohq/iltero-actions/resolve-credentials@v1` or
+    # job level via `ilterohq/iltero-actions/resolve-credentials` or
     # a hand-written `aws-actions/configure-aws-credentials` block.
     - name: Run Static Analysis
       id: scan
@@ -105,34 +172,79 @@ runs:
       env:
         SCAN_PATH: ${{ inputs.path }}
         STACK_ID: ${{ inputs.stack-id }}
+        STACK_NAME: ${{ inputs.stack-name }}
+        STACKS_CONFIG: ${{ inputs.stacks-config }}
         UNIT_NAME: ${{ inputs.unit }}
         ENVIRONMENT: ${{ inputs.environment }}
         FAIL_ON: ${{ inputs.fail-on }}
         CHAIN_RUN_ID: ${{ inputs.run-id }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+        FRAMEWORKS: ${{ inputs.frameworks }}
+        PREVIEW_MODE: ${{ inputs.preview }}
+        STRICT_FRAMEWORK_SCOPE: ${{ inputs.strict-framework-scope }}
       run: |
         set -euo pipefail
+
+        # Where result files are written. The shared library requires both, and
+        # without them this step aborts before the scan is ever invoked.
+        export STACKS_CONFIG
+        export ILTERO_STACK_NAME="${STACK_NAME:-${STACK_ID}}"
 
         # Source shared library
         ACTION_DIR="${GITHUB_ACTION_PATH:-$(dirname "$0")/..}"
         source "${ACTION_DIR}/../scripts/lib/iltero-core/index.sh"
 
+        # These become directory components under the workspace; a traversal
+        # would put results where a workspace-relative artifact upload cannot
+        # find them, while the run still reports success.
+        reject_path stacks-config "${STACKS_CONFIG}"
+        reject_path stack-name "${ILTERO_STACK_NAME}"
+        reject_path config-path "${CONFIG_PATH}"
+
         # Validate structure (brownfield uses relaxed validation)
-        if [[ "${PIPELINE_MODE:-}" == "brownfield" ]] || [[ -f ".iltero/config.yml" && "$UNIT_NAME" == "default" ]]; then
-          validate_brownfield_structure "$SCAN_PATH"
+        if [[ "${PIPELINE_MODE:-}" == "brownfield" ]] || [[ -f ".iltero/config.yml" && "${UNIT_NAME}" == "default" ]]; then
+          validate_brownfield_structure "${SCAN_PATH}"
         else
-          validate_unit_structure "$SCAN_PATH"
+          validate_unit_structure "${SCAN_PATH}"
         fi
 
-        # Run static scan
-        set +e
-        run_static_scan "$SCAN_PATH" "$STACK_ID" "$UNIT_NAME" "$ENVIRONMENT" "$FAIL_ON" "$CHAIN_RUN_ID"
-        EXIT_CODE=$?
-        set -e
+        # A config path that was asked for but cannot be used is an error, not a
+        # reason to scan against nothing: the run would otherwise pass having
+        # checked against no framework at all.
+        if [[ -n "${CONFIG_PATH}" ]]; then
+          if [[ ! -f "${CONFIG_PATH}" ]]; then
+            echo "::error::config-path not found: ${CONFIG_PATH}"
+            exit 1
+          fi
+          if ! environment_declared "${CONFIG_PATH}" "${ENVIRONMENT}"; then
+            echo "::error::Environment '${ENVIRONMENT}' is not declared in ${CONFIG_PATH}"
+            exit 1
+          fi
+          if [[ -z "${FRAMEWORKS}" ]]; then
+            FRAMEWORKS=$(read_environment_frameworks "${CONFIG_PATH}" "${ENVIRONMENT}")
+          fi
+        fi
+
+        if [[ -n "${FRAMEWORKS}" ]]; then
+          echo "Compliance frameworks: ${FRAMEWORKS}"
+        else
+          echo "No framework scope set for this scan; Iltero decides from the stack's registration."
+        fi
+
+        # Run static scan. No config path is passed: this action reads config.yml
+        # and never asks the CLI to rewrite it.
+        #
+        # Called in an `|| ` context rather than wrapped in `set +e`: the library
+        # re-enables errexit around its own CLI call, which would clobber a
+        # caller's `set +e` and kill this step before any output is written —
+        # losing the verdict on exactly the non-pass outcomes it reports.
+        EXIT_CODE=0
+        run_static_scan "${SCAN_PATH}" "${STACK_ID}" "${UNIT_NAME}" "${ENVIRONMENT}" "${FAIL_ON}" "${CHAIN_RUN_ID}" "${FRAMEWORKS}" "" || EXIT_CODE=$?
 
         # Set outputs using helper
         set_scan_outputs
-        echo "results-file=/tmp/static-${UNIT_NAME}-*.json" >> $GITHUB_OUTPUT
-        echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+        echo "results-file=${SCAN_RESULTS_FILE:-}" >> "${GITHUB_OUTPUT}"
+        echo "exit_code=${EXIT_CODE}" >> "${GITHUB_OUTPUT}"
 
     # -------------------------------------------------------------------------
     # Comment on PR
@@ -145,6 +257,9 @@ runs:
         ENVIRONMENT: ${{ inputs.environment }}
         VIOLATIONS: ${{ steps.scan.outputs.violations }}
         PASSED: ${{ steps.scan.outputs.passed }}
+        # An empty value means the step aborted before recording a verdict —
+        # treat that as no verdict, not as a compliance failure.
+        SCAN_STATUS: ${{ steps.scan.outputs.status || 'infra_error' }}
         RUN_ID: ${{ steps.scan.outputs.run-id }}
       with:
         github-token: ${{ github.token }}
@@ -153,21 +268,31 @@ runs:
           const environment = process.env.ENVIRONMENT;
           const violations = process.env.VIOLATIONS || '0';
           const passed = process.env.PASSED === 'true';
+          const scanStatus = process.env.SCAN_STATUS || '';
           const runId = process.env.RUN_ID || '';
 
-          const status = passed ? 'Passed' : 'Failed';
+          // A scan that produced no verdict must not be reported as a failure
+          // with zero findings, and must not tell a reviewer to fix findings
+          // that were never assessed.
+          // Positive allowlist: only these two are verdicts. Anything else —
+          // including an unset value from a step that aborted early — means
+          // nothing was assessed.
+          const noVerdict = !(scanStatus === 'pass' || scanStatus === 'violations');
+          const status = passed ? 'Passed' : noVerdict ? 'Did not complete' : 'Failed';
 
           let comment = `## Static Analysis: \`${unitName}\`\n\n`;
           comment += `**Environment:** ${environment}\n`;
           comment += `**Result:** ${status}\n\n`;
           comment += `| Metric | Value |\n`;
           comment += `|--------|-------|\n`;
-          comment += `| Findings | ${violations} |\n`;
+          comment += `| Findings | ${noVerdict ? 'not assessed' : violations} |\n`;
           comment += `| Status | ${status} |\n`;
           if (runId) {
             comment += `| Run ID | \`${runId}\` |\n`;
           }
-          if (!passed) {
+          if (noVerdict) {
+            comment += `\n**Action Required:** No compliance verdict was produced, so this code was not checked. See the run log for the reason — re-running only helps if it was transient.\n`;
+          } else if (!passed) {
             comment += `\n**Action Required:** This code has findings that must be resolved before merge.\n`;
           }
           comment += `\n---\n`;
@@ -210,5 +335,7 @@ runs:
       if: always()
       shell: bash
       env:
-        EXIT_CODE: ${{ steps.scan.outputs.exit_code || 0 }}
-      run: exit "$EXIT_CODE"
+        # Default to failure: a missing exit code means the scan step did not
+        # finish, which must not gate as success.
+        EXIT_CODE: ${{ steps.scan.outputs.exit_code || 1 }}
+      run: exit "${EXIT_CODE}"

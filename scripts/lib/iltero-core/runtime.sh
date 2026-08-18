@@ -34,7 +34,7 @@ run_runtime_scan() {
         scan_output="/dev/stdout"
     fi
 
-    if ! scan_result=$(iltero scan runtime \
+    if ! scan_result=$("${ILTERO_CLI_BIN:-iltero}" scan runtime \
         --unit "${unit_name}" \
         --provider "${cloud_provider}" \
         --regions "${regions}" \
@@ -99,7 +99,7 @@ detect_drift() {
     fi
 
     local drift_result
-    if ! drift_result=$(iltero scan drift "${drift_args[@]}" 2>&1); then
+    if ! drift_result=$("${ILTERO_CLI_BIN:-iltero}" scan drift "${drift_args[@]}" 2>&1); then
         log_error "Drift detection failed: ${drift_result}"
         emit_cloud_credentials_hint_if_needed "${drift_result}"
         return 2
@@ -176,7 +176,7 @@ check_runtime_compliance() {
     log_info "Checking runtime compliance for '${unit_name}' against policy set '${policy_set}'"
 
     local result
-    if ! result=$(iltero scan runtime-compliance \
+    if ! result=$("${ILTERO_CLI_BIN:-iltero}" scan runtime-compliance \
         --unit "${unit_name}" \
         --policy-set "${policy_set}" \
         --output json 2>&1); then

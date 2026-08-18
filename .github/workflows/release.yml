@@ -6,8 +6,8 @@
 #   2. Runs the full CI suite to ensure quality
 #
 # Pinning: there are no moving major tags. Pin to an exact version or commit SHA:
-#     uses: ilterohq/iltero-actions@v0.1.0
-#     uses: ilterohq/iltero-actions@<commit-sha>  # v0.1.0
+#     uses: ilterohq/iltero-actions@v0.2.0
+#     uses: ilterohq/iltero-actions@<commit-sha>  # v0.2.0
 #
 # Published tags are immutable (a repository ruleset blocks moving/deleting them).
 # =============================================================================
@@ -44,6 +44,24 @@ jobs:
           fi
 
           echo "Validated tag: $TAG"
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Documentation pins the action to the commit a release was cut from, so
+      # the pin can only be filled in once that commit exists. Publishing with
+      # the placeholder still in place would ship examples that cannot run —
+      # which is how a nonexistent commit came to be referenced 40 times.
+      - name: Refuse to publish with an unresolved pin placeholder
+        run: |
+          if grep -rl 'RELEASE_COMMIT_SHA' --include='*.md' --include='*.yml' . ; then
+            echo "::error::Documentation still contains the RELEASE_COMMIT_SHA placeholder."
+            echo "::error::Replace it with this release's commit SHA before publishing."
+            exit 1
+          fi
+          echo "No unresolved pin placeholders."
 
   # ===========================================================================
   # CI: Run the full quality suite against the tagged commit

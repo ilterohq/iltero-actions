@@ -75,7 +75,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       # Run compliance pipeline (does NOT deploy)
-      - uses: ilterohq/iltero-actions@41bada1ab6681a6de40b2584a109a177f7345d06 # v1
+      - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
         id: pipeline
         with:
           stacks_path: infra/stacks
