@@ -9,7 +9,7 @@
 # Requires: ilterohq/iltero-actions/setup to be run first.
 #
 # Usage:
-#   - uses: ilterohq/iltero-actions/scan@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+#   - uses: ilterohq/iltero-actions/scan@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       path: infra/stacks/my-stack/units/network
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8

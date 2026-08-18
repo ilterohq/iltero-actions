@@ -11,7 +11,7 @@
 #   - Result submission to Iltero
 #
 # Usage (OIDC — recommended for push/deploy):
-#   - uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+#   - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       stacks_path: infra/stacks
 #       stacks_config: .iltero/stacks
@@ -19,7 +19,7 @@
 #       org_id: ${{ vars.ILTERO_ORG_ID }}
 #
 # PR-Preview (bearer — advisory scan on pull requests):
-#   - uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+#   - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       mode: preview
 #       stacks_path: infra/stacks

@@ -28,7 +28,7 @@
 #   - config/backend/{environment}.hcl for backend configuration
 #
 # Usage (via pipeline - recommended):
-#   - uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+#   - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       path: infra/stacks/my-stack
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -37,7 +37,7 @@
 #       run-id: ${{ needs.compliance.outputs.run-id }}
 #
 # Usage (direct - no authorization):
-#   - uses: ilterohq/iltero-actions/deploy@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+#   - uses: ilterohq/iltero-actions/deploy@RELEASE_COMMIT_SHA # v0.2.0
 #     with:
 #       path: infra/stacks/my-stack/units/network
 #       stack-id: 0b278217-a809-465a-b9df-00eda8414cb8

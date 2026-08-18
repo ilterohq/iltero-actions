@@ -66,7 +66,7 @@ jobs:
 
       # No stacks_path — triggers brownfield auto-detection from .iltero/config.yml
       - name: Run Iltero Pipeline
-        uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+        uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
         with:
           oidc: 'true'
           org_id: ${{ vars.ILTERO_ORG_ID }}

@@ -11,7 +11,7 @@
 #   - Git URL rewriting for git::https:// module sources
 #
 # Usage:
-#   - uses: ilterohq/iltero-actions/configure-registry@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+#   - uses: ilterohq/iltero-actions/configure-registry@RELEASE_COMMIT_SHA # v0.2.0
 #     env:
 #       ILTERO_REGISTRY_TOKEN: ${{ secrets.ILTERO_REGISTRY_TOKEN }}
 # =============================================================================

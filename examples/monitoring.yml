@@ -52,11 +52,11 @@ jobs:
 
       # Setup Iltero CLI (required before monitor action)
       - name: Setup Iltero
-        uses: ilterohq/iltero-actions/setup@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+        uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
 
       # OIDC authentication for Iltero API
       - name: Iltero OIDC Authentication
-        uses: ilterohq/iltero-actions/setup-oidc@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+        uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
         with:
           stack-id: ${{ vars.ILTERO_STACK_ID }}
           org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -72,7 +72,7 @@ jobs:
 
       # Run monitoring checks
       - name: Monitor ${{ matrix.unit }}
-        uses: ilterohq/iltero-actions/monitor@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+        uses: ilterohq/iltero-actions/monitor@RELEASE_COMMIT_SHA # v0.2.0
         with:
           path: ${{ matrix.path }}
           stack-id: ${{ vars.ILTERO_STACK_ID }}

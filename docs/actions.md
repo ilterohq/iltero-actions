@@ -2,6 +2,12 @@
 
 Complete reference for every action in this toolkit. For an overview and quick start, see the [README](../README.md).
 
+**Replace `RELEASE_COMMIT_SHA`** in every example below with the commit SHA of
+the release you want to pin to — it is shown on that release's page under
+[Releases](https://github.com/ilterohq/iltero-actions/releases). The placeholder
+is deliberate: a version written into an example is a value people copy long
+after it has gone stale.
+
 ## Table of Contents
 
 - [Pipeline Action](#pipeline-action) — Full orchestration (most users)
@@ -74,7 +80,7 @@ Complete reference for every action in this toolkit. For an overview and quick s
 **`ilterohq/iltero-actions/setup`** — Install Iltero CLI and tools.
 
 ```yaml
-- uses: ilterohq/iltero-actions/setup@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+- uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
   with:
     install-checkov: 'true'
     install-opa: 'true'
@@ -100,8 +106,8 @@ Complete reference for every action in this toolkit. For an overview and quick s
 **`ilterohq/iltero-actions/setup-oidc`** — Exchange GitHub OIDC token for short-lived Iltero API tokens.
 
 ```yaml
-- uses: ilterohq/iltero-actions/setup@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0       # CLI must be installed first
-- uses: ilterohq/iltero-actions/setup-oidc@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+- uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0       # CLI must be installed first
+- uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
   with:
     stack-id: ${{ vars.ILTERO_STACK_ID }}
     org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -140,7 +146,7 @@ See [Authentication](authentication.md) for full setup details.
 **`ilterohq/iltero-actions/configure-registry`** — Configure private module registry.
 
 ```yaml
-- uses: ilterohq/iltero-actions/configure-registry@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+- uses: ilterohq/iltero-actions/configure-registry@RELEASE_COMMIT_SHA # v0.2.0
   with:
     registry-host: registry.iltero.io  # default
   env:
@@ -156,7 +162,7 @@ Configures `.netrc` and git URL rewriting so Terraform can access private module
 **`ilterohq/iltero-actions/scan`** — Run static analysis (Checkov via Iltero CLI).
 
 ```yaml
-- uses: ilterohq/iltero-actions/scan@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+- uses: ilterohq/iltero-actions/scan@RELEASE_COMMIT_SHA # v0.2.0
   with:
     path: infra/stacks/my-stack/units/network
     stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -227,7 +233,7 @@ exists: the scan did not complete, so there is nothing to accept. Gate on
 **`ilterohq/iltero-actions/evaluate`** — Evaluate IaC plans against OPA policies.
 
 ```yaml
-- uses: ilterohq/iltero-actions/evaluate@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+- uses: ilterohq/iltero-actions/evaluate@RELEASE_COMMIT_SHA # v0.2.0
   with:
     path: infra/stacks/my-stack/units/app
     stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -270,7 +276,7 @@ is never waivable.
 **`ilterohq/iltero-actions/deploy`** — Apply IaC changes with Iltero tracking.
 
 ```yaml
-- uses: ilterohq/iltero-actions/deploy@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+- uses: ilterohq/iltero-actions/deploy@RELEASE_COMMIT_SHA # v0.2.0
   with:
     path: infra/stacks/network/units/baseline
     stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -315,7 +321,7 @@ is never waivable.
 **`ilterohq/iltero-actions/monitor`** — Drift detection and runtime compliance.
 
 ```yaml
-- uses: ilterohq/iltero-actions/monitor@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+- uses: ilterohq/iltero-actions/monitor@RELEASE_COMMIT_SHA # v0.2.0
   with:
     path: infra/stacks/network/units/baseline
     stack-id: 0b278217-a809-465a-b9df-00eda8414cb8
@@ -407,9 +413,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: ilterohq/iltero-actions/setup@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+      - uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
 
-      - uses: ilterohq/iltero-actions/setup-oidc@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+      - uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
         with:
           stack-id: ${{ vars.ILTERO_STACK_ID }}
           org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -419,7 +425,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - uses: ilterohq/iltero-actions/monitor@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+      - uses: ilterohq/iltero-actions/monitor@RELEASE_COMMIT_SHA # v0.2.0
         with:
           path: infra/stacks/my-stack/units/network
           stack-id: ${{ vars.STACK_ID }}
@@ -450,13 +456,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # 1. Install tools
-      - uses: ilterohq/iltero-actions/setup@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+      - uses: ilterohq/iltero-actions/setup@RELEASE_COMMIT_SHA # v0.2.0
         with:
           install-checkov: 'true'
           install-opa: 'true'
 
       # 2. OIDC authentication (replaces ILTERO_TOKEN secrets)
-      - uses: ilterohq/iltero-actions/setup-oidc@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+      - uses: ilterohq/iltero-actions/setup-oidc@RELEASE_COMMIT_SHA # v0.2.0
         with:
           stack-id: ${{ vars.ILTERO_STACK_ID }}
           org-id: ${{ vars.ILTERO_ORG_ID }}
@@ -465,7 +471,7 @@ jobs:
       - run: ./scripts/custom-validation.sh
 
       # 4. Run static analysis
-      - uses: ilterohq/iltero-actions/scan@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+      - uses: ilterohq/iltero-actions/scan@RELEASE_COMMIT_SHA # v0.2.0
         id: compliance
         with:
           path: infra/stacks/my-stack/units/network
@@ -480,7 +486,7 @@ jobs:
         run: ./scripts/notify-slack.sh "Compliance failed"
 
       # 6. Evaluate plan (chained to scan)
-      - uses: ilterohq/iltero-actions/evaluate@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+      - uses: ilterohq/iltero-actions/evaluate@RELEASE_COMMIT_SHA # v0.2.0
         with:
           path: infra/stacks/my-stack/units/network
           stack-id: ${{ vars.STACK_ID }}

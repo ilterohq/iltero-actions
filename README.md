@@ -47,13 +47,20 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - uses: ilterohq/iltero-actions@ac5d3a90e14bdb9a9593f37cba9ed67ba41afb3a # v0.2.0
+      - uses: ilterohq/iltero-actions@RELEASE_COMMIT_SHA # v0.2.0
         with:
           stacks_path: infra/stacks
           oidc: 'true'
           stack_id: ${{ vars.ILTERO_STACK_ID }}
           org_id: ${{ vars.ILTERO_ORG_ID }}
 ```
+
+**Replace `RELEASE_COMMIT_SHA`** with the commit SHA of the release you want to
+pin to — it is shown on that release's page under
+[Releases](https://github.com/ilterohq/iltero-actions/releases). The examples
+carry a placeholder on purpose: a version written into an example is a value
+people copy long after it has gone stale, and this project asks the same
+commit-level pinning of its own dependencies.
 
 > **Not using OIDC?** Set `ILTERO_TOKEN` and `ILTERO_REGISTRY_TOKEN` as repository
 > secrets and pass them via `env:` instead of `oidc`/`stack_id`/`org_id`.
