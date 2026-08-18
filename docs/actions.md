@@ -44,7 +44,7 @@ Complete reference for every action in this toolkit. For an overview and quick s
 | `mode` | No | `full` | Pipeline mode: `full`, `preview`, `scan`, `evaluate`, `scan_evaluate`, `deploy` |
 | `run_id` | No | — | Chain to a previous compliance run (required when `mode` is `deploy`) |
 | `verify_authorization` | No | `true` | Verify deployment authorization via Iltero |
-| `terraform_version` | No | From `config.yml` | Terraform version to install (exact, `latest`, or a constraint). Overrides `terraform.version` |
+| `terraform_version` | No | newest 1.10.x | Terraform version to install (exact, `latest`, or a constraint). `terraform.version` in `config.yml` is not used for installation |
 | `cli_version` | No | `0.7.1` | Iltero CLI version to install. Pinned by default so a CLI release cannot change what blocks a deployment without an explicit change. Must be `0.7.0` or newer |
 | `strict_framework_scope` | No | `false` | Fail the run when a compliance framework declared for the environment was not evaluated. The shortfall is reported either way; this decides whether it stops the run |
 | `debug` | No | `false` | Enable debug output |

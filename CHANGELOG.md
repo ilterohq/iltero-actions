@@ -35,6 +35,13 @@ over something it had not established.
 - **A failed tool install now fails the job.** It was previously reported as a
   successful install, leaving the run to continue with the wrong version or no
   scanner at all.
+- **The Terraform version is no longer read from `config.yml`.** It comes from
+  the `terraform_version` input, or the default (newest 1.10.x). `terraform`
+  in `config.yml` was honoured from 0.1.9; a value left there from before the
+  1.10 floor forced an unsupported install and failed the job, with no way out
+  except editing the stack's tracked configuration. A stack that declares a
+  version above the floor will now get the default instead, so move any version
+  you rely on to the `terraform_version` input.
 - **An environment name containing `*` or `?` is now rejected.** Those are
   matched as patterns, so such a name answered with another environment's
   settings.

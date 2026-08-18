@@ -44,8 +44,8 @@ stack:
 # NOTE: Brownfield stacks do NOT use bundle.template_bundle_id.
 # Policy resolution uses environment-level compliance.policy_sets instead.
 terraform:
-  # Quote the version. Iltero requires >= 1.10 (S3 native state locking).
-  version: "1.10"
+  # Terraform version is set via the action's `terraform_version` input, not
+  # here (default: newest 1.10.x). Iltero requires >= 1.10 (S3 native locking).
   backend:
     type: s3
 

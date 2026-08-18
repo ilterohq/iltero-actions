@@ -109,10 +109,9 @@ inputs:
   terraform_version:
     description: |
       Terraform version to install (accepts an exact version, `latest`, a
-      Terraform constraint like `~> 1.11`, or a semver range). Overrides
-      terraform.version in config.yml. When empty, the version is taken from
-      config.yml, falling back to the newest 1.10.x patch. Iltero requires
-      Terraform >= 1.10 (S3 native state locking).
+      Terraform constraint like `~> 1.11`, or a semver range). When empty, the
+      newest 1.10.x patch is installed. Iltero requires Terraform >= 1.10
+      (S3 native state locking).
     required: false
     default: ''
 
@@ -446,21 +445,13 @@ runs:
     # -------------------------------------------------------------------------
     # Resolve Terraform version
     # -------------------------------------------------------------------------
-    # Runs BEFORE the install so the version can come from config.yml: detection
-    # is git + YAML only (no Terraform binary needed). Precedence: action input
-    # > config.yml terraform.version > default (~1.10). Fails closed if selected
-    # stacks pin different versions. Needs yq/jq, installed above.
+    # Runs BEFORE the install. Precedence: the terraform_version input, else the
+    # default (~1.10, newest 1.10.x). config.yml is not consulted.
     - name: Resolve Terraform version
       id: resolve-tf
       shell: bash
       env:
         INPUT_TERRAFORM_VERSION: ${{ inputs.terraform_version }}
-        STACKS_PATH: ${{ inputs.stacks_path }}
-        STACKS_CONFIG: ${{ inputs.stacks_config }}
-        CONFIG_PATH: ${{ inputs.config_path }}
-        STACK: ${{ inputs.stack }}
-        GITHUB_EVENT_NAME: ${{ github.event_name }}
-        GITHUB_BASE_REF: ${{ github.base_ref }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         "${ACTION_PATH}/scripts/terraform-version.sh" resolve
