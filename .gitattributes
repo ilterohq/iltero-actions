@@ -1,0 +1,14 @@
+# Iltero Actions - Git Configuration
+
+# Ensure shell scripts remain executable
+*.sh text eol=lf
+
+# YAML files
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# JSON files
+*.json text eol=lf
+
+# Markdown
+*.md text eol=lf

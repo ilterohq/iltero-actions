@@ -1,0 +1,53 @@
+# =============================================================================
+# yamllint configuration for iltero-actions
+# =============================================================================
+# Tuned for GitHub Actions workflows and composite actions
+# =============================================================================
+
+extends: default
+
+rules:
+  # Line length - disabled for GitHub Actions (embedded scripts often have long lines)
+  line-length: disable
+
+  # Comments - allow inline comments common in workflows
+  comments:
+    min-spaces-from-content: 1
+
+  # Truthy values - GitHub Actions uses 'on' as trigger keyword
+  truthy:
+    allowed-values: ['true', 'false', 'on']
+    check-keys: false
+
+  # Indentation - standard 2 spaces
+  indentation:
+    spaces: 2
+    indent-sequences: true
+
+  # Document markers - not required
+  document-start: disable
+  document-end: disable
+
+  # Braces/brackets spacing
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+
+  # Empty lines
+  empty-lines:
+    max: 2
+
+  # Colons
+  colons:
+    max-spaces-before: 0
+    max-spaces-after: 1
+
+ignore: |
+  # Ignore implementation docs (not production code)
+  implementation-docs/
+  implementation_docs/
+  # Ignore node_modules if present
+  node_modules/
