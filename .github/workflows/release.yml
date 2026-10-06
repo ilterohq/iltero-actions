@@ -1,13 +1,13 @@
 # =============================================================================
 # Iltero Actions - Release Automation
 # =============================================================================
-# When a new GitHub Release is published (e.g. v0.1.0), this workflow:
+# When a new GitHub Release is published (e.g. v0.3.0), this workflow:
 #   1. Validates the tag follows semantic versioning
 #   2. Runs the full CI suite to ensure quality
 #
 # Pinning: there are no moving major tags. Pin to an exact version or commit SHA:
-#     uses: ilterohq/iltero-actions/<action>@v0.1.0
-#     uses: ilterohq/iltero-actions/<action>@<commit-sha>  # v0.1.0
+#     uses: ilterohq/iltero-actions/<action>@v0.3.0
+#     uses: ilterohq/iltero-actions/<action>@<commit-sha>  # v0.3.0
 #
 # Published tags are immutable (a repository ruleset blocks moving/deleting them).
 # =============================================================================

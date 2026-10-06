@@ -1,0 +1,54 @@
+name: Iltero Setup
+description: Install Terraform, the Iltero CLI and its evaluator at pinned, checksum-verified versions.
+author: Iltero
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  terraform-version:
+    description: Terraform version to install. Only versions pinned in this release are accepted.
+    required: false
+    default: "1.16.5"
+
+outputs:
+  terraform-version:
+    description: The Terraform version installed.
+    value: ${{ steps.terraform.outputs.terraform-version }}
+  terraform-path:
+    description: Absolute path of the Terraform binary.
+    value: ${{ steps.terraform.outputs.terraform-path }}
+  cli-commit:
+    description: The Iltero CLI commit installed.
+    value: ${{ steps.cli.outputs.cli-commit }}
+  cli-path:
+    description: Absolute path of the Iltero CLI.
+    value: ${{ steps.cli.outputs.cli-path }}
+  opa-path:
+    description: Absolute path of the evaluator the CLI runs.
+    value: ${{ steps.cli.outputs.opa-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the event and the runner
+      shell: bash
+      run: '"${GITHUB_ACTION_PATH}/../scripts/setup.sh" check'
+
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: "3.12"
+
+    - name: Install Terraform
+      id: terraform
+      shell: bash
+      env:
+        TERRAFORM_VERSION: ${{ inputs.terraform-version }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/setup.sh" terraform "${TERRAFORM_VERSION}"'
+
+    - name: Install the Iltero CLI
+      id: cli
+      shell: bash
+      run: '"${GITHUB_ACTION_PATH}/../scripts/setup.sh" cli'

@@ -7,6 +7,14 @@ run Terraform, and hand the results to the CLI. The CLI checks each change and w
 
 This repository has no release yet.
 
+## Actions
+
+| Action | Purpose |
+| --- | --- |
+| `setup` | Install Terraform, the Iltero CLI and its evaluator |
+
+See the [documentation](docs/README.md) for inputs, outputs and examples.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues as described in [SECURITY.md](SECURITY.md).
