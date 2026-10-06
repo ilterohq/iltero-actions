@@ -1,0 +1,25 @@
+name: Iltero Close Run
+description: Close a governed Iltero run and list every check it owed and never got.
+author: Iltero
+
+branding:
+  icon: lock
+  color: blue
+
+inputs:
+  run-id:
+    description: The run to close, as output by the open action.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check the event and the job
+      shell: bash
+      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" check'
+
+    - name: Close the run
+      shell: bash
+      env:
+        RUN_ID: ${{ inputs.run-id }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" close "${RUN_ID}"'
