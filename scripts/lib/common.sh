@@ -6,9 +6,14 @@
 # tools. Every action finds the tools here, by absolute path.
 readonly ILTERO_TOOLS_DIRNAME="iltero-tools"
 
-# Prints an error annotation and exits with status 1.
+# Prints an error annotation and exits with status 1. The message is escaped,
+# so a value inside it cannot start another workflow command.
 die() {
-  echo "::error::$*" >&2
+  local message="$*"
+  message="${message//%/%25}"
+  message="${message//$'\r'/%0D}"
+  message="${message//$'\n'/%0A}"
+  printf '::error::%s\n' "${message}" >&2
   exit 1
 }
 

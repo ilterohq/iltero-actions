@@ -248,6 +248,15 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   [ "$(output_value opa-path)" = "${RUNNER_TEMP}/iltero-tools/bin/opa" ]
 }
 
+# --- errors ------------------------------------------------------------------
+
+@test "an error message cannot start another workflow command" {
+  run "${SETUP}" terraform $'1.0.0\n::warning::injected 100%'
+  [ "${status}" -eq 1 ]
+  [ "${#lines[@]}" -eq 1 ]
+  [[ "${output}" == "::error::Invalid Terraform version '1.0.0%0A::warning::injected 100%25'. Use X.Y.Z." ]]
+}
+
 # --- outputs -----------------------------------------------------------------
 
 @test "an output value spanning several lines is refused" {
