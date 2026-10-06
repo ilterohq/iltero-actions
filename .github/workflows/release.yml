@@ -1,0 +1,57 @@
+# =============================================================================
+# Iltero Actions - Release Automation
+# =============================================================================
+# When a new GitHub Release is published (e.g. v0.1.0), this workflow:
+#   1. Validates the tag follows semantic versioning
+#   2. Runs the full CI suite to ensure quality
+#
+# Pinning: there are no moving major tags. Pin to an exact version or commit SHA:
+#     uses: ilterohq/iltero-actions/<action>@v0.1.0
+#     uses: ilterohq/iltero-actions/<action>@<commit-sha>  # v0.1.0
+#
+# Published tags are immutable (a repository ruleset blocks moving/deleting them).
+# =============================================================================
+
+name: Release
+
+on:
+  release:
+    types: [published]
+
+# Least privilege — each job declares only what it needs
+permissions: {}
+
+jobs:
+  # ===========================================================================
+  # Validate: Ensure the release tag is a valid semver
+  # ===========================================================================
+  validate-tag:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Parse and validate semver tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          # Must match vMAJOR.MINOR.PATCH (optional pre-release/build metadata)
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Tag '$TAG' does not follow semantic versioning (expected vX.Y.Z)"
+            exit 1
+          fi
+
+          echo "Validated tag: $TAG"
+
+  # ===========================================================================
+  # CI: Run the full quality suite against the tagged commit
+  # ===========================================================================
+  ci:
+    name: CI
+    needs: validate-tag
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      security-events: write
