@@ -91,7 +91,7 @@ show as "Unverified".
 - There are no floating major tags. Pin each action to a commit SHA:
 
   ```yaml
-  uses: ilterohq/iltero-actions/<action>@<commit-sha>  # v0.1.0
+  uses: ilterohq/iltero-actions/<action>@<commit-sha>  # v0.3.0
   ```
 
 - Published tags are immutable. A ruleset blocks moving or deleting a tag, so a version always points at the same

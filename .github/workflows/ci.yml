@@ -10,6 +10,8 @@
 #   - Shell script analysis (shellcheck) — scripts/, at style severity, which is
 #     the severity the repository's own rules require.
 #   - Shell syntax (bash -n) — scripts/.
+#   - Behaviour and structure tests (BATS) — tests/.
+#   - PR API scope — no action calls the PR review or merge API.
 #   - Secret scanning (TruffleHog) and workflow security analysis (zizmor).
 #   - Markdown linting — the five top-level documents named in the job.
 #
@@ -132,6 +134,7 @@ jobs:
             CHANGELOG.md
             SECURITY.md
             CODE_OF_CONDUCT.md
+            docs/*.md
 
   # ===========================================================================
   # Security: Secrets detection, dependency review
@@ -154,7 +157,7 @@ jobs:
       # TruffleHog - Free, open source secret scanner
       # Supports 800+ credential detectors, verification, and entropy analysis
       - name: Scan for secrets (trufflehog)
-        uses: trufflesecurity/trufflehog@bcfcf73aaf4759d4dadc2783177c245a02792318 # main
+        uses: trufflesecurity/trufflehog@4dd8831c5f12599465d4d45c3c447b4018a34c85 # v3.97.9
         with:
           extra_args: --only-verified
 
@@ -186,7 +189,7 @@ jobs:
         continue-on-error: true
 
   # ===========================================================================
-  # Test: Shell script syntax
+  # Test: Shell script syntax, BATS tests, PR API scope
   # ===========================================================================
   test:
     name: Test
@@ -207,3 +210,14 @@ jobs:
             bash -n "${script}"
           done
           echo "::endgroup::"
+
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run the BATS tests
+        run: bats --tap tests/
+
+      - name: Guard against PR review and merge API calls
+        run: ./scripts/check-comment-api-scope.sh
