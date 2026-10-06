@@ -12,6 +12,8 @@ X64 or ARM64.
 | Action | Purpose |
 | --- | --- |
 | [`setup`](#setup) | Install Terraform, the Iltero CLI and its evaluator |
+| [`open`](#open) | Open a governed run on Iltero Cloud |
+| [`close`](#close) | Close a governed run |
 
 ## setup
 
@@ -62,4 +64,81 @@ jobs:
           ILTERO: ${{ steps.setup.outputs.cli-path }}
           ILTERO_OPA_PATH: ${{ steps.setup.outputs.opa-path }}
         run: '"${ILTERO}" doctor'
+```
+
+## open
+
+`open` opens a governed run for one stack and one environment, starting from the plan stage. It runs
+`iltero cloud run open`. The CLI requests the job's GitHub identity token itself, and Iltero Cloud checks that this
+workflow may deploy to that environment.
+
+`open` refuses pull request events. A pull request runs a local check only. The job needs `id-token: write`, the
+`setup` action earlier in the same job, and the `ILTERO_API_URL` environment variable. The step fails with the CLI's
+exit code.
+
+### Inputs
+
+| Input | Description | Default |
+| --- | --- | --- |
+| `stack-id` | The stack the run is for, as a UUID. | required |
+| `environment` | The environment the run deploys to. | required |
+
+### Outputs
+
+| Output | Description |
+| --- | --- |
+| `run-id` | The run's id. Pass it to every later job of the pipeline. |
+| `pins-digest` | The digest of the run's pins. Pass it to every later job of the pipeline. |
+
+## close
+
+`close` closes a governed run. It runs `iltero cloud run close` and lists every check the run owed and never got.
+Run it in a job after every other job of the pipeline, and only when they succeeded, so a failed pipeline stays open
+for a re-run.
+
+`close` has the same requirements as `open`.
+
+### Inputs
+
+| Input | Description | Default |
+| --- | --- | --- |
+| `run-id` | The run to close, as output by `open`. | required |
+
+### Example
+
+```yaml
+env:
+  ILTERO_API_URL: https://api.iltero.io
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      run-id: ${{ steps.open.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@<commit-sha>  # vX.Y.Z
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@<commit-sha>  # vX.Y.Z
+      - id: open
+        uses: ilterohq/iltero-actions/open@<commit-sha>  # vX.Y.Z
+        with:
+          stack-id: 0b6f1f3e-5d7c-4c8e-9a3b-2f1e0d9c8b7a
+          environment: production
+
+  close:
+    needs: deploy
+    if: success()
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+    steps:
+      - uses: ilterohq/iltero-actions/setup@<commit-sha>  # vX.Y.Z
+      - uses: ilterohq/iltero-actions/close@<commit-sha>  # vX.Y.Z
+        with:
+          run-id: ${{ needs.deploy.outputs.run-id }}
 ```

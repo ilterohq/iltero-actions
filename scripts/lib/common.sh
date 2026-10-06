@@ -37,6 +37,32 @@ refuse_untrusted_event() {
   esac
 }
 
+# Refuses pull request events. A pull request may only run a local preview,
+# never a governed run.
+refuse_pull_request() {
+  case "${GITHUB_EVENT_NAME:-}" in
+    pull_request | pull_request_review | pull_request_review_comment)
+      die "This action does not run on pull request events. Use the preview action instead."
+      ;;
+    *) ;;
+  esac
+}
+
+# Stops unless the job may request its GitHub identity token, which the CLI
+# fetches itself.
+require_id_token() {
+  [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]] \
+    || die "The job cannot request its identity token. Grant it 'permissions: id-token: write'."
+}
+
+# Prints the absolute path of the CLI that `setup` installed.
+cli_path() {
+  local cli
+  cli="$(tools_dir)/venv/bin/iltero"
+  [[ -x "${cli}" ]] || die "The Iltero CLI is not installed. Run the setup action first in this job."
+  echo "${cli}"
+}
+
 # Writes one step output. The value must be a single line, so it cannot add
 # other outputs.
 write_output() {
