@@ -12,6 +12,8 @@ This repository has no release yet.
 | Action | Purpose |
 | --- | --- |
 | `setup` | Install Terraform, the Iltero CLI and its evaluator |
+| `open` | Open a governed run on Iltero Cloud |
+| `close` | Close a governed run |
 
 See the [documentation](docs/README.md) for inputs, outputs and examples.
 

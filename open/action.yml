@@ -1,0 +1,38 @@
+name: Iltero Open Run
+description: Open a governed Iltero run for a stack and environment, and output its id and pins digest.
+author: Iltero
+
+branding:
+  icon: unlock
+  color: blue
+
+inputs:
+  stack-id:
+    description: The stack the run is for, as a UUID.
+    required: true
+  environment:
+    description: The environment the run deploys to.
+    required: true
+
+outputs:
+  run-id:
+    description: The run's id. Pass it to every later job of the pipeline.
+    value: ${{ steps.open.outputs.run_id }}
+  pins-digest:
+    description: The digest of the run's pins. Pass it to every later job of the pipeline.
+    value: ${{ steps.open.outputs.pins_digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the event and the job
+      shell: bash
+      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" check'
+
+    - name: Open the run
+      id: open
+      shell: bash
+      env:
+        STACK_ID: ${{ inputs.stack-id }}
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" open "${STACK_ID}" "${ENVIRONMENT}"'
