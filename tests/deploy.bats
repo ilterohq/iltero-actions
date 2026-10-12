@@ -38,7 +38,7 @@ echo "terraform \${unit} \$*" >> "${STUB_LOG}"
 [[ ! -e "${MARKS}/fail-\$1-\${unit}" ]] || exit 1
 case "\$1" in
   init | plan) env | sort > "${BATS_TEST_TMPDIR}/terraform-env-\$1-\${unit}"; echo "terraform says \$1" ;;
-  apply) echo '{"@level":"info"}' ;;
+  apply) echo '{"@level":"info"}'; echo "terraform warns on apply" >&2 ;;
   show) echo '{}' ;;
 esac
 STUB
@@ -267,6 +267,7 @@ deploy_locally() {
   [ "${status}" -eq 0 ]
   commands_paused_around "plan <checked> for network"
   commands_paused_around "terraform says plan"
+  commands_paused_around "terraform warns on apply"
 }
 
 @test "the registry token reaches only init, for the registry audience, and is masked" {

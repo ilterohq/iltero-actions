@@ -102,6 +102,15 @@ aws_unit() {
   [ "${status}" -eq 0 ]
 }
 
+@test "check refuses events other than pull_request" {
+  local event
+  for event in push pull_request_review workflow_dispatch; do
+    GITHUB_EVENT_NAME="${event}" run "${PREVIEW}" check iltero-preview
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"runs only on pull_request events"* ]]
+  done
+}
+
 @test "check refuses an artifact name the comment action could not use" {
   run "${PREVIEW}" check 'x -->'
   [ "${status}" -eq 1 ]
