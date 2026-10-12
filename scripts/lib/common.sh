@@ -1,6 +1,11 @@
 #!/bin/bash
 #
-# Helpers shared by every action. Source this file; it defines functions only.
+# Helpers shared by every action. Source this file; it defines functions and
+# constants, and turns off one Bash option.
+
+# Bash 5.2 and later read "&" in a replacement as the matched text. Every
+# replacement here means a literal "&". Older Bash has no such option.
+shopt -u patsub_replacement 2> /dev/null || true
 
 # The folder under the runner's temporary directory where `setup` installs the
 # tools. Every action finds the tools here, by absolute path.
