@@ -114,7 +114,9 @@ details_block() {
 }
 
 # Turns workflow commands off until resume_commands, so a line of tool output
-# cannot act as one.
+# cannot act as one. Terraform's output and the CLI's check output run with
+# commands off. The CLI's CI commands (run, environment detect, config show)
+# keep them on: the CLI escapes the text it prints and may hide a value.
 pause_commands() {
   COMMANDS_TOKEN="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   echo "::stop-commands::${COMMANDS_TOKEN}"

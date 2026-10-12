@@ -168,14 +168,17 @@ deploy_unit() {
     UNIT_RESULTS[1]="not in scope"
   fi
 
-  local apply_status=0
+  local apply_status=0 show_status=0
+  pause_commands
   (
     cd "${dir}" || exit 1
     terraform_scrubbed "${work}" -- apply -input=false -json "${work}/tfplan" > "${work}/apply.ndjson"
   ) || apply_status=$?
   UNIT_RESULTS[2]="exit ${apply_status}"
+  (cd "${dir}" && terraform_scrubbed "${work}" -- show -json > "${work}/state.json") || show_status=$?
+  resume_commands
 
-  if ! (cd "${dir}" && terraform_scrubbed "${work}" -- show -json > "${work}/state.json"); then
+  if [[ "${show_status}" -ne 0 ]]; then
     echo "::error::Terraform could not read the state of unit '${name}' after the apply."
     UNIT_RESULTS[3]="no state"
     [[ "${apply_status}" -eq 0 ]] || return "${apply_status}"

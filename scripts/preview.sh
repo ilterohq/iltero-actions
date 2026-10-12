@@ -4,7 +4,8 @@
 # credential. Nothing is sent to Iltero.
 #
 # Usage:
-#   preview.sh check ARTIFACT_NAME    Refuse untrusted events and a bad artifact name; check that setup ran.
+#   preview.sh check ARTIFACT_NAME    Refuse events other than pull_request and a bad artifact name;
+#                                     check that setup ran.
 #   preview.sh environment            Write the comment that stands until the run ends, then ask the
 #                                     CLI which environment the change targets. The CLI writes the output.
 #   preview.sh run ENVIRONMENT        Plan and check every unit; write the job summary and the
@@ -36,6 +37,8 @@ readonly COMMENT_MAX_CHARS=60000
 cmd_check() {
   local artifact_name="$1"
   refuse_untrusted_event
+  [[ "${GITHUB_EVENT_NAME}" == pull_request ]] \
+    || die "The preview action runs only on pull_request events."
   check_artifact_name "${artifact_name}"
   cli_path > /dev/null
   terraform_path > /dev/null
