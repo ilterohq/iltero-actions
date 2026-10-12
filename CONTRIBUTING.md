@@ -9,7 +9,8 @@ Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before contributing.
 
 1. Fork the repository and create a branch from `main`.
 2. Make the change, with tests for every rule it adds.
-3. Run the checks CI runs: `actionlint`, `yamllint .`, `shellcheck --severity=style` over `scripts/`, and `zizmor .`.
+3. Run the checks CI runs: `actionlint`, `yamllint .`, `shellcheck --severity=style` over every `.sh` file under
+   `scripts/`, `zizmor .` and `bats tests/`.
 4. Open a pull request against `main`.
 
 ### Commit Messages

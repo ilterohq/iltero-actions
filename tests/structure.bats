@@ -4,9 +4,9 @@
 
 load test_helper
 
-# Prints every action and workflow file, one per line.
+# Prints every action, workflow and example workflow file, one per line.
 yaml_files() {
-  cd "${REPO_ROOT}" && git ls-files --cached --others --exclude-standard -- '*/action.yml' '.github/workflows/*.yml'
+  cd "${REPO_ROOT}" && git ls-files --cached --others --exclude-standard -- '*/action.yml' '.github/workflows/*.yml' 'examples/*.yml'
 }
 
 action_files() {

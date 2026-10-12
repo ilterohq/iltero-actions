@@ -1,0 +1,43 @@
+name: Iltero Verify
+description: Pack each unit's Change Assurance Record with every file it cites, and check it.
+author: Iltero
+
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  out-dir:
+    description: The records directory, from the deploy action's out-dir output.
+    required: true
+  working-directory:
+    description: The stack's directory, relative to the repository root.
+    required: false
+    default: "."
+  artifact-name:
+    description: Name of the artifact that holds the record bundles.
+    required: false
+    default: iltero-records
+
+runs:
+  using: composite
+  steps:
+    - name: Check the event and the job
+      shell: bash
+      run: '"${GITHUB_ACTION_PATH}/../scripts/verify.sh" check'
+
+    - name: Build and verify each record
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        OUT_DIR: ${{ inputs.out-dir }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/verify.sh" run "${OUT_DIR}"'
+
+    - name: Upload the record bundles
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.out-dir }}/units/*/car-*/
+        retention-days: 90
+        if-no-files-found: error

@@ -1,0 +1,43 @@
+# Deploys a project that has no Iltero account: .iltero/config.yml has no
+# platform section. Each unit's plan is checked, the saved plan applied, and the
+# deployment recorded, all on the runner. Nothing is sent to Iltero. The last
+# step packs each unit's record and checks it, and uploads the bundles.
+#
+# Set your own branch, environment, cloud role and region.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read # check out the project
+      id-token: write # the job's identity token, for the cloud role
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/deploy
+          aws-region: eu-west-1
+      - id: deploy
+        uses: ilterohq/iltero-actions/deploy@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: production
+      - if: always() && steps.deploy.outputs.out-dir != ''
+        uses: ilterohq/iltero-actions/verify@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          out-dir: ${{ steps.deploy.outputs.out-dir }}

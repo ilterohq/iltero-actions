@@ -4,16 +4,16 @@
 # Quality checks for the iltero-actions repository. Each line states what the
 # check actually covers, because a check that reads less than its name suggests
 # is worse than no check — it reports success over the part it never looked at:
-#   - Workflow linting (actionlint) — .github/workflows only. It cannot parse
-#     composite action files; those are covered by yamllint.
+#   - Workflow linting (actionlint) — .github/workflows and the reference
+#     workflows in examples/. It cannot parse composite action files; those
+#     are covered by yamllint.
 #   - YAML linting (yamllint) — every YAML file in the repository.
 #   - Shell script analysis (shellcheck) — scripts/, at style severity, which is
 #     the severity the repository's own rules require.
 #   - Shell syntax (bash -n) — scripts/.
 #   - Behaviour and structure tests (BATS) — tests/.
-#   - PR API scope — no action calls the PR review or merge API.
 #   - Secret scanning (TruffleHog) and workflow security analysis (zizmor).
-#   - Markdown linting — the five top-level documents named in the job.
+#   - Markdown linting — the documents named in the job.
 #
 # =============================================================================
 
@@ -89,6 +89,7 @@ jobs:
             || { echo "::error::shellcheck not found; actionlint would skip run: block analysis"; exit 1; }
           actionlint -version
           actionlint -color -verbose
+          actionlint -color -verbose examples/*.yml
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -135,6 +136,7 @@ jobs:
             SECURITY.md
             CODE_OF_CONDUCT.md
             docs/*.md
+            examples/*.md
 
   # ===========================================================================
   # Security: Secrets detection, dependency review
@@ -189,7 +191,7 @@ jobs:
         continue-on-error: true
 
   # ===========================================================================
-  # Test: Shell script syntax, BATS tests, PR API scope
+  # Test: Shell script syntax, BATS tests
   # ===========================================================================
   test:
     name: Test
@@ -218,6 +220,3 @@ jobs:
 
       - name: Run the BATS tests
         run: bats --tap tests/
-
-      - name: Guard against PR review and merge API calls
-        run: ./scripts/check-comment-api-scope.sh

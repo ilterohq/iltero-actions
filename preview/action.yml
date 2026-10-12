@@ -1,0 +1,74 @@
+name: Iltero Preview
+description: Check each unit's plan locally on a pull request, with no cloud or Iltero credential.
+author: Iltero
+
+branding:
+  icon: eye
+  color: blue
+
+inputs:
+  working-directory:
+    description: The stack's directory, relative to the repository root.
+    required: false
+    default: "."
+  artifact-name:
+    description: Name of the artifact that holds the records.
+    required: false
+    default: iltero-preview
+
+outputs:
+  environment:
+    description: The environment the change targets.
+    value: ${{ steps.environment.outputs.environment }}
+  out-dir:
+    description: The directory that holds the records.
+    value: ${{ steps.preview.outputs.out-dir }}
+  comment-artifact:
+    description: >-
+      Name of the artifact that holds the pull request comment, for the comment action. Empty when no comment was
+      written.
+    value: ${{ steps.environment.outputs.comment-dir != '' && format('{0}-comment', inputs.artifact-name) || '' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the event and the job
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" check "${ARTIFACT_NAME}"'
+
+    - name: Find the environment
+      id: environment
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" environment'
+
+    - name: Plan and check each unit
+      id: preview
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ENVIRONMENT: ${{ steps.environment.outputs.environment }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" run "${ENVIRONMENT}"'
+
+    - name: Upload the records
+      if: always() && steps.preview.outputs.out-dir != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.preview.outputs.out-dir }}
+        retention-days: 30
+        if-no-files-found: error
+
+    - name: Upload the comment
+      if: always() && steps.environment.outputs.comment-dir != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}-comment
+        path: ${{ steps.environment.outputs.comment-dir }}
+        retention-days: 1
+        if-no-files-found: error

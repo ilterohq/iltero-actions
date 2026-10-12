@@ -4,7 +4,6 @@
 
 load test_helper
 
-readonly STACK_ID="0b6f1f3e-5d7c-4c8e-9a3b-2f1e0d9c8b7a"
 readonly RUN_ID="7d8e9f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
 
 setup() {
@@ -12,14 +11,20 @@ setup() {
   export ACTIONS_ID_TOKEN_REQUEST_URL="https://token.example"
   export ACTIONS_ID_TOKEN_REQUEST_TOKEN="request-token"
   export CLI_EXIT=0
+  export LINKED=true
   RUN="${REPO_ROOT}/scripts/run.sh"
   # A stand-in for the CLI that setup installs. It records its arguments and,
-  # like the real `cloud run open`, writes the run's outputs.
+  # like the real `run open`, writes the run's outputs.
   mkdir -p "${RUNNER_TEMP}/iltero-tools/venv/bin"
+  ln -s "$(command -v python3)" "${RUNNER_TEMP}/iltero-tools/venv/bin/python"
   cat > "${RUNNER_TEMP}/iltero-tools/venv/bin/iltero" << 'EOF'
 #!/bin/bash
+if [[ "$1 $2" == "config show" ]]; then
+  echo "{\"linked\": ${LINKED}}"
+  exit 0
+fi
 echo "iltero $*" >> "${STUB_LOG}"
-if [[ "$3" == "open" && "${CLI_EXIT}" -eq 0 ]]; then
+if [[ "$1 $2" == "run open" && "${CLI_EXIT}" -eq 0 ]]; then
   echo "run_id=7d8e9f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f" >> "${GITHUB_OUTPUT}"
   echo "pins_digest=sha256:abc" >> "${GITHUB_OUTPUT}"
 fi
@@ -67,31 +72,40 @@ EOF
 
 # --- open --------------------------------------------------------------------
 
-@test "open opens the run from its plan stage" {
-  run "${RUN}" open "${STACK_ID}" production
+@test "open opens the run from its plan stage, for the stack the config names" {
+  run "${RUN}" open production
   [ "${status}" -eq 0 ]
-  grep -qx "iltero cloud run open --stage=plan --stack-id=${STACK_ID} --environment=production" "${STUB_LOG}"
+  grep -qx "iltero run open --stage=plan --environment=production" "${STUB_LOG}"
+}
+
+@test "open refuses a project without a platform section" {
+  LINKED=false run "${RUN}" open production
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"no platform section"* ]]
+  ! grep -q "run open" "${STUB_LOG}"
 }
 
 @test "open leaves the run's outputs the CLI wrote" {
-  run "${RUN}" open "${STACK_ID}" production
+  run "${RUN}" open production
   [ "${status}" -eq 0 ]
   [ "$(output_value run_id)" = "${RUN_ID}" ]
   [ "$(output_value pins_digest)" = "sha256:abc" ]
 }
 
 @test "open passes a value starting with a dash as a value, not an option" {
-  run "${RUN}" open "${STACK_ID}" "--help"
-  grep -qx "iltero cloud run open --stage=plan --stack-id=${STACK_ID} --environment=--help" "${STUB_LOG}"
+  run "${RUN}" open "--help"
+  grep -qx "iltero run open --stage=plan --environment=--help" "${STUB_LOG}"
 }
 
 @test "open fails with the CLI's exit code" {
-  CLI_EXIT=8 run "${RUN}" open "${STACK_ID}" production
+  CLI_EXIT=8 run "${RUN}" open production
   [ "${status}" -eq 8 ]
 }
 
-@test "open requires both arguments" {
-  run "${RUN}" open "${STACK_ID}"
+@test "open requires exactly the environment" {
+  run "${RUN}" open
+  [ "${status}" -eq 1 ]
+  run "${RUN}" open production extra
   [ "${status}" -eq 1 ]
 }
 
@@ -100,7 +114,7 @@ EOF
 @test "close closes the run" {
   run "${RUN}" close "${RUN_ID}"
   [ "${status}" -eq 0 ]
-  grep -qx "iltero cloud run close --run-id=${RUN_ID}" "${STUB_LOG}"
+  grep -qx "iltero run close --run-id=${RUN_ID}" "${STUB_LOG}"
 }
 
 @test "close fails with the CLI's exit code" {
