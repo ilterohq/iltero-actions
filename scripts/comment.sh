@@ -8,13 +8,15 @@
 #   comment.sh post ARTIFACT_NAME COMMENT_FILE  Create or update the comment.
 #
 # The job runs no code from the pull request, and needs only
-# `pull-requests: write`. A pull request from a fork gets a read-only token,
-# so the action posts nothing for it and says so.
+# `pull-requests: write`. A pull request from a fork or from Dependabot gets a
+# read-only token, so the action posts nothing for it and says so.
 
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
+# The account whose pull requests get a read-only token.
+readonly DEPENDABOT_LOGIN="dependabot[bot]"
 # Starts every comment this action writes. The artifact name and the
 # workflow file follow it, so each preview keeps its own comment.
 readonly MARKER_PREFIX="<!-- iltero-preview:"
@@ -35,6 +37,10 @@ cmd_post() {
   [[ -n "${GITHUB_REPOSITORY:-}" ]] || die "GITHUB_REPOSITORY is not set. Run this action inside a GitHub Actions job."
   if [[ "${HEAD_REPOSITORY:-}" != "${GITHUB_REPOSITORY}" ]]; then
     echo "::notice::This pull request comes from a fork, so its token cannot comment. See the job summary instead."
+    return 0
+  fi
+  if [[ "${GITHUB_ACTOR:-}" == "${DEPENDABOT_LOGIN}" ]]; then
+    echo "::notice::This pull request comes from Dependabot, so its token cannot comment. See the job summary instead."
     return 0
   fi
   [[ -f "${file}" ]] || die "The comment file is missing."

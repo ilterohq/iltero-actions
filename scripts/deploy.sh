@@ -50,6 +50,7 @@ check_mode() {
   local linked="$1"
   local run_id="$2"
   local pins="$3"
+  [[ "${linked}" == true || "${linked}" == false ]] || die "The CLI's config report could not be read."
   if [[ "${linked}" == true ]]; then
     [[ -n "${run_id}" && -n "${pins}" ]] \
       || die "This project is linked to Iltero Platform. Deploy it in a governed run: pass the run-id and pins-digest from the open action."
@@ -193,7 +194,9 @@ cmd_run() {
   local environment="$1"
   local run_id="${2:-}"
   local pins="${3:-}"
-  check_mode "$(project_linked)" "${run_id}" "${pins}"
+  local linked
+  linked="$(project_linked)"
+  check_mode "${linked}" "${run_id}" "${pins}"
   local work_root="${RUNNER_TEMP}/iltero-deploy"
   local out="${work_root}/out"
   local units="${work_root}/units.tsv"

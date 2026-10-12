@@ -162,11 +162,18 @@ deploy_locally() {
   grep -q "| network | exit 0 | not in scope | exit 0 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
 }
 
+@test "a config the CLI cannot report never falls back to a local deploy" {
+  CONFIG_EXIT=2 run "${DEPLOY}" run production "" ""
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"no valid .iltero/config.yml"* ]]
+  [ "$(grep -v '^iltero config show' "${STUB_LOG}")" = "" ]
+}
+
 @test "the deploy stops when the CLI finds no valid config" {
   CONFIG_EXIT=2 deploy
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"no valid .iltero/config.yml"* ]]
-  ! grep -q "^terraform" "${STUB_LOG}"
+  [ "$(grep -v '^iltero config show' "${STUB_LOG}")" = "" ]
 }
 
 # --- units -------------------------------------------------------------------

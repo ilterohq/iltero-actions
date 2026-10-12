@@ -100,15 +100,19 @@ plan_unit() {
   fi
 
   # Terraform writes a lock file when the unit has none. It is removed after,
-  # so the checkout is left as it was.
+  # and a committed one is only read, so the checkout is left as it was.
   local lock="${dir}/.terraform.lock.hcl"
   local had_lock=false
-  [[ ! -e "${lock}" ]] || had_lock=true
+  local init_args=(-input=false -no-color)
+  if [[ -e "${lock}" ]]; then
+    had_lock=true
+    init_args+=(-lockfile=readonly)
+  fi
 
   local status=0
   (
     cd "${dir}" || exit 1
-    terraform_scrubbed "${work}" init -input=false -no-color > "${work}/terraform.log" 2>&1 \
+    terraform_scrubbed "${work}" init "${init_args[@]}" > "${work}/terraform.log" 2>&1 \
       && terraform_scrubbed "${work}" plan -no-color "${args[@]}" >> "${work}/terraform.log" 2>&1 \
       && terraform_scrubbed "${work}" show -json "${work}/tfplan" > "${work}/plan.json" 2>> "${work}/terraform.log"
   ) || status=$?

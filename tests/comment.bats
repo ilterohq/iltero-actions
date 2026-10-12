@@ -141,6 +141,14 @@ PY
   [ ! -s "${API_LOG}" ]
 }
 
+@test "post sends nothing for a pull request from Dependabot, and says so" {
+  start_fake_github
+  GITHUB_ACTOR="dependabot[bot]" run "${COMMENT}" post iltero-preview-comment "${BODY}"
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"comes from Dependabot"* ]]
+  [ ! -s "${API_LOG}" ]
+}
+
 @test "post fails when the token may not comment, and names the permission" {
   FAKE_STATUS=403 start_fake_github
   run "${COMMENT}" post iltero-preview-comment "${BODY}"

@@ -9,7 +9,7 @@ Short notes for authors of workflows that use the actions, and for people who ch
    every action to the same commit.
 3. Replace the example values: branches, environments, cloud role and region.
 
-Run `setup` first in every job that uses another action.
+Run `setup` first in every job except the `comment` job.
 
 ## What a job needs
 
@@ -21,8 +21,8 @@ Run `setup` first in every job that uses another action.
   The job holds no Iltero secret.
 
 `preview` needs only `contents: read`. `comment` needs only `pull-requests: write`. It runs in its own job, after
-`preview`, and runs no code from the pull request. For a pull request from a fork, it posts nothing and leaves a
-notice.
+`preview`, and runs no code from the pull request. GitHub gives a pull request from a fork or from Dependabot a
+read-only token, so `comment` posts nothing for it and leaves a notice.
 
 The actions refuse `pull_request_target` and `workflow_run` events. `open`, `deploy` and `close` also refuse
 `pull_request` events. Use `preview` on pull requests. `comment` runs only on `pull_request` events.

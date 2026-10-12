@@ -201,6 +201,15 @@ aws_unit() {
   [ -e units/compute/.terraform.lock.hcl ]
 }
 
+@test "a committed lock file is only read, and a unit without one may get a temporary one" {
+  aws_unit units/network
+  aws_unit units/compute
+  touch units/compute/.terraform.lock.hcl
+  run "${PREVIEW}" run production
+  grep -qx "terraform compute init -input=false -no-color -lockfile=readonly" "${STUB_LOG}"
+  grep -qx "terraform network init -input=false -no-color" "${STUB_LOG}"
+}
+
 # --- planning without upstream state ----------------------------------------
 
 @test "a unit with the remote-state switch is planned with it off and labelled best effort" {
