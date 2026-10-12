@@ -1,0 +1,123 @@
+# Reference workflow for a stack linked to Iltero Platform. A repository owner
+# copies it into .github/workflows/ and replaces the example values.
+#
+# A push to an environment's branch deploys that environment in a governed run:
+# the deploy job opens the run, then plans, checks, applies and records each
+# unit in order. The close job closes the run when the deploy job succeeded.
+#
+# Values the owner replaces:
+#   the actions commit (40 hex characters), each environment's name, branch,
+#   GitHub deployment environment, deploy role ARN and region, and
+#   ILTERO_API_URL. The stack comes from the platform section of
+#   .iltero/config.yml.
+
+name: Iltero
+
+on:
+  push:
+    branches: [staging, main]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  ILTERO_API_URL: https://api.iltero.io/v1
+
+jobs:
+  deploy-staging:
+    name: Deploy staging
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-24.04
+    environment: staging
+    concurrency:
+      group: iltero-staging
+      cancel-in-progress: false
+    permissions:
+      contents: read # check out the stack
+      id-token: write # the job's identity token, for Iltero
+    outputs:
+      run-id: ${{ steps.open.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/iltero-deploy-staging
+          aws-region: eu-west-1
+      - id: open
+        uses: ilterohq/iltero-actions/open@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: staging
+      - uses: ilterohq/iltero-actions/deploy@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: staging
+          run-id: ${{ steps.open.outputs.run-id }}
+          pins-digest: ${{ steps.open.outputs.pins-digest }}
+          # Set only for a module registry that accepts the job's GitHub identity token. Iltero Platform's does not.
+          # registry-host: registry.example.com
+
+  close-staging:
+    name: Close staging
+    needs: deploy-staging
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: iltero-close-staging
+      cancel-in-progress: false
+    permissions:
+      id-token: write # the job's identity token, for Iltero
+    steps:
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          run-id: ${{ needs.deploy-staging.outputs.run-id }}
+
+  deploy-production:
+    name: Deploy production
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: iltero-production
+      cancel-in-progress: false
+    permissions:
+      contents: read # check out the stack
+      id-token: write # the job's identity token, for Iltero
+    outputs:
+      run-id: ${{ steps.open.outputs.run-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/iltero-deploy-production
+          aws-region: eu-west-1
+      - id: open
+        uses: ilterohq/iltero-actions/open@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: production
+      - uses: ilterohq/iltero-actions/deploy@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: production
+          run-id: ${{ steps.open.outputs.run-id }}
+          pins-digest: ${{ steps.open.outputs.pins-digest }}
+          # Set only for a module registry that accepts the job's GitHub identity token. Iltero Platform's does not.
+          # registry-host: registry.example.com
+
+  close-production:
+    name: Close production
+    needs: deploy-production
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: iltero-close-production
+      cancel-in-progress: false
+    permissions:
+      id-token: write # the job's identity token, for Iltero
+    steps:
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          run-id: ${{ needs.deploy-production.outputs.run-id }}

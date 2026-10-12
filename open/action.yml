@@ -1,5 +1,5 @@
 name: Iltero Open Run
-description: Open a governed Iltero run for a stack and environment, and output its id and pins digest.
+description: Open a governed Iltero run for the stack in .iltero/config.yml, and output its id and pins digest.
 author: Iltero
 
 branding:
@@ -7,12 +7,13 @@ branding:
   color: blue
 
 inputs:
-  stack-id:
-    description: The stack the run is for, as a UUID.
-    required: true
   environment:
     description: The environment the run deploys to.
     required: true
+  working-directory:
+    description: The stack's directory, relative to the repository root. Its .iltero/config.yml names the stack.
+    required: false
+    default: "."
 
 outputs:
   run-id:
@@ -32,7 +33,7 @@ runs:
     - name: Open the run
       id: open
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
-        STACK_ID: ${{ inputs.stack-id }}
         ENVIRONMENT: ${{ inputs.environment }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" open "${STACK_ID}" "${ENVIRONMENT}"'
+      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" open "${ENVIRONMENT}"'

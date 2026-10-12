@@ -53,6 +53,17 @@ sha256_of() {
   sha256sum "$1" | cut -d' ' -f1
 }
 
+# Succeeds when LINE is in the test's output, and every time it appears,
+# workflow commands are turned off: after a ::stop-commands::TOKEN line and
+# before the ::TOKEN:: line that turns them back on.
+commands_paused_around() {
+  awk -v line="$1" '
+    /^::stop-commands::/ { token = substr($0, 18); paused = 1; next }
+    paused && $0 == "::" token "::" { paused = 0; next }
+    $0 == line { found = 1; if (!paused) bad = 1 }
+    END { exit !(found && !bad) }' <<< "${output}"
+}
+
 # Prints the value of one output written to GITHUB_OUTPUT.
 output_value() {
   local name="$1"

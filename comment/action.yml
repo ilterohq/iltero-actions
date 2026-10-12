@@ -1,0 +1,36 @@
+name: Iltero Comment
+description: Post the preview's result as a comment on the pull request, and update it on each push.
+author: Iltero
+
+branding:
+  icon: message-square
+  color: blue
+
+inputs:
+  artifact-name:
+    description: The preview action's comment-artifact output.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check the event and the job
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/comment.sh" check "${ARTIFACT_NAME}"'
+
+    - name: Download the comment
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/iltero-comment
+
+    - name: Post the comment
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        GITHUB_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/comment.sh" post "${ARTIFACT_NAME}" "${RUNNER_TEMP}/iltero-comment/comment.md"'

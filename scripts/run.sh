@@ -4,7 +4,8 @@
 #
 # Usage:
 #   run.sh check                          Refuse untrusted and pull request events; check the job can run the CLI.
-#   run.sh open STACK_ID ENVIRONMENT      Open a run from its plan stage. The CLI writes run_id and pins_digest.
+#   run.sh open ENVIRONMENT               Open a run from its plan stage, for the stack in .iltero/config.yml.
+#                                         The CLI writes run_id and pins_digest.
 #   run.sh close RUN_ID                   Close the run.
 #
 # The CLI's exit code is the step's exit code.
@@ -12,6 +13,7 @@
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/project.sh"
 
 # The first stage a run checks. The deploy job starts with the plan.
 readonly FIRST_STAGE="plan"
@@ -24,18 +26,20 @@ cmd_check() {
 }
 
 cmd_open() {
-  local stack_id="$1"
-  local environment="$2"
-  local cli
+  local environment="$1"
+  local cli linked
   cli="$(cli_path)"
-  "${cli}" cloud run open --stage="${FIRST_STAGE}" --stack-id="${stack_id}" --environment="${environment}"
+  linked="$(project_linked)"
+  [[ "${linked}" == true ]] \
+    || die "This project has no platform section in .iltero/config.yml, so it has no governed run to open."
+  "${cli}" run open --stage="${FIRST_STAGE}" --environment="${environment}"
 }
 
 cmd_close() {
   local run_id="$1"
   local cli
   cli="$(cli_path)"
-  "${cli}" cloud run close --run-id="${run_id}"
+  "${cli}" run close --run-id="${run_id}"
 }
 
 main() {
@@ -43,9 +47,9 @@ main() {
   shift || true
   case "${command}" in
     check) cmd_check ;;
-    open) [[ $# -eq 2 ]] || die "Usage: run.sh open STACK_ID ENVIRONMENT"; cmd_open "$@" ;;
+    open) [[ $# -eq 1 ]] || die "Usage: run.sh open ENVIRONMENT"; cmd_open "$@" ;;
     close) [[ $# -eq 1 ]] || die "Usage: run.sh close RUN_ID"; cmd_close "$@" ;;
-    *) die "Unknown command '${command}'. Use: check | open STACK_ID ENVIRONMENT | close RUN_ID" ;;
+    *) die "Unknown command '${command}'. Use: check | open ENVIRONMENT | close RUN_ID" ;;
   esac
 }
 

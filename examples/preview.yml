@@ -1,0 +1,50 @@
+# Checks each pull request locally: every unit is planned with no credentials
+# and its plan checked with the Iltero CLI. Nothing is sent to Iltero and the
+# job holds no secret, so it works with or without an Iltero account. A second
+# job, which runs no code from the pull request, posts the result as a comment.
+#
+# A repository owner copies this workflow into .github/workflows/, sets the
+# actions commit, and sets the branches .iltero/config.yml maps to
+# environments.
+
+name: Iltero preview
+
+on:
+  pull_request:
+    branches: [staging, main]
+
+permissions: {}
+
+jobs:
+  preview:
+    name: Preview
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read # check out the pull request
+    outputs:
+      comment-artifact: ${{ steps.preview.outputs.comment-artifact }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - id: preview
+        uses: ilterohq/iltero-actions/preview@0000000000000000000000000000000000000000 # v0.3.0
+
+  comment:
+    name: Comment
+    needs: preview
+    if: always() && needs.preview.outputs.comment-artifact != ''
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ${{ github.workflow }}-comment-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      pull-requests: write # post the preview's comment
+    steps:
+      - uses: ilterohq/iltero-actions/comment@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          artifact-name: ${{ needs.preview.outputs.comment-artifact }}

@@ -100,7 +100,7 @@ pinned_source_commit() {
   [[ -f "${sources}" ]] || die "This release of the actions pins no Iltero CLI: ${sources} is missing."
   while read -r name commit; do
     if [[ "${name}" == "${package}" ]]; then
-      [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || die "The pinned commit of ${package} is not a full commit: '${commit}'."
+      [[ "${commit}" =~ ${COMMIT_PATTERN} ]] || die "The pinned commit of ${package} is not a full commit: '${commit}'."
       echo "${commit}"
       return 0
     fi
@@ -137,7 +137,7 @@ binary = PIN.binaries[sys.argv[1]]
 print(PIN.release_tag, binary.asset, binary.sha256)
 ' "${key}")" || die "Cannot read the evaluator pin from iltero-schemas."
   read -r version asset sha <<< "${pin}"
-  [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "${asset}" =~ ^[a-z0-9_]+$ && "${sha}" =~ ^[0-9a-f]{64}$ ]] \
+  [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "${asset}" =~ ^[${LOWER}0-9_]+$ && "${sha}" =~ ${SHA256_PATTERN} ]] \
     || die "The evaluator pin from iltero-schemas is malformed."
 
   download_checked "${OPA_RELEASES_URL}/${version}/${asset}" "${sha}" "${dir}/bin/opa"
