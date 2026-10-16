@@ -22,10 +22,12 @@
 #   7. the state after the apply, as JSON;
 #   8. iltero assure --stage post-deploy, also after a failed apply.
 # The deploy stops at the first step that fails, and exits with its code.
+# When REPORT is true, the CLI also writes a report of each unit's record.
 #
 # Environment:
 #   ILTERO_API_URL   The server's address. The registry audience is built from it.
 #   REGISTRY_HOST    The private module registry's host name. Empty: no registry token.
+#   REPORT           true or false. True: write a report of each unit's record.
 
 set -euo pipefail
 
@@ -34,6 +36,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/registry.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/project.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-credentials.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/report.sh"
 
 # The variable a unit declares to read other units' state. A deploy always
 # sets it to true, so a placeholder can never be deployed.
@@ -236,14 +239,20 @@ cmd_run() {
   local environment="$1"
   local run_id="${2:-}"
   local pins="${3:-}"
-  local linked
+  local linked report
+  report="$(report_enabled)"
   linked="$(project_linked)"
   check_mode "${linked}" "${run_id}" "${pins}"
   local work_root="${RUNNER_TEMP}/iltero-deploy"
   local out="${work_root}/out"
   local units="${work_root}/units.tsv"
+  local reports="${work_root}/reports"
   mkdir -p "${out}"
   write_output out-dir "${out}"
+  if [[ "${report}" == true ]]; then
+    mkdir -p "${reports}"
+    write_output report-dir "${reports}"
+  fi
 
   list_checked_units "${units}"
 
@@ -269,6 +278,9 @@ cmd_run() {
       [[ -f "${work}/${stage}.txt" ]] || continue
       details_block "${name}: ${stage}" "${work}/${stage}.txt" >> "${details}"
     done
+    if [[ "${report}" == true && -f "${out}/units/${name}/car.json" ]]; then
+      write_report "${name}" "${out}/units/${name}" "${reports}" "${details}" "${work}/report.txt"
+    fi
     if [[ "${status}" -ne 0 ]]; then
       failed_unit="${name}"
       break

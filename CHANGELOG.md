@@ -21,3 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Example `examples/deploy.yml` for a project with no Iltero account.
 - `comment` action. Posts the preview's result as a comment on the pull request, and updates it on each push. The
   `preview` action writes the comment and outputs its artifact name as `comment-artifact`.
+- `report` input on `deploy` and `verify`, on by default. The CLI writes a report of each unit's record as an HTML page
+  and as Markdown. The action uploads both as the artifact `<artifact-name>-report`, adds the Markdown to the job
+  summary, and outputs the directory as `report-dir`.

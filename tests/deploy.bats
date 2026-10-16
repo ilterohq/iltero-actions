@@ -22,6 +22,7 @@ setup() {
   export ILTERO_API_URL="https://api.example/v1"
   export REGISTRY_HOST=""
   export LINKED="true"
+  export REPORT="true"
   : > "${GITHUB_STEP_SUMMARY}"
   DEPLOY="${REPO_ROOT}/scripts/deploy.sh"
   TOOLS="${RUNNER_TEMP}/iltero-tools"
@@ -45,7 +46,9 @@ STUB
 
   # A stand-in for the CLI. A file under MARKS named exit-<stage>-<unit> holds
   # the exit code of that stage for that unit; exit-state-<unit> holds the
-  # state check's.
+  # state check's, and exit-report-<unit> the report's; no-report-<unit> makes
+# the report exit 5 without writing. Each stage writes the
+  # unit's record; the report writes car-report.<format> into --out.
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
 echo "iltero $*" >> "${STUB_LOG}"
@@ -54,6 +57,16 @@ if [[ "$1 $2" == "state check" ]]; then
   echo "state check data ${TF_DATA_DIR}" >> "${STUB_LOG}"
   echo "state <checked> for ${unit}"
   mark="${MARKS}/exit-state-${unit}"
+  [[ -e "${mark}" ]] && exit "$(cat "${mark}")"
+  exit 0
+fi
+if [[ "$1 $2" == "car report" ]]; then
+  unit="$(basename "$3")" format="${4#--format=}" dir="${5#--out=}"
+  [[ "${format}" == markdown ]] && extension=md || extension="${format}"
+  [[ -e "${MARKS}/no-report-${unit}" ]] && exit 5
+  echo "report <${format}> of ${unit}" > "${dir}/car-report.${extension}"
+  echo "report written for ${unit}"
+  mark="${MARKS}/exit-report-${unit}"
   [[ -e "${mark}" ]] && exit "$(cat "${mark}")"
   exit 0
 fi
@@ -66,13 +79,16 @@ if [[ "$1 $2" == "config show" ]]; then
   echo "{\"linked\": ${LINKED}, \"stack_id\": null}"
   exit 0
 fi
-stage="" unit=""
+stage="" unit="" out=""
 for arg in "$@"; do
   case "${arg}" in
     --stage=*) stage="${arg#--stage=}" ;;
     --unit=*) unit="${arg#--unit=}" ;;
+    --out=*) out="${arg#--out=}" ;;
   esac
 done
+mkdir -p "${out}/units/${unit}"
+touch "${out}/units/${unit}/car.json"
 echo "${stage} <checked> for ${unit}"
 mark="${MARKS}/exit-${stage}-${unit}"
 [[ -e "${mark}" ]] && exit "$(cat "${mark}")"
@@ -403,4 +419,87 @@ deploy_locally() {
   echo 1 > "${MARKS}/exit-plan-network"
   deploy
   [ "$(output_value out-dir)" = "${RUNNER_TEMP}/iltero-deploy/out" ]
+}
+
+# --- report ------------------------------------------------------------------
+
+@test "each unit's record gets a report, as an HTML page for the artifact and in the summary" {
+  deploy
+  [ "${status}" -eq 0 ]
+  local reports="${RUNNER_TEMP}/iltero-deploy/reports" out="${RUNNER_TEMP}/iltero-deploy/out"
+  grep -qx "report-dir=${reports}" "${GITHUB_OUTPUT}"
+  grep -qx "iltero car report ${out}/units/network --format=html --out=${reports}/network" "${STUB_LOG}"
+  grep -qx "iltero car report ${out}/units/compute --format=markdown --out=${reports}/compute" "${STUB_LOG}"
+  [ -f "${reports}/network/car-report.html" ]
+  grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}"
+  grep -qx "report <markdown> of compute" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "with report false, no report is written" {
+  REPORT=false deploy
+  [ "${status}" -eq 0 ]
+  ! grep -q "car report" "${STUB_LOG}"
+  ! grep -q "^report-dir=" "${GITHUB_OUTPUT}"
+}
+
+@test "a report value other than true or false is refused" {
+  REPORT=yes deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The report input must be true or false, not 'yes'."* ]]
+  ! grep -q "^terraform" "${STUB_LOG}"
+}
+
+@test "a report that exits with another code than 0 is a warning, and the deploy keeps its result" {
+  echo 9 > "${MARKS}/exit-report-network"
+  deploy
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"::warning::The CLI's report of unit 'network' exited with 9. See its output in the log."* ]]
+  grep -q "iltero car report .*/units/compute --format=html" "${STUB_LOG}"
+}
+
+@test "the unit that stopped the deploy gets a report when it has a record, and a unit without one gets none" {
+  echo 1 > "${MARKS}/exit-plan-network"
+  deploy
+  [ "${status}" -eq 1 ]
+  grep -q "iltero car report .*/units/network --format=html" "${STUB_LOG}"
+  echo 5 > "${MARKS}/exit-state-network"
+  rm -rf "${RUNNER_TEMP}/iltero-deploy"
+  : > "${STUB_LOG}"
+  deploy
+  [ "${status}" -eq 5 ]
+  ! grep -q "car report" "${STUB_LOG}"
+}
+
+@test "a failed stage keeps its exit code when its report fails too" {
+  echo 3 > "${MARKS}/exit-plan-network"
+  echo 9 > "${MARKS}/exit-report-network"
+  deploy
+  [ "${status}" -eq 3 ]
+}
+
+@test "a report too long for the job summary points to the artifact instead" {
+  local big="${BATS_TEST_TMPDIR}/big"
+  head -c 800001 /dev/zero | tr '\0' 'x' > "${big}"
+  sed -i.bak "s|echo \"report <\${format}> of \${unit}\" > |cat '${big}' > |" "${TOOLS}/venv/bin/iltero"
+  deploy
+  [ "${status}" -eq 0 ]
+  grep -qx "The report of unit network is too long for the job summary. It is in the report artifact." "${GITHUB_STEP_SUMMARY}"
+  ! grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a report the CLI does not write leaves no report in the summary, and no earlier report stays" {
+  local old="${RUNNER_TEMP}/iltero-deploy/reports/network"
+  mkdir -p "${old}"
+  echo "old report" > "${old}/car-report.md"
+  touch "${MARKS}/no-report-network"
+  deploy
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"::warning::The CLI's report of unit 'network' exited with 5."* ]]
+  ! grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}"
+  [ ! -e "${old}/car-report.md" ]
+}
+
+@test "the report's output cannot act as a workflow command" {
+  deploy
+  commands_paused_around "report written for network"
 }
