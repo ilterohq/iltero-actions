@@ -13,12 +13,14 @@
 #
 # For each unit, in the order `iltero units list` prints:
 #   1. terraform init, with a registry token when REGISTRY_HOST is set;
-#   2. terraform plan, saved, and its JSON;
-#   3. iltero assure --stage plan;
-#   4. iltero assure --stage pre-deploy (linked projects only);
-#   5. terraform apply of the saved plan;
-#   6. the state after the apply, as JSON;
-#   7. iltero assure --stage post-deploy, also after a failed apply.
+#   2. iltero state check, which refuses a unit that keeps its state in its
+#      working directory;
+#   3. terraform plan, saved, and its JSON;
+#   4. iltero assure --stage plan;
+#   5. iltero assure --stage pre-deploy (linked projects only);
+#   6. terraform apply of the saved plan;
+#   7. the state after the apply, as JSON;
+#   8. iltero assure --stage post-deploy, also after a failed apply.
 # The deploy stops at the first step that fails, and exits with its code.
 #
 # Environment:
@@ -71,6 +73,11 @@ declares_remote_state_switch() {
   grep -qE "^[[:space:]]*variable[[:space:]]+\"${REMOTE_STATE_SWITCH}\"" "${files[@]}"
 }
 
+# Prints the folder where Terraform keeps a unit's working data.
+terraform_data_dir() {
+  echo "$1/terraform-data"
+}
+
 # Runs Terraform with only the variables it needs: PATH, HOME, the cloud's
 # credentials and TF_VAR_* values. Extra NAME=value pairs before "--" are
 # added to its environment.
@@ -87,7 +94,7 @@ terraform_scrubbed() {
   for name in "${CLOUD_CREDENTIAL_ENV[@]}" $(compgen -e | grep '^TF_VAR_' || true); do
     [[ -z "${!name+set}" ]] || kept+=("${name}=${!name}")
   done
-  env -i PATH="${PATH}" HOME="${HOME}" TF_IN_AUTOMATION=1 TF_INPUT=0 TF_DATA_DIR="${work}/terraform-data" \
+  env -i PATH="${PATH}" HOME="${HOME}" TF_IN_AUTOMATION=1 TF_INPUT=0 TF_DATA_DIR="$(terraform_data_dir "${work}")" \
     ${kept[@]+"${kept[@]}"} ${extra[@]+"${extra[@]}"} "$(terraform_path)" "$@"
 }
 
@@ -103,6 +110,19 @@ assure_stage() {
   ILTERO_OPA_PATH="${tools}/bin/opa" "${cli}" assure --stage="${stage}" "$@" \
     > "${work}/${stage}.txt" 2>&1 || status=$?
   print_untrusted "${work}/${stage}.txt"
+  return "${status}"
+}
+
+# Runs the CLI's state check, which refuses a unit that keeps its Terraform
+# state in its working directory, where the state is lost with the runner.
+# Returns the CLI's exit code.
+state_check() {
+  local dir="$1"
+  local work="$2"
+  local status=0
+  TF_DATA_DIR="$(terraform_data_dir "${work}")" "$(cli_path)" state check --dir="${dir}" \
+    > "${work}/state-check.txt" 2>&1 || status=$?
+  print_untrusted "${work}/state-check.txt"
   return "${status}"
 }
 
@@ -142,12 +162,31 @@ deploy_unit() {
   pause_commands
   (
     cd "${dir}" || exit 1
-    terraform_scrubbed "${work}" ${token_env[@]+"${token_env[@]}"} -- init "${init_args[@]}" \
-      && terraform_scrubbed "${work}" -- plan "${plan_args[@]}" \
-      && terraform_scrubbed "${work}" -- show -json "${work}/tfplan" > "${work}/plan.json"
+    terraform_scrubbed "${work}" ${token_env[@]+"${token_env[@]}"} -- init "${init_args[@]}"
   ) || status=$?
   resume_commands
   token_env=()
+  if [[ "${status}" -ne 0 ]]; then
+    UNIT_RESULTS[0]="terraform failed"
+    echo "::error::Terraform could not initialize unit '${name}'."
+    return "${status}"
+  fi
+
+  # Runs before the plan, so Terraform runs none of the unit's code until the
+  # check passes.
+  state_check "${dir}" "${work}" || status=$?
+  if [[ "${status}" -ne 0 ]]; then
+    UNIT_RESULTS[0]="state check exit ${status}"
+    return "${status}"
+  fi
+
+  pause_commands
+  (
+    cd "${dir}" || exit 1
+    terraform_scrubbed "${work}" -- plan "${plan_args[@]}" \
+      && terraform_scrubbed "${work}" -- show -json "${work}/tfplan" > "${work}/plan.json"
+  ) || status=$?
+  resume_commands
   if [[ "${status}" -ne 0 ]]; then
     UNIT_RESULTS[0]="terraform failed"
     echo "::error::Terraform could not plan unit '${name}'."
@@ -220,12 +259,13 @@ cmd_run() {
   local name dir work status=0 failed_unit="" stage
   while IFS=$'\t' read -r name dir; do
     work="${work_root}/units/${name}"
+    rm -rf "${work}"
     mkdir -p "${work}"
     echo "::group::${name}"
     deploy_unit "${name}" "${dir}" "${work}" "${environment}" "${run_id}" "${pins}" "${out}" || status=$?
     echo "::endgroup::"
     echo "| ${name} | ${UNIT_RESULTS[0]} | ${UNIT_RESULTS[1]} | ${UNIT_RESULTS[2]} | ${UNIT_RESULTS[3]} |" >> "${summary}"
-    for stage in plan pre-deploy post-deploy; do
+    for stage in state-check plan pre-deploy post-deploy; do
       [[ -f "${work}/${stage}.txt" ]] || continue
       details_block "${name}: ${stage}" "${work}/${stage}.txt" >> "${details}"
     done

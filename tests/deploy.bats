@@ -44,10 +44,19 @@ esac
 STUB
 
   # A stand-in for the CLI. A file under MARKS named exit-<stage>-<unit> holds
-  # the exit code of that stage for that unit.
+  # the exit code of that stage for that unit; exit-state-<unit> holds the
+  # state check's.
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
 echo "iltero $*" >> "${STUB_LOG}"
+if [[ "$1 $2" == "state check" ]]; then
+  unit="$(basename "${3#--dir=}")"
+  echo "state check data ${TF_DATA_DIR}" >> "${STUB_LOG}"
+  echo "state <checked> for ${unit}"
+  mark="${MARKS}/exit-state-${unit}"
+  [[ -e "${mark}" ]] && exit "$(cat "${mark}")"
+  exit 0
+fi
 if [[ "$1 $2" == "units list" ]]; then
   cat "${UNITS_JSON}"
   exit 0
@@ -210,12 +219,12 @@ deploy_locally() {
 
 # --- one unit, in order --------------------------------------------------------
 
-@test "each unit is planned, checked, pre-deploy checked, applied and post-deploy checked, in that order" {
+@test "each unit is initialized, state checked, planned, checked, pre-deploy checked, applied and post-deploy checked, in that order" {
   echo '[{"name": "network", "working_directory": "units/network"}]' > "${UNITS_JSON}"
   deploy
   [ "${status}" -eq 0 ]
-  run bash -c "grep -oE '^(terraform network [a-z]+|iltero assure --stage=[a-z-]+)' '${STUB_LOG}' | tr '\n' ','"
-  [ "${output}" = "terraform network init,terraform network plan,terraform network show,iltero assure --stage=plan,iltero assure --stage=pre-deploy,terraform network apply,terraform network show,iltero assure --stage=post-deploy," ]
+  run bash -c "grep -oE '^(terraform network [a-z]+|iltero assure --stage=[a-z-]+|iltero state check)' '${STUB_LOG}' | tr '\n' ','"
+  [ "${output}" = "terraform network init,iltero state check,terraform network plan,terraform network show,iltero assure --stage=plan,iltero assure --stage=pre-deploy,terraform network apply,terraform network show,iltero assure --stage=post-deploy," ]
 }
 
 @test "every stage joins the run and uploads" {
@@ -334,6 +343,53 @@ deploy_locally() {
   [ "${status}" -eq 1 ]
   ! grep -q "unit=compute" "${STUB_LOG}"
   grep -q "| compute | terraform failed | - | - | - |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "the state check reads each unit's directory with the data directory Terraform used" {
+  deploy
+  [ "${status}" -eq 0 ]
+  local unit data
+  for unit in network compute; do
+    grep -q "^iltero state check --dir=units/${unit}$" "${STUB_LOG}"
+    data="$(grep "^TF_DATA_DIR=" "${BATS_TEST_TMPDIR}/terraform-env-init-${unit}")"
+    grep -qxF "state check data ${data#TF_DATA_DIR=}" "${STUB_LOG}"
+  done
+  commands_paused_around "state <checked> for network"
+}
+
+@test "a unit that keeps its state in its working directory stops the deploy before its plan and later units" {
+  echo 5 > "${MARKS}/exit-state-network"
+  deploy
+  [ "${status}" -eq 5 ]
+  ! grep -q "unit=network" "${STUB_LOG}"
+  ! grep -q "terraform network plan" "${STUB_LOG}"
+  ! grep -q "terraform compute" "${STUB_LOG}"
+  grep -q "| network | state check exit 5 | - | - | - |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a failed Terraform init stops the deploy before the state check" {
+  touch "${MARKS}/fail-init-network"
+  deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Terraform could not initialize unit 'network'."* ]]
+  ! grep -q "^iltero state check" "${STUB_LOG}"
+  grep -q "| network | terraform failed | - | - | - |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "each unit starts with an empty work folder" {
+  local work="${RUNNER_TEMP}/iltero-deploy/units/network"
+  mkdir -p "${work}/terraform-data"
+  touch "${work}/terraform-data/left-over"
+  deploy
+  [ "${status}" -eq 0 ]
+  [ ! -e "${work}/terraform-data/left-over" ]
+}
+
+@test "the summary shows the state check's output" {
+  echo 5 > "${MARKS}/exit-state-network"
+  deploy
+  grep -q "<summary>network: state-check</summary>" "${GITHUB_STEP_SUMMARY}"
+  grep -q "state &lt;checked&gt; for network" "${GITHUB_STEP_SUMMARY}"
 }
 
 # --- summary and outputs -----------------------------------------------------
