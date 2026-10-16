@@ -7,12 +7,14 @@
 #   verify.sh run OUT_DIR      For each unit: iltero car build, then iltero car verify.
 #
 # Run from the stack's working directory, with the OUT_DIR the deploy action
-# wrote. Every unit is checked; the step fails when any unit fails.
+# wrote. Every unit is checked; the step fails when any unit fails. When
+# REPORT is true, the CLI also writes a report of each unit's record bundle.
 
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/report.sh"
 
 cmd_check() {
   refuse_untrusted_event
@@ -35,9 +37,16 @@ run_cli() {
 cmd_run() {
   local out="$1"
   [[ -d "${out}" ]] || die "The records directory '${out}' does not exist. Pass the deploy action's out-dir."
+  local report
+  report="$(report_enabled)"
   local work_root="${RUNNER_TEMP}/iltero-verify"
   local units="${work_root}/units.tsv"
+  local reports="${work_root}/reports"
   mkdir -p "${work_root}"
+  if [[ "${report}" == true ]]; then
+    mkdir -p "${reports}"
+    write_output report-dir "${reports}"
+  fi
   list_checked_units "${units}"
 
   local summary="${work_root}/summary.md" details="${work_root}/details.md"
@@ -81,6 +90,9 @@ cmd_run() {
       [[ -f "${work}/${step}.txt" ]] || continue
       details_block "${name}: ${step}" "${work}/${step}.txt" >> "${details}"
     done
+    if [[ "${report}" == true && "${verify}" == exit* ]]; then
+      write_report "${name}" "${bundles[0]}" "${reports}" "${details}" "${work}/report.txt"
+    fi
   done < "${units}"
 
   {
