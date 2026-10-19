@@ -291,19 +291,27 @@ aws_unit() {
   grep -q "assume_role {}" "${BATS_TEST_TMPDIR}/override-network.tf"
 }
 
-@test "the environment's variables file is used when it exists" {
+@test "the unit's variables file for the environment is used when it exists" {
   aws_unit units/network
-  mkdir -p config && touch config/production.tfvars
+  mkdir -p units/network/config && touch units/network/config/production.tfvars.json
   run "${PREVIEW}" run production
-  grep -q -- "-var-file=${STACK}/config/production.tfvars" "${STUB_LOG}"
+  grep -q -- "-var-file=${STACK}/units/network/config/production.tfvars.json" "${STUB_LOG}"
 }
 
-@test "the remote-state switch file comes after the environment's variables file" {
+@test "variables files outside the unit's config folder are not used" {
+  aws_unit units/network
+  mkdir -p config units/network/config
+  touch config/production.tfvars config/production.tfvars.json units/network/config/production.tfvars
+  run "${PREVIEW}" run production
+  ! grep -q -- "-var-file=${STACK}/" "${STUB_LOG}" || false
+}
+
+@test "the remote-state switch file comes after the unit's variables file" {
   aws_unit units/compute
   echo 'variable "enable_remote_state_dependencies" { type = bool }' > units/compute/variables.tf
-  mkdir -p config && touch config/production.tfvars
+  mkdir -p units/compute/config && touch units/compute/config/production.tfvars.json
   run "${PREVIEW}" run production
-  grep -q -- "-var-file=${STACK}/config/production.tfvars -var-file=${RUNNER_TEMP}/iltero-preview/units/compute/without-upstream.tfvars" "${STUB_LOG}"
+  grep -q -- "-var-file=${STACK}/units/compute/config/production.tfvars.json -var-file=${RUNNER_TEMP}/iltero-preview/units/compute/without-upstream.tfvars" "${STUB_LOG}"
 }
 
 @test "the checkout is left as it was" {

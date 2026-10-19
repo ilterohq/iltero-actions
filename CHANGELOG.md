@@ -28,3 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity token, and the job needs `id-token: write`. The project must be linked to Iltero Platform.
 - `upload-records` input on `preview`, `false` by default. When it is `true`, the action uploads each unit's records,
   which hold a redacted copy of each plan, as the artifact named by `artifact-name`.
+- Settings for each unit, read from the unit's own `config/` folder. For an environment, `deploy` passes
+  `config/backend/<environment>.hcl` to `terraform init` as `-backend-config`, and `deploy` and `preview` pass
+  `config/<environment>.tfvars.json` to `terraform plan` as `-var-file`. Both files are optional.

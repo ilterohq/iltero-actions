@@ -12,6 +12,18 @@ terraform_data_dir() {
   echo "$1/terraform-data"
 }
 
+# Prints the path of a unit's backend settings for an environment. The file
+# is optional.
+unit_backend_config() {
+  echo "${PWD}/$1/config/backend/$2.hcl"
+}
+
+# Prints the path of a unit's variables for an environment. The file is
+# optional.
+unit_var_file() {
+  echo "${PWD}/$1/config/$2.tfvars.json"
+}
+
 # Succeeds when a unit declares the remote-state switch variable.
 declares_remote_state_switch() {
   local dir="$1"

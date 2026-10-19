@@ -118,10 +118,13 @@ deploy_unit() {
   local plan_files=(--plan="${work}/plan.json" --plan-binary="${work}/tfplan")
   UNIT_RESULTS=("-" "-" "-" "-")
 
+  local backend_config var_file
+  backend_config="$(unit_backend_config "${dir}" "${environment}")"
+  var_file="$(unit_var_file "${dir}" "${environment}")"
   local init_args=(-input=false -no-color -lockfile=readonly)
-  [[ ! -f "config/backend/${environment}.hcl" ]] || init_args+=(-backend-config="${PWD}/config/backend/${environment}.hcl")
+  [[ ! -f "${backend_config}" ]] || init_args+=(-backend-config="${backend_config}")
   local plan_args=(-input=false -no-color -out="${work}/tfplan")
-  [[ ! -f "config/${environment}.tfvars" ]] || plan_args+=(-var-file="${PWD}/config/${environment}.tfvars")
+  [[ ! -f "${var_file}" ]] || plan_args+=(-var-file="${var_file}")
   if declares_remote_state_switch "${dir}"; then
     # Set from a variables file, not -var: Terraform records a -var value in
     # the plan as a string. The file comes last, so it wins.
