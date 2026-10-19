@@ -215,7 +215,7 @@ aws_unit() {
   run "${PREVIEW}" run production
   [ "${status}" -eq 0 ]
   local env_file="${BATS_TEST_TMPDIR}/terraform-env-network"
-  ! grep -qE '^(GITHUB_ENV|GITHUB_OUTPUT|GITHUB_PATH|GITHUB_STEP_SUMMARY|ACTIONS_ID_TOKEN_REQUEST_URL|ACTIONS_RUNTIME_TOKEN|TF_TOKEN_[^=]*)=' "${env_file}"
+  ! grep -qE '^(GITHUB_ENV|GITHUB_OUTPUT|GITHUB_PATH|GITHUB_STEP_SUMMARY|ACTIONS_ID_TOKEN_REQUEST_URL|ACTIONS_RUNTIME_TOKEN|TF_TOKEN_[^=]*)=' "${env_file}" || false
   grep -qx "AWS_ACCESS_KEY_ID=iltero-preview-mock" "${env_file}"
   grep -qx "AWS_EC2_METADATA_DISABLED=true" "${env_file}"
   grep -q "^TF_DATA_DIR=${RUNNER_TEMP}/iltero-preview/units/network/" "${env_file}"
@@ -230,8 +230,8 @@ aws_unit() {
   local unit
   for unit in network compute; do
     grep -qx "TF_TOKEN_registry_iltero__test_io=id-token-for-https://registry.iltero-test.io" "${BATS_TEST_TMPDIR}/terraform-env-${unit}"
-    ! grep -q "^TF_TOKEN_" "${BATS_TEST_TMPDIR}/terraform-env-plan-${unit}"
-    ! grep -q "^TF_TOKEN_" "${BATS_TEST_TMPDIR}/terraform-env-show-${unit}"
+    ! grep -q "^TF_TOKEN_" "${BATS_TEST_TMPDIR}/terraform-env-plan-${unit}" || false
+    ! grep -q "^TF_TOKEN_" "${BATS_TEST_TMPDIR}/terraform-env-show-${unit}" || false
   done
   [[ "${output}" == *"::add-mask::id-token-for-https://registry.iltero-test.io"* ]]
 }
@@ -242,7 +242,7 @@ aws_unit() {
   touch "${BATS_TEST_TMPDIR}/plan-fails-compute"
   REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
-  ! grep -rqF "id-token-for" "${RUNNER_TEMP}/iltero-preview" "${STACK}" "${GITHUB_ENV}" "${GITHUB_OUTPUT}" "${GITHUB_STEP_SUMMARY}"
+  ! grep -rqF "id-token-for" "${RUNNER_TEMP}/iltero-preview" "${STACK}" "${GITHUB_ENV}" "${GITHUB_OUTPUT}" "${GITHUB_STEP_SUMMARY}" || false
 }
 
 @test "a registry token that cannot be had stops the step" {
@@ -250,7 +250,7 @@ aws_unit() {
   MINT_FAILS=1 REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"Could not get an identity token for the registry"* ]]
-  ! grep -q "terraform network init" "${STUB_LOG}"
+  ! grep -q "terraform network init" "${STUB_LOG}" || false
 }
 
 @test "a project with no platform section cannot use the Iltero registry, and gets no comment" {
@@ -258,7 +258,7 @@ aws_unit() {
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"cannot use the Iltero module registry"* ]]
   [ ! -e "${RUNNER_TEMP}/iltero-preview/comment/comment.md" ]
-  ! grep -q "^iltero environment" "${STUB_LOG}"
+  ! grep -q "^iltero environment" "${STUB_LOG}" || false
   LINKED=true REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" environment
   [ "${status}" -eq 0 ]
 }
@@ -267,8 +267,8 @@ aws_unit() {
   aws_unit units/network
   run "${PREVIEW}" run production
   [ "${status}" -eq 0 ]
-  ! grep -q "^audience " "${STUB_LOG}"
-  ! grep -q "^iltero config show" "${STUB_LOG}"
+  ! grep -q "^audience " "${STUB_LOG}" || false
+  ! grep -q "^iltero config show" "${STUB_LOG}" || false
 }
 
 @test "the plan uses a local backend, no refresh and no lock" {
@@ -282,7 +282,7 @@ aws_unit() {
   aws_unit units/network
   run "${PREVIEW}" run production
   grep -q "skip_credentials_validation = true" "${BATS_TEST_TMPDIR}/override-network.tf"
-  ! grep -q "assume_role" "${BATS_TEST_TMPDIR}/override-network.tf"
+  ! grep -q "assume_role" "${BATS_TEST_TMPDIR}/override-network.tf" || false
 }
 
 @test "the AWS adapter drops the role only for a unit that assumes one" {
@@ -341,7 +341,7 @@ aws_unit() {
 @test "a unit without the remote-state switch is planned as it is" {
   aws_unit units/network
   run "${PREVIEW}" run production
-  ! grep -q "enable_remote_state_dependencies" "${STUB_LOG}"
+  ! grep -q "enable_remote_state_dependencies" "${STUB_LOG}" || false
   grep -q "| network | exit 0 |" "${GITHUB_STEP_SUMMARY}"
 }
 
@@ -353,7 +353,7 @@ aws_unit() {
   touch "${BATS_TEST_TMPDIR}/plan-fails-compute"
   run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
-  ! grep -q -- "--unit=compute " "${STUB_LOG}"
+  ! grep -q -- "--unit=compute " "${STUB_LOG}" || false
   grep -q -- "--unit=network " "${STUB_LOG}"
   grep -q "| compute | not evaluated" "${GITHUB_STEP_SUMMARY}"
 }
@@ -364,7 +364,7 @@ aws_unit() {
   run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"No preview adapter for provider 'google'"* ]]
-  ! grep -q "terraform app" "${STUB_LOG}"
+  ! grep -q "terraform app" "${STUB_LOG}" || false
 }
 
 @test "a unit that already has the override file name is not evaluated" {
@@ -410,7 +410,7 @@ aws_unit() {
   grep -q "^| network | exit 0 |$" "${comment}"
   grep -q "verdict &lt;b&gt;fail&lt;/b&gt; &amp; more" "${comment}"
   grep -qF "Commit ${HEAD_SHA}. [See the job summary](https://github.example/octo/stack/actions/runs/99)" "${comment}"
-  ! grep -q "has not finished" "${comment}"
+  ! grep -q "has not finished" "${comment}" || false
 }
 
 @test "until the run finishes, the comment says the preview has not finished" {
@@ -446,7 +446,7 @@ aws_unit() {
   local comment="${RUNNER_TEMP}/iltero-preview/comment/comment.md"
   grep -q "^| network | exit 0 |$" "${comment}"
   grep -q "The CLI's output is too long for a comment." "${comment}"
-  ! grep -q "<details>" "${comment}"
+  ! grep -q "<details>" "${comment}" || false
   grep -q "xxxxxxxxxx" "${GITHUB_STEP_SUMMARY}"
 }
 

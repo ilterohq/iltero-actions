@@ -99,7 +99,7 @@ PY
   [ "${status}" -eq 0 ]
   grep -q "^GET /repos/octo/stack/issues/7/comments?per_page=100&page=2 " "${API_LOG}"
   grep -q "^PATCH /repos/octo/stack/issues/comments/4242 " "${API_LOG}"
-  ! grep -q "^POST" "${API_LOG}"
+  ! grep -q "^POST" "${API_LOG}" || false
 }
 
 @test "post leaves alone a comment with another marker or by someone else" {
@@ -107,7 +107,7 @@ PY
   start_fake_github
   run "${COMMENT}" post iltero-preview-comment "${BODY}"
   [ "${status}" -eq 0 ]
-  ! grep -q "^PATCH" "${API_LOG}"
+  ! grep -q "^PATCH" "${API_LOG}" || false
   grep -q "^POST /repos/octo/stack/issues/7/comments " "${API_LOG}"
 }
 
@@ -120,14 +120,14 @@ PY
   [ "${status}" -eq 0 ]
   grep -q "^POST" "${API_LOG}"
   grep -q "^PATCH" "${API_LOG}"
-  ! grep -vE '^[A-Z]+ /repos/octo/stack/issues/(7/comments[? ]|comments/[0-9]+ )' "${API_LOG}"
+  ! grep -vE '^[A-Z]+ /repos/octo/stack/issues/(7/comments[? ]|comments/[0-9]+ )' "${API_LOG}" || false
 }
 
 @test "each workflow file keeps its own comment, whatever the branch" {
   comments 0 "4242|github-actions[bot]|$(marker_for "octo/stack/.github/workflows/other.yml@refs/pull/7/merge")"
   start_fake_github
   run "${COMMENT}" post iltero-preview-comment "${BODY}"
-  ! grep -q "^PATCH" "${API_LOG}"
+  ! grep -q "^PATCH" "${API_LOG}" || false
   comments 0 "4242|github-actions[bot]|$(marker_for "octo/stack/.github/workflows/preview.yml@refs/heads/other")"
   run "${COMMENT}" post iltero-preview-comment "${BODY}"
   grep -q "^PATCH /repos/octo/stack/issues/comments/4242 " "${API_LOG}"

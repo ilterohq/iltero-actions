@@ -149,15 +149,15 @@ STUB
 @test "with report false, verify writes no report" {
   REPORT=false run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 0 ]
-  ! grep -q "car report" "${STUB_LOG}"
-  ! grep -q "^report-dir=" "${GITHUB_OUTPUT}"
+  ! grep -q "car report" "${STUB_LOG}" || false
+  ! grep -q "^report-dir=" "${GITHUB_OUTPUT}" || false
 }
 
 @test "verify refuses a report value other than true or false" {
   REPORT="" run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"The report input must be true or false, not ''."* ]]
-  ! grep -q "car build" "${STUB_LOG}"
+  ! grep -q "car build" "${STUB_LOG}" || false
 }
 
 @test "a report that exits with another code than 0 is a warning, and verify keeps its result" {
@@ -170,6 +170,6 @@ STUB
 @test "a unit whose record did not build gets no report" {
   echo 1 > "${MARKS}/exit-build-network"
   run "${VERIFY}" run "${OUT}"
-  ! grep -q "car report ${OUT}/units/network" "${STUB_LOG}"
+  ! grep -q "car report ${OUT}/units/network" "${STUB_LOG}" || false
   grep -q "car report ${OUT}/units/compute" "${STUB_LOG}"
 }

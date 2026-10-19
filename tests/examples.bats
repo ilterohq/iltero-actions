@@ -97,11 +97,11 @@ examples() {
 @test "the governed workflow grants only contents: read and id-token: write" {
   run grep -E '^      [a-z-]+: (read|write)( #.*)?$' "${REPO_ROOT}/examples/greenfield.yml"
   [ "${status}" -eq 0 ]
-  ! grep -E '^      [a-z-]+: (read|write)( #.*)?$' "${REPO_ROOT}/examples/greenfield.yml" | grep -vE '^      (contents: read|id-token: write)( #.*)?$'
+  ! grep -E '^      [a-z-]+: (read|write)( #.*)?$' "${REPO_ROOT}/examples/greenfield.yml" | grep -vE '^      (contents: read|id-token: write)( #.*)?$' || false
 }
 
 @test "the workflow that needs no account never opens a run and never passes a run" {
-  ! grep -qE 'iltero-actions/(open|close)@|run-id:|pins-digest:|ILTERO_API_URL' "${REPO_ROOT}/examples/deploy.yml"
+  ! grep -qE 'iltero-actions/(open|close)@|run-id:|pins-digest:|ILTERO_API_URL' "${REPO_ROOT}/examples/deploy.yml" || false
   grep -q 'iltero-actions/verify@' "${REPO_ROOT}/examples/deploy.yml"
 }
 
@@ -115,7 +115,7 @@ job_permissions() {
 
 @test "the preview workflow runs only on pull requests and holds no identity token" {
   grep -qE '^  pull_request:$' "${REPO_ROOT}/examples/preview.yml"
-  ! grep -qE 'pull_request_target|workflow_run|id-token' "${REPO_ROOT}/examples/preview.yml"
+  ! grep -qE 'pull_request_target|workflow_run|id-token' "${REPO_ROOT}/examples/preview.yml" || false
 }
 
 @test "the preview job may only read the repository" {

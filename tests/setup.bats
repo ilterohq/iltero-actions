@@ -123,7 +123,7 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   run "${SETUP}" terraform "1.2.3"
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"is not pinned"* ]]
-  ! grep -q curl "${STUB_LOG}"
+  ! grep -q curl "${STUB_LOG}" || false
 }
 
 @test "terraform installs a pinned version and writes its outputs" {
