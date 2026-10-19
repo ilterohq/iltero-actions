@@ -10,6 +10,10 @@ setup() {
   export GITHUB_STEP_SUMMARY="${BATS_TEST_TMPDIR}/summary.md"
   export GITHUB_ENV="${BATS_TEST_TMPDIR}/github-env"
   export ACTIONS_ID_TOKEN_REQUEST_URL="https://token.example"
+  export ACTIONS_ID_TOKEN_REQUEST_TOKEN="request-token"
+  export REGISTRY_HOST=""
+  export UPLOAD_RECORDS="false"
+  export LINKED="true"
   export ACTIONS_RUNTIME_TOKEN="runtime-token"
   export TF_TOKEN_registry_example="registry-token"
   export ASSURE_EXIT=0
@@ -23,7 +27,18 @@ setup() {
   PREVIEW="${REPO_ROOT}/scripts/preview.sh"
   TOOLS="${RUNNER_TEMP}/iltero-tools"
   mkdir -p "${TOOLS}/bin" "${TOOLS}/venv/bin"
-  ln -s "$(command -v python3)" "${TOOLS}/venv/bin/python"
+  # The CLI's Python. The identity-token request is answered with a fake
+  # token naming its audience; anything else runs the real interpreter.
+  cat > "${TOOLS}/venv/bin/python" << 'STUB'
+#!/bin/bash
+if [[ "$1" == "-c" && "$2" == *ACTIONS_ID_TOKEN_REQUEST_URL* ]]; then
+  echo "audience ${AUDIENCE}" >> "${STUB_LOG}"
+  [[ -z "${MINT_FAILS:-}" ]] || exit 1
+  echo "id-token-for-${AUDIENCE}"
+  exit 0
+fi
+exec python3 "$@"
+STUB
 
   # A stand-in for Terraform. It records its arguments, its environment and
   # the override file, and writes a lock file on init as Terraform does.
@@ -40,9 +55,13 @@ case "\$1" in
     touch .terraform.lock.hcl
     ;;
   plan)
+    env | sort > "${BATS_TEST_TMPDIR}/terraform-env-plan-\${unit}"
     [[ ! -e "${BATS_TEST_TMPDIR}/plan-fails-\${unit}" ]] || { echo "Error: no credentials"; exit 1; }
     ;;
-  show) echo '{}' ;;
+  show)
+    env | sort > "${BATS_TEST_TMPDIR}/terraform-env-show-\${unit}"
+    echo '{}'
+    ;;
 esac
 STUB
   # A stand-in for the CLI. `units list` prints UNITS_JSON when it exists,
@@ -63,12 +82,16 @@ if [[ "$1 $2" == "units list" ]]; then
   echo ']'
   exit 0
 fi
+if [[ "$1 $2" == "config show" ]]; then
+  echo "{\"linked\": ${LINKED}, \"stack_id\": null}"
+  exit 0
+fi
 if [[ "$1" == "assure" ]]; then
   echo "${ASSURE_OUTPUT}"
   exit "${ASSURE_EXIT}"
 fi
 EOF
-  chmod +x "${TOOLS}/bin/terraform" "${TOOLS}/venv/bin/iltero"
+  chmod +x "${TOOLS}/bin/terraform" "${TOOLS}/venv/bin/iltero" "${TOOLS}/venv/bin/python"
 
   STACK="${BATS_TEST_TMPDIR}/stack"
   mkdir -p "${STACK}"
@@ -124,6 +147,39 @@ aws_unit() {
   [[ "${output}" == *"Terraform is not installed"* ]]
 }
 
+@test "check refuses an upload-records value other than true or false" {
+  UPLOAD_RECORDS=yes run "${PREVIEW}" check iltero-preview
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The upload-records input must be true or false, not 'yes'."* ]]
+  UPLOAD_RECORDS=true run "${PREVIEW}" check iltero-preview
+  [ "${status}" -eq 0 ]
+}
+
+@test "the records are uploaded only when upload-records is true, which is not the default" {
+  local action="${REPO_ROOT}/preview/action.yml"
+  grep -A6 '^  upload-records:' "${action}" | grep -qx '    default: "false"'
+  grep -A1 'name: Upload the records' "${action}" | grep -qF "inputs.upload-records == 'true'"
+}
+
+@test "check with a registry host needs the job's identity token" {
+  unset ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  REGISTRY_HOST="registry.example.io" run "${PREVIEW}" check iltero-preview
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"cannot request its identity token for the module registry"* ]]
+}
+
+@test "check refuses an invalid registry host" {
+  REGISTRY_HOST="Registry.example.io" run "${PREVIEW}" check iltero-preview
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid registry host"* ]]
+}
+
+@test "check without a registry host needs no identity token" {
+  unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  run "${PREVIEW}" check iltero-preview
+  [ "${status}" -eq 0 ]
+}
+
 # --- environment -------------------------------------------------------------
 
 @test "environment asks the CLI, which writes the output" {
@@ -163,6 +219,56 @@ aws_unit() {
   grep -qx "AWS_ACCESS_KEY_ID=iltero-preview-mock" "${env_file}"
   grep -qx "AWS_EC2_METADATA_DISABLED=true" "${env_file}"
   grep -q "^TF_DATA_DIR=${RUNNER_TEMP}/iltero-preview/units/network/" "${env_file}"
+}
+
+@test "a fresh registry token reaches only each init, for the registry host's origin, and is masked" {
+  aws_unit units/network
+  aws_unit units/compute
+  REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
+  [ "$(grep -cx "audience https://registry.iltero-test.io" "${STUB_LOG}")" -eq 2 ]
+  local unit
+  for unit in network compute; do
+    grep -qx "TF_TOKEN_registry_iltero__test_io=id-token-for-https://registry.iltero-test.io" "${BATS_TEST_TMPDIR}/terraform-env-${unit}"
+    ! grep -q "^TF_TOKEN_" "${BATS_TEST_TMPDIR}/terraform-env-plan-${unit}"
+    ! grep -q "^TF_TOKEN_" "${BATS_TEST_TMPDIR}/terraform-env-show-${unit}"
+  done
+  [[ "${output}" == *"::add-mask::id-token-for-https://registry.iltero-test.io"* ]]
+}
+
+@test "the registry token is written to no file, output or summary, even when the plan fails" {
+  aws_unit units/network
+  aws_unit units/compute
+  touch "${BATS_TEST_TMPDIR}/plan-fails-compute"
+  REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" run production
+  [ "${status}" -eq 1 ]
+  ! grep -rqF "id-token-for" "${RUNNER_TEMP}/iltero-preview" "${STACK}" "${GITHUB_ENV}" "${GITHUB_OUTPUT}" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a registry token that cannot be had stops the step" {
+  aws_unit units/network
+  MINT_FAILS=1 REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" run production
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Could not get an identity token for the registry"* ]]
+  ! grep -q "terraform network init" "${STUB_LOG}"
+}
+
+@test "a project with no platform section cannot use the Iltero registry, and gets no comment" {
+  LINKED=false REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" environment
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"cannot use the Iltero module registry"* ]]
+  [ ! -e "${RUNNER_TEMP}/iltero-preview/comment/comment.md" ]
+  ! grep -q "^iltero environment" "${STUB_LOG}"
+  LINKED=true REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" environment
+  [ "${status}" -eq 0 ]
+}
+
+@test "no registry token is made when no registry host is given" {
+  aws_unit units/network
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
+  ! grep -q "^audience " "${STUB_LOG}"
+  ! grep -q "^iltero config show" "${STUB_LOG}"
 }
 
 @test "the plan uses a local backend, no refresh and no lock" {
@@ -344,7 +450,7 @@ aws_unit() {
   grep -q "xxxxxxxxxx" "${GITHUB_STEP_SUMMARY}"
 }
 
-@test "a run without its GitHub context writes no comment, fails, and still uploads the records" {
+@test "a run without its GitHub context writes no comment, fails, and still sets the records directory" {
   aws_unit units/network
   GITHUB_RUN_ID="" run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]

@@ -20,9 +20,13 @@ Run `setup` first in every job except the `comment` job.
 - **`ILTERO_API_URL`**, the address of Iltero Platform, in a workflow that calls it. It is the only Iltero setting.
   The job holds no Iltero secret.
 
-`preview` needs only `contents: read`. `comment` needs only `pull-requests: write`. It runs in its own job, after
-`preview`, and runs no code from the pull request. GitHub gives a pull request from a fork or from Dependabot a
-read-only token, so `comment` posts nothing for it and leaves a notice.
+`preview` needs only `contents: read`. With `registry-host` set, it also needs `id-token: write`, because
+`terraform init` downloads private modules with the job's GitHub identity token. The project must then be linked to
+Iltero Platform.
+
+`comment` needs only `pull-requests: write`. It runs in its own job, after `preview`, and runs no code from the pull
+request. GitHub gives a pull request from a fork or from Dependabot a read-only token, so `comment` posts nothing for
+it and leaves a notice.
 
 The actions refuse `pull_request_target` and `workflow_run` events. `open`, `deploy` and `close` also refuse
 `pull_request` events. Use `preview` on pull requests. `comment` runs only on `pull_request` events.

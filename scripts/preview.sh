@@ -1,11 +1,13 @@
 #!/bin/bash
 #
-# Checks each unit's plan locally, with no cloud credential and no Iltero
-# credential. Nothing is sent to Iltero.
+# Checks each unit's plan locally, with no cloud credential. Nothing is sent
+# to Iltero. With REGISTRY_HOST set, terraform init alone gets a short-lived
+# token to download modules from the private module registry.
 #
 # Usage:
 #   preview.sh check ARTIFACT_NAME    Refuse events other than pull_request and a bad artifact name;
-#                                     check that setup ran.
+#                                     check that setup ran and, with REGISTRY_HOST set, that the host
+#                                     is valid and the job can request its identity token.
 #   preview.sh environment            Write the comment that stands until the run ends, then ask the
 #                                     CLI which environment the change targets. The CLI writes the output.
 #   preview.sh run ENVIRONMENT        Plan and check every unit; write the job summary and the
@@ -19,11 +21,16 @@
 # to false, without upstream state, and its result is labelled best effort.
 # A unit that cannot be planned without credentials is reported as not
 # evaluated, and the step fails.
+#
+# Environment:
+#   REGISTRY_HOST    The private module registry's host name. Empty: no registry token.
 
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/preview-providers.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/project.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/registry.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
 
 # The override file the action adds to a unit while it plans it.
@@ -40,15 +47,27 @@ cmd_check() {
   [[ "${GITHUB_EVENT_NAME}" == pull_request ]] \
     || die "The preview action runs only on pull_request events."
   check_artifact_name "${artifact_name}"
+  [[ "${UPLOAD_RECORDS:-}" == true || "${UPLOAD_RECORDS:-}" == false ]] \
+    || die "The upload-records input must be true or false, not '${UPLOAD_RECORDS:-}'."
   cli_path > /dev/null
   terraform_path > /dev/null
+  if [[ -n "${REGISTRY_HOST:-}" ]]; then
+    registry_token_variable "${REGISTRY_HOST}" > /dev/null
+    [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]] \
+      || die "The job cannot request its identity token for the module registry. Grant it 'permissions: id-token: write'. By default, GitHub gives no identity token to a pull request from a fork."
+  fi
 }
 
 # Writes the comment that stands until the run writes its result, so an
 # earlier result is never left showing for a newer commit.
 cmd_environment() {
-  local cli dir
+  local cli dir linked
   cli="$(cli_path)"
+  if [[ -n "${REGISTRY_HOST:-}" ]]; then
+    linked="$(project_linked)"
+    [[ "${linked}" == true ]] \
+      || die "This project has no platform section in .iltero/config.yml, so it cannot use the Iltero module registry."
+  fi
   dir="$(comment_dir)"
   write_comment "${dir}"
   write_output comment-dir "${dir}"
@@ -60,13 +79,20 @@ comment_dir() {
   echo "${RUNNER_TEMP}/iltero-preview/comment"
 }
 
-# Runs Terraform with only the variables it needs.
+# Runs Terraform with only the variables it needs. The NAME=VALUE arguments
+# before "--" are added to its environment.
 terraform_scrubbed() {
   local work="$1"
   shift
+  local extra=()
+  while [[ $# -gt 0 && "$1" != "--" ]]; do
+    extra+=("$1")
+    shift
+  done
+  shift
   env -i PATH="${PATH}" HOME="${HOME}" TF_IN_AUTOMATION=1 TF_INPUT=0 \
     TF_DATA_DIR="${work}/terraform-data" ${PREVIEW_PROVIDER_ENV[@]+"${PREVIEW_PROVIDER_ENV[@]}"} \
-    "$(terraform_path)" "$@"
+    ${extra[@]+"${extra[@]}"} "$(terraform_path)" "$@"
 }
 
 # Succeeds when a unit declares the remote-state switch variable.
@@ -78,12 +104,14 @@ declares_remote_state_switch() {
 }
 
 # Plans one unit with no credentials. Writes tfplan and plan.json under WORK.
+# TOKEN_ENV, when given, is a NAME=VALUE that reaches only the init process.
 # Sets PLANNED_WITHOUT_UPSTREAM to true when the remote-state switch was off.
 # Returns non-zero, with the reason on stderr, when the unit cannot be planned.
 plan_unit() {
   local dir="$1"
   local work="$2"
   local var_file="$3"
+  local token_env="${4:-}"
   local override="${dir}/${OVERRIDE_FILE}"
 
   [[ ! -e "${override}" ]] || { echo "The unit already has a file named ${OVERRIDE_FILE}." >&2; return 1; }
@@ -115,9 +143,10 @@ plan_unit() {
   local status=0
   (
     cd "${dir}" || exit 1
-    terraform_scrubbed "${work}" init "${init_args[@]}" > "${work}/terraform.log" 2>&1 \
-      && terraform_scrubbed "${work}" plan -no-color "${args[@]}" >> "${work}/terraform.log" 2>&1 \
-      && terraform_scrubbed "${work}" show -json "${work}/tfplan" > "${work}/plan.json" 2>> "${work}/terraform.log"
+    terraform_scrubbed "${work}" ${token_env:+"${token_env}"} -- init "${init_args[@]}" \
+      > "${work}/terraform.log" 2>&1 \
+      && terraform_scrubbed "${work}" -- plan -no-color "${args[@]}" >> "${work}/terraform.log" 2>&1 \
+      && terraform_scrubbed "${work}" -- show -json "${work}/tfplan" > "${work}/plan.json" 2>> "${work}/terraform.log"
   ) || status=$?
   rm -f "${override}"
   [[ "${had_lock}" == true ]] || rm -f "${lock}"
@@ -177,12 +206,20 @@ cmd_run() {
   local units="${work_root}/units.tsv"
   list_checked_units "${units}"
 
-  local failed=0 name dir work status result
+  local failed=0 name dir work status result token_env
   while IFS=$'\t' read -r name dir; do
     work="${work_root}/units/${name}"
     mkdir -p "${work}"
     echo "::group::${name}"
-    if ! plan_unit "${dir}" "${work}" "${var_file}" 2> "${work}/reason.txt"; then
+    # A fresh registry token for each init: it lives only a few minutes.
+    # Minted here, not in plan_unit, so a failure stops the step.
+    token_env=""
+    if [[ -n "${REGISTRY_HOST:-}" ]]; then
+      mint_registry_token "${REGISTRY_HOST}"
+      token_env="${REGISTRY_TOKEN_ENV}"
+      REGISTRY_TOKEN_ENV=""
+    fi
+    if ! plan_unit "${dir}" "${work}" "${var_file}" "${token_env}" 2> "${work}/reason.txt"; then
       print_untrusted "${work}/reason.txt" >&2
       result="not evaluated: the plan could not be made without credentials"
       failed=1
@@ -197,6 +234,7 @@ cmd_run() {
       [[ "${status}" -eq 0 ]] || failed=1
       details_block "${name}" "${work}/assure.txt" >> "${details}"
     fi
+    token_env=""
     echo "::endgroup::"
     echo "| ${name} | ${result} |" >> "${summary}"
   done < "${units}"

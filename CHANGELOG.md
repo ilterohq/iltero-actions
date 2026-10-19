@@ -24,3 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `report` input on `deploy` and `verify`, on by default. The CLI writes a report of each unit's record as an HTML page
   and as Markdown. The action uploads both as the artifact `<artifact-name>-report`, adds the Markdown to the job
   summary, and outputs the directory as `report-dir`.
+- `registry-host` input on `preview`. When it is set, `terraform init` downloads private modules with the job's GitHub
+  identity token, and the job needs `id-token: write`. The project must be linked to Iltero Platform.
+- `upload-records` input on `preview`, `false` by default. When it is `true`, the action uploads each unit's records,
+  which hold a redacted copy of each plan, as the artifact named by `artifact-name`.
