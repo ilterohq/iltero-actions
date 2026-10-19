@@ -101,12 +101,12 @@ plan_unit() {
   cp "${work}/override.tf" "${override}" || return 1
 
   local args=(-input=false -refresh=false -lock=false -out="${work}/tfplan")
-  [[ -z "${var_file}" ]] || args+=(-var-file="${var_file}")
+  [[ ! -f "${var_file}" ]] || args+=(-var-file="${var_file}")
   PLANNED_WITHOUT_UPSTREAM=false
   if declares_remote_state_switch "${dir}"; then
     # Set from a variables file, not -var: Terraform records a -var value in
     # the plan as a string, and a file value as its own type. The file comes
-    # last, so it wins over the environment's variables file.
+    # last, so it wins over the unit's variables file.
     echo "${REMOTE_STATE_SWITCH} = false" > "${work}/without-upstream.tfvars"
     args+=(-var-file="${work}/without-upstream.tfvars")
     PLANNED_WITHOUT_UPSTREAM=true
@@ -172,9 +172,6 @@ cmd_run() {
   mkdir -p "${out}"
   write_output out-dir "${out}"
 
-  local var_file=""
-  [[ ! -f "config/${environment}.tfvars" ]] || var_file="${PWD}/config/${environment}.tfvars"
-
   {
     echo "## Iltero preview: $(markdown_escape "${environment}")"
     echo
@@ -188,7 +185,7 @@ cmd_run() {
   local units="${work_root}/units.tsv"
   list_checked_units "${units}"
 
-  local failed=0 name dir work status result token_env
+  local failed=0 name dir work status result token_env var_file
   while IFS=$'\t' read -r name dir; do
     work="${work_root}/units/${name}"
     mkdir -p "${work}"
@@ -201,6 +198,7 @@ cmd_run() {
       token_env="${REGISTRY_TOKEN_ENV}"
       REGISTRY_TOKEN_ENV=""
     fi
+    var_file="$(unit_var_file "${dir}" "${environment}")"
     if ! plan_unit "${dir}" "${work}" "${var_file}" "${token_env}" 2> "${work}/reason.txt"; then
       print_untrusted "${work}/reason.txt" >&2
       result="not evaluated: the plan could not be made without credentials"

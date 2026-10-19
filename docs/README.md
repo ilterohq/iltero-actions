@@ -11,6 +11,15 @@ Short notes for authors of workflows that use the actions, and for people who ch
 
 Run `setup` first in every job except the `comment` job.
 
+## Unit settings
+
+`deploy` and `preview` read a unit's settings for an environment from the unit's own `config/` folder. Both files
+are optional.
+
+- **`config/backend/<environment>.hcl`**: backend settings. `deploy` passes the file to `terraform init`.
+  `preview` does not read it.
+- **`config/<environment>.tfvars.json`**: variable values. `deploy` and `preview` pass the file to `terraform plan`.
+
 ## What a job needs
 
 - **`permissions: {}`** at the workflow level, and per-job permissions that grant only what the job needs.

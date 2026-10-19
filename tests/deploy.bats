@@ -259,20 +259,28 @@ deploy_locally() {
   [ "$(cat "${work}/apply.ndjson")" = '{"@level":"info"}' ]
 }
 
-@test "init uses the lock file as committed and the environment's backend settings" {
-  mkdir -p config/backend && touch config/backend/production.hcl
+@test "init uses the lock file as committed and the unit's backend settings for the environment" {
+  mkdir -p units/network/config/backend && touch units/network/config/backend/production.hcl
   deploy
-  grep -q "terraform network init -input=false -no-color -lockfile=readonly -backend-config=${STACK}/config/backend/production.hcl" "${STUB_LOG}"
+  grep -q "terraform network init -input=false -no-color -lockfile=readonly -backend-config=${STACK}/units/network/config/backend/production.hcl" "${STUB_LOG}"
 }
 
-@test "plan uses the environment's variables and sets the remote-state switch to true from a file, last" {
-  mkdir -p config && touch config/production.tfvars
+@test "plan uses the unit's variables for the environment and sets the remote-state switch to true from a file, last" {
+  mkdir -p units/compute/config && touch units/compute/config/production.tfvars.json
   echo 'variable "enable_remote_state_dependencies" { type = bool }' > units/compute/variables.tf
   deploy
   local switch="${RUNNER_TEMP}/iltero-deploy/units/compute/with-upstream.tfvars"
-  grep -q "terraform compute plan .* -var-file=${STACK}/config/production.tfvars -var-file=${switch}$" "${STUB_LOG}"
+  grep -q "terraform compute plan .* -var-file=${STACK}/units/compute/config/production.tfvars.json -var-file=${switch}$" "${STUB_LOG}"
   [ "$(cat "${switch}")" = "enable_remote_state_dependencies = true" ]
   ! grep -q "terraform network plan .*with-upstream" "${STUB_LOG}" || false
+}
+
+@test "settings outside the unit's config folder are not used" {
+  mkdir -p config/backend units/network/config
+  touch config/backend/production.hcl config/production.tfvars config/production.tfvars.json units/network/config/production.tfvars
+  deploy
+  ! grep -q -- "-backend-config" "${STUB_LOG}" || false
+  ! grep -q -- "-var-file=${STACK}/" "${STUB_LOG}" || false
 }
 
 # --- what Terraform can reach ------------------------------------------------
