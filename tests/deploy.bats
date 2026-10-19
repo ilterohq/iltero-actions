@@ -154,7 +154,7 @@ deploy_locally() {
   deploy_locally
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"This project is linked to Iltero Platform. Deploy it in a governed run: "* ]]
-  ! grep -q "^terraform" "${STUB_LOG}"
+  ! grep -q "^terraform" "${STUB_LOG}" || false
 }
 
 @test "a governed run needs id-token: write" {
@@ -167,7 +167,7 @@ deploy_locally() {
   LINKED=false deploy
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"no platform section"* ]]
-  ! grep -q "^terraform" "${STUB_LOG}"
+  ! grep -q "^terraform" "${STUB_LOG}" || false
 }
 
 @test "a project without a platform section cannot use the Iltero registry" {
@@ -180,7 +180,7 @@ deploy_locally() {
   unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
   LINKED=false deploy_locally
   [ "${status}" -eq 0 ]
-  ! grep -qE -- "--run-id|--pins-digest|--upload|--stage=pre-deploy" "${STUB_LOG}"
+  ! grep -qE -- "--run-id|--pins-digest|--upload|--stage=pre-deploy" "${STUB_LOG}" || false
   grep -q "iltero assure --stage=plan .*--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out$" "${STUB_LOG}"
   grep -q "iltero assure --stage=post-deploy .*--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out$" "${STUB_LOG}"
   grep -q "terraform network apply" "${STUB_LOG}"
@@ -222,7 +222,7 @@ deploy_locally() {
     : > "${STUB_LOG}"
     deploy
     [ "${status}" -eq 1 ]
-    ! grep -q "^terraform" "${STUB_LOG}"
+    ! grep -q "^terraform" "${STUB_LOG}" || false
   done
 }
 
@@ -230,7 +230,7 @@ deploy_locally() {
   rm "${UNITS_JSON}"
   deploy
   [ "${status}" -eq 1 ]
-  ! grep -q "^terraform" "${STUB_LOG}"
+  ! grep -q "^terraform" "${STUB_LOG}" || false
 }
 
 # --- one unit, in order --------------------------------------------------------
@@ -272,7 +272,7 @@ deploy_locally() {
   local switch="${RUNNER_TEMP}/iltero-deploy/units/compute/with-upstream.tfvars"
   grep -q "terraform compute plan .* -var-file=${STACK}/config/production.tfvars -var-file=${switch}$" "${STUB_LOG}"
   [ "$(cat "${switch}")" = "enable_remote_state_dependencies = true" ]
-  ! grep -q "terraform network plan .*with-upstream" "${STUB_LOG}"
+  ! grep -q "terraform network plan .*with-upstream" "${STUB_LOG}" || false
 }
 
 # --- what Terraform can reach ------------------------------------------------
@@ -283,7 +283,7 @@ deploy_locally() {
   for env_file in "${BATS_TEST_TMPDIR}"/terraform-env-*; do
     grep -qx "AWS_ACCESS_KEY_ID=deploy-role-key" "${env_file}"
     grep -qx "TF_VAR_owner=platform-team" "${env_file}"
-    ! grep -vE '^(PATH|HOME|PWD|SHLVL|_|OLDPWD|TF_IN_AUTOMATION|TF_INPUT|TF_DATA_DIR|AWS_ACCESS_KEY_ID|TF_VAR_owner)=' "${env_file}"
+    ! grep -vE '^(PATH|HOME|PWD|SHLVL|_|OLDPWD|TF_IN_AUTOMATION|TF_INPUT|TF_DATA_DIR|AWS_ACCESS_KEY_ID|TF_VAR_owner)=' "${env_file}" || false
   done
 }
 
@@ -301,15 +301,15 @@ deploy_locally() {
   [ "${status}" -eq 0 ]
   grep -qx "audience https://registry.iltero-test.io" "${STUB_LOG}"
   grep -qx "TF_TOKEN_registry_iltero__test_io=id-token-for-https://registry.iltero-test.io" "${BATS_TEST_TMPDIR}/terraform-env-init-network"
-  ! grep -q "^TF_TOKEN_registry" "${BATS_TEST_TMPDIR}/terraform-env-plan-network"
+  ! grep -q "^TF_TOKEN_registry" "${BATS_TEST_TMPDIR}/terraform-env-plan-network" || false
   [[ "${output}" == *"::add-mask::id-token-for-https://registry.iltero-test.io"* ]]
   [ "$(grep -c '^audience' "${STUB_LOG}")" -eq 2 ]
-  ! grep -rq "id-token-for" "${GITHUB_ENV}" "${GITHUB_OUTPUT}" "${RUNNER_TEMP}/iltero-deploy" 2> /dev/null
+  ! grep -rq "id-token-for" "${GITHUB_ENV}" "${GITHUB_OUTPUT}" "${RUNNER_TEMP}/iltero-deploy" 2> /dev/null || false
 }
 
 @test "no registry token is made when no registry host is given" {
   deploy
-  ! grep -q "^audience" "${STUB_LOG}"
+  ! grep -q "^audience" "${STUB_LOG}" || false
 }
 
 @test "a registry token needs no ILTERO_API_URL" {
@@ -325,9 +325,9 @@ deploy_locally() {
   echo 1 > "${MARKS}/exit-plan-network"
   deploy
   [ "${status}" -eq 1 ]
-  ! grep -q "stage=pre-deploy" "${STUB_LOG}"
-  ! grep -q "terraform network apply" "${STUB_LOG}"
-  ! grep -q "terraform compute" "${STUB_LOG}"
+  ! grep -q "stage=pre-deploy" "${STUB_LOG}" || false
+  ! grep -q "terraform network apply" "${STUB_LOG}" || false
+  ! grep -q "terraform compute" "${STUB_LOG}" || false
   grep -q "| network | exit 1 | - | - | - |" "${GITHUB_STEP_SUMMARY}"
 }
 
@@ -335,7 +335,7 @@ deploy_locally() {
   echo 3 > "${MARKS}/exit-pre-deploy-network"
   deploy
   [ "${status}" -eq 3 ]
-  ! grep -q "terraform network apply" "${STUB_LOG}"
+  ! grep -q "terraform network apply" "${STUB_LOG}" || false
 }
 
 @test "a failed apply is still checked after, and fails with the apply's code" {
@@ -343,7 +343,7 @@ deploy_locally() {
   deploy
   [ "${status}" -eq 1 ]
   grep -q "stage=post-deploy" "${STUB_LOG}"
-  ! grep -q "terraform compute" "${STUB_LOG}"
+  ! grep -q "terraform compute" "${STUB_LOG}" || false
   grep -q "| network | exit 0 | exit 0 | exit 1 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
 }
 
@@ -351,14 +351,14 @@ deploy_locally() {
   echo 9 > "${MARKS}/exit-post-deploy-network"
   deploy
   [ "${status}" -eq 9 ]
-  ! grep -q "terraform compute" "${STUB_LOG}"
+  ! grep -q "terraform compute" "${STUB_LOG}" || false
 }
 
 @test "a failed Terraform plan stops the deploy before any check" {
   touch "${MARKS}/fail-plan-compute"
   deploy
   [ "${status}" -eq 1 ]
-  ! grep -q "unit=compute" "${STUB_LOG}"
+  ! grep -q "unit=compute" "${STUB_LOG}" || false
   grep -q "| compute | terraform failed | - | - | - |" "${GITHUB_STEP_SUMMARY}"
 }
 
@@ -378,9 +378,9 @@ deploy_locally() {
   echo 5 > "${MARKS}/exit-state-network"
   deploy
   [ "${status}" -eq 5 ]
-  ! grep -q "unit=network" "${STUB_LOG}"
-  ! grep -q "terraform network plan" "${STUB_LOG}"
-  ! grep -q "terraform compute" "${STUB_LOG}"
+  ! grep -q "unit=network" "${STUB_LOG}" || false
+  ! grep -q "terraform network plan" "${STUB_LOG}" || false
+  ! grep -q "terraform compute" "${STUB_LOG}" || false
   grep -q "| network | state check exit 5 | - | - | - |" "${GITHUB_STEP_SUMMARY}"
 }
 
@@ -389,7 +389,7 @@ deploy_locally() {
   deploy
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"Terraform could not initialize unit 'network'."* ]]
-  ! grep -q "^iltero state check" "${STUB_LOG}"
+  ! grep -q "^iltero state check" "${STUB_LOG}" || false
   grep -q "| network | terraform failed | - | - | - |" "${GITHUB_STEP_SUMMARY}"
 }
 
@@ -439,15 +439,15 @@ deploy_locally() {
 @test "with report false, no report is written" {
   REPORT=false deploy
   [ "${status}" -eq 0 ]
-  ! grep -q "car report" "${STUB_LOG}"
-  ! grep -q "^report-dir=" "${GITHUB_OUTPUT}"
+  ! grep -q "car report" "${STUB_LOG}" || false
+  ! grep -q "^report-dir=" "${GITHUB_OUTPUT}" || false
 }
 
 @test "a report value other than true or false is refused" {
   REPORT=yes deploy
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"The report input must be true or false, not 'yes'."* ]]
-  ! grep -q "^terraform" "${STUB_LOG}"
+  ! grep -q "^terraform" "${STUB_LOG}" || false
 }
 
 @test "a report that exits with another code than 0 is a warning, and the deploy keeps its result" {
@@ -468,7 +468,7 @@ deploy_locally() {
   : > "${STUB_LOG}"
   deploy
   [ "${status}" -eq 5 ]
-  ! grep -q "car report" "${STUB_LOG}"
+  ! grep -q "car report" "${STUB_LOG}" || false
 }
 
 @test "a failed stage keeps its exit code when its report fails too" {
@@ -485,7 +485,7 @@ deploy_locally() {
   deploy
   [ "${status}" -eq 0 ]
   grep -qx "The report of unit network is too long for the job summary. It is in the report artifact." "${GITHUB_STEP_SUMMARY}"
-  ! grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}"
+  ! grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}" || false
 }
 
 @test "a report the CLI does not write leaves no report in the summary, and no earlier report stays" {
@@ -496,7 +496,7 @@ deploy_locally() {
   deploy
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"::warning::The CLI's report of unit 'network' exited with 5."* ]]
-  ! grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}"
+  ! grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}" || false
   [ ! -e "${old}/car-report.md" ]
 }
 

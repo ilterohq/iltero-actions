@@ -82,7 +82,7 @@ EOF
   LINKED=false run "${RUN}" open production
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"no platform section"* ]]
-  ! grep -q "run open" "${STUB_LOG}"
+  ! grep -q "run open" "${STUB_LOG}" || false
 }
 
 @test "open leaves the run's outputs the CLI wrote" {

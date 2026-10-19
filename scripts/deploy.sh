@@ -36,10 +36,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/project.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-credentials.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/report.sh"
-
-# The variable a unit declares to read other units' state. A deploy always
-# sets it to true, so a placeholder can never be deployed.
-readonly REMOTE_STATE_SWITCH="enable_remote_state_dependencies"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/terraform.sh"
 
 cmd_check() {
   refuse_untrusted_event
@@ -55,6 +52,7 @@ check_mode() {
   local run_id="$2"
   local pins="$3"
   [[ "${linked}" == true || "${linked}" == false ]] || die "The CLI's config report could not be read."
+  [[ -z "${REGISTRY_HOST:-}" ]] || require_linked_for_registry "${linked}"
   if [[ "${linked}" == true ]]; then
     [[ -n "${run_id}" && -n "${pins}" ]] \
       || die "This project is linked to Iltero Platform. Deploy it in a governed run: pass the run-id and pins-digest from the open action."
@@ -62,42 +60,19 @@ check_mode() {
   else
     [[ -z "${run_id}" && -z "${pins}" ]] \
       || die "This project has no platform section in .iltero/config.yml, so it cannot deploy in a governed run. Leave run-id and pins-digest empty."
-    [[ -z "${REGISTRY_HOST:-}" ]] \
-      || die "This project has no platform section in .iltero/config.yml, so it cannot use the Iltero module registry."
   fi
 }
 
-# Succeeds when a unit declares the remote-state switch variable.
-declares_remote_state_switch() {
-  local dir="$1"
-  local files=("${dir}"/*.tf)
-  [[ -e "${files[0]}" ]] || return 1
-  grep -qE "^[[:space:]]*variable[[:space:]]+\"${REMOTE_STATE_SWITCH}\"" "${files[@]}"
-}
-
-# Prints the folder where Terraform keeps a unit's working data.
-terraform_data_dir() {
-  echo "$1/terraform-data"
-}
-
-# Runs Terraform with only the variables it needs: PATH, HOME, the cloud's
-# credentials and TF_VAR_* values. Extra NAME=value pairs before "--" are
-# added to its environment.
+# Runs Terraform with the cloud's credentials and TF_VAR_* values added to
+# what run_terraform keeps. Takes run_terraform's arguments.
 terraform_scrubbed() {
   local work="$1"
-  shift
-  local extra=()
-  while [[ $# -gt 0 && "$1" != "--" ]]; do
-    extra+=("$1")
-    shift
-  done
   shift
   local kept=() name
   for name in "${CLOUD_CREDENTIAL_ENV[@]}" $(compgen -e | grep '^TF_VAR_' || true); do
     [[ -z "${!name+set}" ]] || kept+=("${name}=${!name}")
   done
-  env -i PATH="${PATH}" HOME="${HOME}" TF_IN_AUTOMATION=1 TF_INPUT=0 TF_DATA_DIR="$(terraform_data_dir "${work}")" \
-    ${kept[@]+"${kept[@]}"} ${extra[@]+"${extra[@]}"} "$(terraform_path)" "$@"
+  run_terraform "${work}" ${kept[@]+"${kept[@]}"} "$@"
 }
 
 # Runs one CLI stage for a unit. Prints its output and keeps a copy for the

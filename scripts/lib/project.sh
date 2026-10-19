@@ -4,6 +4,14 @@
 # common.sh. A project is linked when its .iltero/config.yml has a platform
 # section; the CLI decides, with its own config search and checks.
 
+# Stops unless LINKED is true: only a linked project can use the Iltero
+# module registry.
+require_linked_for_registry() {
+  local linked="$1"
+  [[ "${linked}" == true ]] \
+    || die "This project has no platform section in .iltero/config.yml, so it cannot use the Iltero module registry."
+}
+
 # Prints "true" when the project in the current directory is linked, and
 # "false" when it is not. Stops when the CLI finds no valid config.
 project_linked() {
