@@ -31,12 +31,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/preview-providers.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/project.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/registry.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/terraform.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
 
 # The override file the action adds to a unit while it plans it.
 readonly OVERRIDE_FILE="zzz_iltero_preview_override.tf"
-# The variable a unit declares to let it be planned without upstream state.
-readonly REMOTE_STATE_SWITCH="enable_remote_state_dependencies"
 # The longest comment the action writes. GitHub accepts up to 65536
 # characters; the rest is room for the comment action's marker.
 readonly COMMENT_MAX_CHARS=60000
@@ -65,8 +64,7 @@ cmd_environment() {
   cli="$(cli_path)"
   if [[ -n "${REGISTRY_HOST:-}" ]]; then
     linked="$(project_linked)"
-    [[ "${linked}" == true ]] \
-      || die "This project has no platform section in .iltero/config.yml, so it cannot use the Iltero module registry."
+    require_linked_for_registry "${linked}"
   fi
   dir="$(comment_dir)"
   write_comment "${dir}"
@@ -79,28 +77,12 @@ comment_dir() {
   echo "${RUNNER_TEMP}/iltero-preview/comment"
 }
 
-# Runs Terraform with only the variables it needs. The NAME=VALUE arguments
-# before "--" are added to its environment.
+# Runs Terraform with the provider adapter's settings added to what
+# run_terraform keeps. Takes run_terraform's arguments.
 terraform_scrubbed() {
   local work="$1"
   shift
-  local extra=()
-  while [[ $# -gt 0 && "$1" != "--" ]]; do
-    extra+=("$1")
-    shift
-  done
-  shift
-  env -i PATH="${PATH}" HOME="${HOME}" TF_IN_AUTOMATION=1 TF_INPUT=0 \
-    TF_DATA_DIR="${work}/terraform-data" ${PREVIEW_PROVIDER_ENV[@]+"${PREVIEW_PROVIDER_ENV[@]}"} \
-    ${extra[@]+"${extra[@]}"} "$(terraform_path)" "$@"
-}
-
-# Succeeds when a unit declares the remote-state switch variable.
-declares_remote_state_switch() {
-  local dir="$1"
-  local files=("${dir}"/*.tf)
-  [[ -e "${files[0]}" ]] || return 1
-  grep -qE "^[[:space:]]*variable[[:space:]]+\"${REMOTE_STATE_SWITCH}\"" "${files[@]}"
+  run_terraform "${work}" ${PREVIEW_PROVIDER_ENV[@]+"${PREVIEW_PROVIDER_ENV[@]}"} "$@"
 }
 
 # Plans one unit with no credentials. Writes tfplan and plan.json under WORK.
