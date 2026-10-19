@@ -1,20 +1,8 @@
 #!/bin/bash
 #
 # A short-lived token for the private module registry. The registry accepts
-# the job's GitHub identity token, minted for the registry audience. Source
-# this file after common.sh.
-
-# The path the registry audience adds to the server's origin.
-readonly REGISTRY_AUDIENCE_PATH="/registry"
-
-# Prints the registry audience: the origin of ILTERO_API_URL plus /registry.
-# Any path in ILTERO_API_URL, such as /v1, is not part of the origin.
-registry_audience() {
-  local url="${ILTERO_API_URL:-}"
-  [[ "${url}" =~ ^(https://[${LOWER}0-9.-]+(:[0-9]+)?)(/[^[:space:]]*)?$ ]] \
-    || die "ILTERO_API_URL must be an https address, such as https://api.iltero.io/v1."
-  echo "${BASH_REMATCH[1]}${REGISTRY_AUDIENCE_PATH}"
-}
+# the job's GitHub identity token, minted for the registry host's own origin.
+# Source this file after common.sh.
 
 # Prints the name of Terraform's credentials variable for a registry host:
 # TF_TOKEN_ followed by the host, with "." written "_" and "-" written "__".
@@ -25,8 +13,9 @@ registry_token_variable() {
   echo "TF_TOKEN_${host//./_}"
 }
 
-# Mints a registry token and sets REGISTRY_TOKEN_ENV to "TF_TOKEN_<host>=<token>",
-# for the one Terraform process that runs init. The token is masked first, and
+# Mints a registry token for the audience https://<host>, and sets
+# REGISTRY_TOKEN_ENV to "TF_TOKEN_<host>=<token>", for the one Terraform
+# process that runs init. The token is masked first, and
 # is never written to a file, an output or the log.
 mint_registry_token() {
   local host="$1"
@@ -34,7 +23,7 @@ mint_registry_token() {
   # ignores set -e.
   local variable audience token
   variable="$(registry_token_variable "${host}")" || exit 1
-  audience="$(registry_audience)" || exit 1
+  audience="https://${host}"
   require_id_token
   token="$(AUDIENCE="${audience}" "$(tools_dir)/venv/bin/python" -c '
 import json, os, urllib.parse, urllib.request

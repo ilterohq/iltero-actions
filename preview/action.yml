@@ -1,5 +1,5 @@
 name: Iltero Preview
-description: Check each unit's plan locally on a pull request, with no cloud or Iltero credential.
+description: Check each unit's plan locally on a pull request, with no cloud credential and no Iltero secret.
 author: Iltero
 
 branding:
@@ -11,8 +11,20 @@ inputs:
     description: The stack's directory, relative to the repository root.
     required: false
     default: "."
+  registry-host:
+    description: Host name of the private module registry. Leave empty when the stack uses no private modules.
+    required: false
+    default: ""
+  upload-records:
+    description: >-
+      true or false. When true, the action uploads each unit's records as the artifact named by artifact-name. The
+      records hold a redacted copy of each plan.
+    required: false
+    default: "false"
   artifact-name:
-    description: Name of the artifact that holds the records.
+    description: >-
+      Name of the artifact that holds the records when upload-records is true. The comment artifact takes this name
+      with -comment added.
     required: false
     default: iltero-preview
 
@@ -36,6 +48,8 @@ runs:
       shell: bash
       env:
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        REGISTRY_HOST: ${{ inputs.registry-host }}
+        UPLOAD_RECORDS: ${{ inputs.upload-records }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" check "${ARTIFACT_NAME}"'
 
     - name: Find the environment
@@ -44,6 +58,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        REGISTRY_HOST: ${{ inputs.registry-host }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" environment'
 
     - name: Plan and check each unit
@@ -53,10 +68,11 @@ runs:
       env:
         ENVIRONMENT: ${{ steps.environment.outputs.environment }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        REGISTRY_HOST: ${{ inputs.registry-host }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" run "${ENVIRONMENT}"'
 
     - name: Upload the records
-      if: always() && steps.preview.outputs.out-dir != ''
+      if: always() && inputs.upload-records == 'true' && steps.preview.outputs.out-dir != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}

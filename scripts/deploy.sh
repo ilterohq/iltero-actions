@@ -25,7 +25,6 @@
 # When REPORT is true, the CLI also writes a report of each unit's record.
 #
 # Environment:
-#   ILTERO_API_URL   The server's address. The registry audience is built from it.
 #   REGISTRY_HOST    The private module registry's host name. Empty: no registry token.
 #   REPORT           true or false. True: write a report of each unit's record.
 

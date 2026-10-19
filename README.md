@@ -17,7 +17,7 @@ This repository has no release.
 | `deploy` | Plan, check and apply each unit of a stack: in a governed run when the project is linked to Iltero Platform, locally on the runner when it is not |
 | `close` | Close a governed run |
 | `verify` | Pack each unit's record with every file it cites, and check it |
-| `preview` | Plan and check each unit on a pull request, locally and with no cloud or Iltero credential, and write the pull request comment |
+| `preview` | Plan and check each unit on a pull request, locally and with no cloud credential or Iltero secret, and write the pull request comment |
 | `comment` | Post the preview's comment on the pull request, and update it on each push |
 
 A project is linked to Iltero Platform when its `.iltero/config.yml` has a `platform` section.

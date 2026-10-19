@@ -296,13 +296,13 @@ deploy_locally() {
   commands_paused_around "terraform warns on show"
 }
 
-@test "the registry token reaches only init, for the registry audience, and is masked" {
+@test "the registry token reaches only init, for the registry host's origin, and is masked" {
   REGISTRY_HOST="registry.iltero-test.io" deploy
   [ "${status}" -eq 0 ]
-  grep -qx "audience https://api.example/registry" "${STUB_LOG}"
-  grep -qx "TF_TOKEN_registry_iltero__test_io=id-token-for-https://api.example/registry" "${BATS_TEST_TMPDIR}/terraform-env-init-network"
+  grep -qx "audience https://registry.iltero-test.io" "${STUB_LOG}"
+  grep -qx "TF_TOKEN_registry_iltero__test_io=id-token-for-https://registry.iltero-test.io" "${BATS_TEST_TMPDIR}/terraform-env-init-network"
   ! grep -q "^TF_TOKEN_registry" "${BATS_TEST_TMPDIR}/terraform-env-plan-network"
-  [[ "${output}" == *"::add-mask::id-token-for-https://api.example/registry"* ]]
+  [[ "${output}" == *"::add-mask::id-token-for-https://registry.iltero-test.io"* ]]
   [ "$(grep -c '^audience' "${STUB_LOG}")" -eq 2 ]
   ! grep -rq "id-token-for" "${GITHUB_ENV}" "${GITHUB_OUTPUT}" "${RUNNER_TEMP}/iltero-deploy" 2> /dev/null
 }
@@ -312,10 +312,11 @@ deploy_locally() {
   ! grep -q "^audience" "${STUB_LOG}"
 }
 
-@test "a registry token needs an https ILTERO_API_URL" {
-  ILTERO_API_URL="http://api.example/v1" REGISTRY_HOST="registry.example.io" deploy
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"ILTERO_API_URL must be an https address"* ]]
+@test "a registry token needs no ILTERO_API_URL" {
+  unset ILTERO_API_URL
+  REGISTRY_HOST="registry.iltero-test.io" deploy
+  [ "${status}" -eq 0 ]
+  grep -qx "audience https://registry.iltero-test.io" "${STUB_LOG}"
 }
 
 # --- failures ----------------------------------------------------------------
