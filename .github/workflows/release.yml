@@ -21,6 +21,12 @@ on:
 # Least privilege — each job declares only what it needs
 permissions: {}
 
+# One release run per tag at a time; a running one is never cancelled. The
+# group name differs from ci.yml's, so the called workflow does not wait on it.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # ===========================================================================
   # Validate: Ensure the release tag is a valid semver
@@ -38,12 +44,12 @@ jobs:
           TAG="${GITHUB_REF#refs/tags/}"
 
           # Must match vMAJOR.MINOR.PATCH (optional pre-release/build metadata)
-          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$ ]]; then
-            echo "::error::Tag '$TAG' does not follow semantic versioning (expected vX.Y.Z)"
+          if [[ ! "${TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Tag '${TAG}' does not follow semantic versioning (expected vX.Y.Z)"
             exit 1
           fi
 
-          echo "Validated tag: $TAG"
+          echo "Validated tag: ${TAG}"
 
   # ===========================================================================
   # CI: Run the full quality suite against the tagged commit
@@ -54,4 +60,4 @@ jobs:
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
-      security-events: write
+      security-events: write # ci.yml uploads zizmor's results as SARIF
