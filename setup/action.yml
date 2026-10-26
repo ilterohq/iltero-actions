@@ -25,9 +25,9 @@ outputs:
   cli-path:
     description: Absolute path of the Iltero CLI.
     value: ${{ steps.cli.outputs.cli-path }}
-  opa-path:
+  evaluator-path:
     description: Absolute path of the evaluator the CLI runs.
-    value: ${{ steps.cli.outputs.opa-path }}
+    value: ${{ steps.cli.outputs.evaluator-path }}
 
 runs:
   using: composite

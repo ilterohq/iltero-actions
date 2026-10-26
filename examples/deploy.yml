@@ -37,7 +37,7 @@ jobs:
         uses: ilterohq/iltero-actions/deploy@0000000000000000000000000000000000000000 # v0.3.0
         with:
           environment: production
-      - if: always() && steps.deploy.outputs.out-dir != ''
+      - if: always() && steps.deploy.outputs.records-directory != ''
         uses: ilterohq/iltero-actions/verify@0000000000000000000000000000000000000000 # v0.3.0
         with:
-          out-dir: ${{ steps.deploy.outputs.out-dir }}
+          records-directory: ${{ steps.deploy.outputs.records-directory }}

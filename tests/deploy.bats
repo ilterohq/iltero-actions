@@ -22,7 +22,7 @@ setup() {
   export ILTERO_API_URL="https://api.example/v1"
   export REGISTRY_HOST=""
   export LINKED="true"
-  export REPORT="true"
+  export WRITE_REPORT="true"
   : > "${GITHUB_STEP_SUMMARY}"
   DEPLOY="${REPO_ROOT}/scripts/deploy.sh"
   TOOLS="${RUNNER_TEMP}/iltero-tools"
@@ -427,7 +427,7 @@ deploy_locally() {
 @test "the records directory is an output, even when the deploy fails" {
   echo 1 > "${MARKS}/exit-plan-network"
   deploy
-  [ "$(output_value out-dir)" = "${RUNNER_TEMP}/iltero-deploy/out" ]
+  [ "$(output_value records-directory)" = "${RUNNER_TEMP}/iltero-deploy/out" ]
 }
 
 # --- report ------------------------------------------------------------------
@@ -436,7 +436,7 @@ deploy_locally() {
   deploy
   [ "${status}" -eq 0 ]
   local reports="${RUNNER_TEMP}/iltero-deploy/reports" out="${RUNNER_TEMP}/iltero-deploy/out"
-  grep -qx "report-dir=${reports}" "${GITHUB_OUTPUT}"
+  grep -qx "report-directory=${reports}" "${GITHUB_OUTPUT}"
   grep -qx "iltero car report ${out}/units/network --format=html --out=${reports}/network" "${STUB_LOG}"
   grep -qx "iltero car report ${out}/units/compute --format=markdown --out=${reports}/compute" "${STUB_LOG}"
   [ -f "${reports}/network/car-report.html" ]
@@ -445,16 +445,16 @@ deploy_locally() {
 }
 
 @test "with report false, no report is written" {
-  REPORT=false deploy
+  WRITE_REPORT=false deploy
   [ "${status}" -eq 0 ]
   ! grep -q "car report" "${STUB_LOG}" || false
-  ! grep -q "^report-dir=" "${GITHUB_OUTPUT}" || false
+  ! grep -q "^report-directory=" "${GITHUB_OUTPUT}" || false
 }
 
 @test "a report value other than true or false is refused" {
-  REPORT=yes deploy
+  WRITE_REPORT=yes deploy
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The report input must be true or false, not 'yes'."* ]]
+  [[ "${output}" == *"The write-report input must be true or false, not 'yes'."* ]]
   ! grep -q "^terraform" "${STUB_LOG}" || false
 }
 

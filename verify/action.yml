@@ -7,14 +7,14 @@ branding:
   color: blue
 
 inputs:
-  out-dir:
-    description: The records directory, from the deploy action's out-dir output.
+  records-directory:
+    description: The records directory, from the deploy action's records-directory output.
     required: true
   working-directory:
     description: The stack's directory, relative to the repository root.
     required: false
     default: "."
-  report:
+  write-report:
     description: >-
       true or false. When true, the CLI writes a report of each unit's record bundle for a person to read, as an HTML
       page and as Markdown. The action uploads both as the artifact <artifact-name>-report and adds the Markdown
@@ -27,9 +27,9 @@ inputs:
     default: iltero-records
 
 outputs:
-  report-dir:
-    description: The directory that holds the reports. Empty when report is false.
-    value: ${{ steps.verify.outputs.report-dir }}
+  report-directory:
+    description: The directory that holds the reports. Empty when write-report is false.
+    value: ${{ steps.verify.outputs.report-directory }}
 
 runs:
   using: composite
@@ -43,24 +43,24 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        OUT_DIR: ${{ inputs.out-dir }}
-        REPORT: ${{ inputs.report }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/verify.sh" run "${OUT_DIR}"'
+        RECORDS_DIRECTORY: ${{ inputs.records-directory }}
+        WRITE_REPORT: ${{ inputs.write-report }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/verify.sh" run "${RECORDS_DIRECTORY}"'
 
     - name: Upload the record bundles
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ inputs.out-dir }}/units/*/car-*/
+        path: ${{ inputs.records-directory }}/units/*/car-*/
         retention-days: 90
         if-no-files-found: error
 
     - name: Upload the reports
-      if: always() && steps.verify.outputs.report-dir != ''
+      if: always() && steps.verify.outputs.report-directory != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}-report
-        path: ${{ steps.verify.outputs.report-dir }}
+        path: ${{ steps.verify.outputs.report-directory }}
         retention-days: 90
         if-no-files-found: ignore

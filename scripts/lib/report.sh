@@ -9,11 +9,11 @@ readonly REPORT_MARKDOWN_FILE="car-report.md"
 # drops a step's whole summary above 1 MiB; this leaves room for the rest.
 readonly REPORT_SUMMARY_MAX_BYTES=800000
 
-# Prints REPORT. Stops the job unless it is true or false.
+# Prints WRITE_REPORT. Stops the job unless it is true or false.
 report_enabled() {
-  [[ "${REPORT:-}" == true || "${REPORT:-}" == false ]] \
-    || die "The report input must be true or false, not '${REPORT:-}'."
-  echo "${REPORT}"
+  [[ "${WRITE_REPORT:-}" == true || "${WRITE_REPORT:-}" == false ]] \
+    || die "The write-report input must be true or false, not '${WRITE_REPORT:-}'."
+  echo "${WRITE_REPORT}"
 }
 
 # Has the CLI write a report of the record or record bundle at TARGET, as an

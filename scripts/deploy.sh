@@ -22,11 +22,11 @@
 #   7. the state after the apply, as JSON;
 #   8. iltero assure --stage post-deploy, also after a failed apply.
 # The deploy stops at the first step that fails, and exits with its code.
-# When REPORT is true, the CLI also writes a report of each unit's record.
+# When WRITE_REPORT is true, the CLI also writes a report of each unit's record.
 #
 # Environment:
 #   REGISTRY_HOST    The private module registry's host name. Empty: no registry token.
-#   REPORT           true or false. True: write a report of each unit's record.
+#   WRITE_REPORT           true or false. True: write a report of each unit's record.
 
 set -euo pipefail
 
@@ -225,10 +225,10 @@ cmd_run() {
   local units="${work_root}/units.tsv"
   local reports="${work_root}/reports"
   mkdir -p "${out}"
-  write_output out-dir "${out}"
+  write_output records-directory "${out}"
   if [[ "${report}" == true ]]; then
     mkdir -p "${reports}"
-    write_output report-dir "${reports}"
+    write_output report-directory "${reports}"
   fi
 
   list_checked_units "${units}"

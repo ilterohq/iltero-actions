@@ -4,11 +4,11 @@
 #
 # Usage:
 #   verify.sh check            Refuse untrusted events; check that setup ran.
-#   verify.sh run OUT_DIR      For each unit: iltero car build, then iltero car verify.
+#   verify.sh run RECORDS_DIRECTORY      For each unit: iltero car build, then iltero car verify.
 #
-# Run from the stack's working directory, with the OUT_DIR the deploy action
+# Run from the stack's working directory, with the RECORDS_DIRECTORY the deploy action
 # wrote. Every unit is checked; the step fails when any unit fails. When
-# REPORT is true, the CLI also writes a report of each unit's record bundle.
+# WRITE_REPORT is true, the CLI also writes a report of each unit's record bundle.
 
 set -euo pipefail
 
@@ -36,7 +36,7 @@ run_cli() {
 
 cmd_run() {
   local out="$1"
-  [[ -d "${out}" ]] || die "The records directory '${out}' does not exist. Pass the deploy action's out-dir."
+  [[ -d "${out}" ]] || die "The records directory '${out}' does not exist. Pass the deploy action's records-directory."
   local report
   report="$(report_enabled)"
   local work_root="${RUNNER_TEMP}/iltero-verify"
@@ -45,7 +45,7 @@ cmd_run() {
   mkdir -p "${work_root}"
   if [[ "${report}" == true ]]; then
     mkdir -p "${reports}"
-    write_output report-dir "${reports}"
+    write_output report-directory "${reports}"
   fi
   list_checked_units "${units}"
 
@@ -108,8 +108,8 @@ main() {
   shift || true
   case "${command}" in
     check) cmd_check ;;
-    run) [[ $# -eq 1 ]] || die "Usage: verify.sh run OUT_DIR"; cmd_run "$@" ;;
-    *) die "Unknown command '${command}'. Use: check | run OUT_DIR" ;;
+    run) [[ $# -eq 1 ]] || die "Usage: verify.sh run RECORDS_DIRECTORY"; cmd_run "$@" ;;
+    *) die "Unknown command '${command}'. Use: check | run RECORDS_DIRECTORY" ;;
   esac
 }
 

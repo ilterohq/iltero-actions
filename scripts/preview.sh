@@ -170,7 +170,7 @@ cmd_run() {
   out="${work_root}/out"
   summary="${work_root}/summary.md"
   mkdir -p "${out}"
-  write_output out-dir "${out}"
+  write_output records-directory "${out}"
 
   {
     echo "## Iltero preview: $(markdown_escape "${environment}")"

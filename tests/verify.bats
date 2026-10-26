@@ -12,7 +12,7 @@ setup() {
   TOOLS="${RUNNER_TEMP}/iltero-tools"
   export MARKS="${BATS_TEST_TMPDIR}/marks"
   export OUT="${BATS_TEST_TMPDIR}/out"
-  export REPORT="true"
+  export WRITE_REPORT="true"
   mkdir -p "${TOOLS}/venv/bin" "${MARKS}" "${OUT}"
   ln -s "$(command -v python3)" "${TOOLS}/venv/bin/python"
 
@@ -130,7 +130,7 @@ STUB
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 0 ]
   local reports="${RUNNER_TEMP}/iltero-verify/reports"
-  grep -qx "report-dir=${reports}" "${GITHUB_OUTPUT}"
+  grep -qx "report-directory=${reports}" "${GITHUB_OUTPUT}"
   grep -q "^iltero car report ${OUT}/units/network/car-0001/ --format=html --out=${reports}/network " "${STUB_LOG}"
   grep -q "^iltero car report ${OUT}/units/compute/car-0001/ --format=markdown --out=${reports}/compute " "${STUB_LOG}"
   [ -f "${reports}/network/car-report.html" ]
@@ -147,16 +147,16 @@ STUB
 }
 
 @test "with report false, verify writes no report" {
-  REPORT=false run "${VERIFY}" run "${OUT}"
+  WRITE_REPORT=false run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 0 ]
   ! grep -q "car report" "${STUB_LOG}" || false
-  ! grep -q "^report-dir=" "${GITHUB_OUTPUT}" || false
+  ! grep -q "^report-directory=" "${GITHUB_OUTPUT}" || false
 }
 
 @test "verify refuses a report value other than true or false" {
-  REPORT="" run "${VERIFY}" run "${OUT}"
+  WRITE_REPORT="" run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The report input must be true or false, not ''."* ]]
+  [[ "${output}" == *"The write-report input must be true or false, not ''."* ]]
   ! grep -q "car build" "${STUB_LOG}" || false
 }
 

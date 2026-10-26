@@ -245,7 +245,7 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   grep -q "iltero doctor ILTERO_OPA_PATH=${RUNNER_TEMP}/iltero-tools/bin/opa" "${STUB_LOG}"
   [ "$(output_value cli-commit)" = "${CLI_COMMIT}" ]
   [ "$(output_value cli-path)" = "${RUNNER_TEMP}/iltero-tools/venv/bin/iltero" ]
-  [ "$(output_value opa-path)" = "${RUNNER_TEMP}/iltero-tools/bin/opa" ]
+  [ "$(output_value evaluator-path)" = "${RUNNER_TEMP}/iltero-tools/bin/opa" ]
 }
 
 # --- errors ------------------------------------------------------------------

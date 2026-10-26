@@ -179,7 +179,7 @@ print(json.loads(distribution("iltero").read_text("direct_url.json"))["vcs_info"
 
   write_output cli-commit "${cli_commit}"
   write_output cli-path "${venv}/bin/iltero"
-  write_output opa-path "${dir}/bin/opa"
+  write_output evaluator-path "${dir}/bin/opa"
 }
 
 main() {
