@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `setup` action. Installs Terraform, the Iltero CLI and its evaluator at pinned, checksum-verified versions.
-- `open` and `close` actions. Open a governed run for the stack in `.iltero/config.yml` and output its id and pins
-  digest; close it when the pipeline succeeded.
+- `open` and `close` actions. Open a governed run for the stack in `.iltero/config.yml` and output its id and the
+  digest of its settings; close it when the pipeline succeeded.
 - `preview` action. Plans each unit of a pull request with no credentials and checks each plan locally.
 - `deploy` action. Plans, checks and applies each unit of a stack, and records each deployment: in a governed run when
   the project is linked to Iltero Platform, on the runner alone when it is not. It stops before the plan when a unit

@@ -101,7 +101,7 @@ examples() {
 }
 
 @test "the workflow that needs no account never opens a run and never passes a run" {
-  ! grep -qE 'iltero-actions/(open|close)@|run-id:|pins-digest:|ILTERO_API_URL' "${REPO_ROOT}/examples/deploy.yml" || false
+  ! grep -qE 'iltero-actions/(open|close)@|run-id:|run-settings-digest:|ILTERO_API_URL' "${REPO_ROOT}/examples/deploy.yml" || false
   grep -q 'iltero-actions/verify@' "${REPO_ROOT}/examples/deploy.yml"
 }
 

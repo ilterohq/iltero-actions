@@ -14,8 +14,8 @@ inputs:
     description: The run's id, from the open action. Required for a project linked to Iltero Platform; empty otherwise.
     required: false
     default: ""
-  pins-digest:
-    description: The run's pins digest, from the open action. Required with run-id; empty otherwise.
+  run-settings-digest:
+    description: The digest of the run's settings, from the open action. Required with run-id; empty otherwise.
     required: false
     default: ""
   working-directory:
@@ -60,10 +60,10 @@ runs:
       env:
         ENVIRONMENT: ${{ inputs.environment }}
         RUN_ID: ${{ inputs.run-id }}
-        PINS_DIGEST: ${{ inputs.pins-digest }}
+        RUN_SETTINGS_DIGEST: ${{ inputs.run-settings-digest }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         WRITE_REPORT: ${{ inputs.write-report }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/deploy.sh" run "${ENVIRONMENT}" "${RUN_ID}" "${PINS_DIGEST}"'
+      run: '"${GITHUB_ACTION_PATH}/../scripts/deploy.sh" run "${ENVIRONMENT}" "${RUN_ID}" "${RUN_SETTINGS_DIGEST}"'
 
     - name: Upload the records
       if: always() && steps.deploy.outputs.records-directory != ''

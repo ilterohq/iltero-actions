@@ -4,7 +4,7 @@
 #
 # Usage:
 #   deploy.sh check                            Refuse untrusted and pull request events; check that setup ran.
-#   deploy.sh run ENVIRONMENT [RUN_ID PINS]    Deploy every unit; write the job summary.
+#   deploy.sh run ENVIRONMENT [RUN_ID RUN_SETTINGS_DIGEST]    Deploy every unit; write the job summary.
 #
 # Run from the stack's working directory. A project linked to Iltero Platform
 # deploys in the governed run that RUN_ID names. A project with no platform
@@ -50,16 +50,16 @@ cmd_check() {
 check_mode() {
   local linked="$1"
   local run_id="$2"
-  local pins="$3"
+  local settings_digest="$3"
   [[ "${linked}" == true || "${linked}" == false ]] || die "The CLI's config report could not be read."
   [[ -z "${REGISTRY_HOST:-}" ]] || require_linked_for_registry "${linked}"
   if [[ "${linked}" == true ]]; then
-    [[ -n "${run_id}" && -n "${pins}" ]] \
-      || die "This project is linked to Iltero Platform. Deploy it in a governed run: pass the run-id and pins-digest from the open action."
+    [[ -n "${run_id}" && -n "${settings_digest}" ]] \
+      || die "This project is linked to Iltero Platform. Deploy it in a governed run: pass the run-id and run-settings-digest from the open action."
     require_id_token
   else
-    [[ -z "${run_id}" && -z "${pins}" ]] \
-      || die "This project has no platform section in .iltero/config.yml, so it cannot deploy in a governed run. Leave run-id and pins-digest empty."
+    [[ -z "${run_id}" && -z "${settings_digest}" ]] \
+      || die "This project has no platform section in .iltero/config.yml, so it cannot deploy in a governed run. Leave run-id and run-settings-digest empty."
   fi
 }
 
@@ -111,10 +111,10 @@ deploy_unit() {
   local work="$3"
   local environment="$4"
   local run_id="$5"
-  local pins="$6"
+  local settings_digest="$6"
   local out="$7"
   local run_args=(--unit="${name}" --out="${out}")
-  [[ -z "${run_id}" ]] || run_args+=(--run-id="${run_id}" --pins-digest="${pins}" --upload)
+  [[ -z "${run_id}" ]] || run_args+=(--run-id="${run_id}" --pins-digest="${settings_digest}" --upload)
   local plan_files=(--plan="${work}/plan.json" --plan-binary="${work}/tfplan")
   UNIT_RESULTS=("-" "-" "-" "-")
 
@@ -215,11 +215,11 @@ deploy_unit() {
 cmd_run() {
   local environment="$1"
   local run_id="${2:-}"
-  local pins="${3:-}"
+  local settings_digest="${3:-}"
   local linked report
   report="$(report_enabled)"
   linked="$(project_linked)"
-  check_mode "${linked}" "${run_id}" "${pins}"
+  check_mode "${linked}" "${run_id}" "${settings_digest}"
   local work_root="${RUNNER_TEMP}/iltero-deploy"
   local out="${work_root}/out"
   local units="${work_root}/units.tsv"
@@ -248,7 +248,7 @@ cmd_run() {
     rm -rf "${work}"
     mkdir -p "${work}"
     echo "::group::${name}"
-    deploy_unit "${name}" "${dir}" "${work}" "${environment}" "${run_id}" "${pins}" "${out}" || status=$?
+    deploy_unit "${name}" "${dir}" "${work}" "${environment}" "${run_id}" "${settings_digest}" "${out}" || status=$?
     echo "::endgroup::"
     echo "| ${name} | ${UNIT_RESULTS[0]} | ${UNIT_RESULTS[1]} | ${UNIT_RESULTS[2]} | ${UNIT_RESULTS[3]} |" >> "${summary}"
     for stage in state-check plan pre-deploy post-deploy; do
@@ -281,8 +281,8 @@ main() {
   shift || true
   case "${command}" in
     check) cmd_check ;;
-    run) [[ $# -eq 3 ]] || die "Usage: deploy.sh run ENVIRONMENT RUN_ID PINS_DIGEST (empty for a local deploy)"; cmd_run "$@" ;;
-    *) die "Unknown command '${command}'. Use: check | run ENVIRONMENT RUN_ID PINS_DIGEST" ;;
+    run) [[ $# -eq 3 ]] || die "Usage: deploy.sh run ENVIRONMENT RUN_ID RUN_SETTINGS_DIGEST (empty for a local deploy)"; cmd_run "$@" ;;
+    *) die "Unknown command '${command}'. Use: check | run ENVIRONMENT RUN_ID RUN_SETTINGS_DIGEST" ;;
   esac
 }
 

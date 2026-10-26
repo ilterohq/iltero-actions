@@ -5,7 +5,7 @@
 load test_helper
 
 readonly RUN_ID="7d8e9f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
-readonly PINS="sha256:abc"
+readonly RUN_SETTINGS_DIGEST="sha256:abc"
 
 setup() {
   make_runner
@@ -123,7 +123,7 @@ JSON
 }
 
 deploy() {
-  run "${DEPLOY}" run production "${RUN_ID}" "${PINS}"
+  run "${DEPLOY}" run production "${RUN_ID}" "${RUN_SETTINGS_DIGEST}"
 }
 
 deploy_locally() {
@@ -246,7 +246,7 @@ deploy_locally() {
 @test "every stage joins the run and uploads" {
   deploy
   local work="${RUNNER_TEMP}/iltero-deploy/units/network"
-  local run_args="--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --run-id=${RUN_ID} --pins-digest=${PINS} --upload"
+  local run_args="--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --run-id=${RUN_ID} --pins-digest=${RUN_SETTINGS_DIGEST} --upload"
   grep -qx "iltero assure --stage=plan --plan=${work}/plan.json --plan-binary=${work}/tfplan --environment=production ${run_args}" "${STUB_LOG}"
   grep -qx "iltero assure --stage=pre-deploy ${run_args}" "${STUB_LOG}"
   grep -qx "iltero assure --stage=post-deploy --plan=${work}/plan.json --plan-binary=${work}/tfplan --apply-log=${work}/apply.ndjson --state=${work}/state.json ${run_args}" "${STUB_LOG}"
