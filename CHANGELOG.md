@@ -17,13 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the project is linked to Iltero Platform, on the runner alone when it is not. It stops before the plan when a unit
   keeps its Terraform state in its working directory.
 - Reference workflows `examples/greenfield.yml` and `examples/preview.yml`.
-- `verify` action. Builds each unit's record bundle with `iltero car build` and checks it with `iltero car verify`.
+- `verify` action. Builds each unit's record bundle with `iltero record build` and checks it with
+  `iltero record verify`.
 - Example `examples/deploy.yml` for a project with no Iltero account.
 - `comment` action. Posts the preview's result as a comment on the pull request, and updates it on each push. The
   `preview` action writes the comment and outputs its artifact name as `comment-artifact`.
 - `write-report` input on `deploy` and `verify`, on by default. The CLI writes a report of each unit's record as an
-  HTML page and as Markdown. The action uploads both as the artifact `<artifact-name>-report`, adds the Markdown to
-  the job summary, and outputs the directory as `report-directory`.
+  HTML page, `record-report.html`, and as Markdown, `record-report.md`. The action uploads both as the artifact
+  `<artifact-name>-report`, adds the Markdown to the job summary, and outputs the directory as `report-directory`.
+  When the CLI does not write both files for a unit, the step fails at its end. In `deploy`, a unit whose deploy
+  failed sets the step's exit code.
 - `registry-host` input on `preview`. When it is set, `terraform init` downloads private modules with the job's GitHub
   identity token, and the job needs `id-token: write`. The project must be linked to Iltero Platform.
 - `upload-records` input on `preview`, `false` by default. When it is `true`, the action uploads each unit's records,

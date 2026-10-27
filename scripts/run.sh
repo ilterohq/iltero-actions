@@ -5,7 +5,7 @@
 # Usage:
 #   run.sh check                          Refuse untrusted and pull request events; check the job can run the CLI.
 #   run.sh open ENVIRONMENT               Open a run from its plan stage, for the stack in .iltero/config.yml.
-#                                         The CLI writes run_id and pins_digest.
+#                                         The CLI writes run_id and run_settings_digest.
 #   run.sh close RUN_ID                   Close the run.
 #
 # The CLI's exit code is the step's exit code.

@@ -389,7 +389,7 @@ aws_unit() {
   aws_unit units/network
   run "${PREVIEW}" run production
   local work="${RUNNER_TEMP}/iltero-preview/units/network"
-  grep -q "iltero assure --stage=plan --plan=${work}/plan.json --plan-binary=${work}/tfplan --environment=production --unit=network --out=${RUNNER_TEMP}/iltero-preview/out ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
+  grep -q "iltero assure --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan --environment=production --unit=network --out=${RUNNER_TEMP}/iltero-preview/out ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
 }
 
 @test "a failing check fails the step and the summary shows the CLI's exit code" {

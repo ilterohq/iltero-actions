@@ -17,10 +17,10 @@
 #      working directory;
 #   3. terraform plan, saved, and its JSON;
 #   4. iltero assure --stage plan;
-#   5. iltero assure --stage pre-deploy (linked projects only);
+#   5. iltero assure --stage pre_deploy (linked projects only);
 #   6. terraform apply of the saved plan;
 #   7. the state after the apply, as JSON;
-#   8. iltero assure --stage post-deploy, also after a failed apply.
+#   8. iltero assure --stage post_deploy, also after a failed apply.
 # The deploy stops at the first step that fails, and exits with its code.
 # When WRITE_REPORT is true, the CLI also writes a report of each unit's record.
 #
@@ -97,7 +97,7 @@ state_check() {
   local dir="$1"
   local work="$2"
   local status=0
-  TF_DATA_DIR="$(terraform_data_dir "${work}")" "$(cli_path)" state check --dir="${dir}" \
+  TF_DATA_DIR="$(terraform_data_dir "${work}")" "$(cli_path)" state check --working-directory="${dir}" \
     > "${work}/state-check.txt" 2>&1 || status=$?
   print_untrusted "${work}/state-check.txt"
   return "${status}"
@@ -114,8 +114,8 @@ deploy_unit() {
   local settings_digest="$6"
   local out="$7"
   local run_args=(--unit="${name}" --out="${out}")
-  [[ -z "${run_id}" ]] || run_args+=(--run-id="${run_id}" --pins-digest="${settings_digest}" --upload)
-  local plan_files=(--plan="${work}/plan.json" --plan-binary="${work}/tfplan")
+  [[ -z "${run_id}" ]] || run_args+=(--run-id="${run_id}" --run-settings-digest="${settings_digest}" --upload)
+  local plan_files=(--plan="${work}/plan.json" --saved-plan="${work}/tfplan")
   UNIT_RESULTS=("-" "-" "-" "-")
 
   local backend_config var_file
@@ -180,7 +180,7 @@ deploy_unit() {
   # Pre-deploy checks facts only Iltero Platform holds, so it runs only in a
   # governed run.
   if [[ -n "${run_id}" ]]; then
-    assure_stage "${work}" pre-deploy "${run_args[@]}" || status=$?
+    assure_stage "${work}" pre_deploy "${run_args[@]}" || status=$?
     UNIT_RESULTS[1]="exit ${status}"
     [[ "${status}" -eq 0 ]] || return "${status}"
   else
@@ -205,7 +205,7 @@ deploy_unit() {
   fi
 
   status=0
-  assure_stage "${work}" post-deploy "${plan_files[@]}" --apply-log="${work}/apply.ndjson" \
+  assure_stage "${work}" post_deploy "${plan_files[@]}" --apply-log="${work}/apply.ndjson" \
     --state="${work}/state.json" "${run_args[@]}" || status=$?
   UNIT_RESULTS[3]="exit ${status}"
   [[ "${apply_status}" -eq 0 ]] || return "${apply_status}"
@@ -242,7 +242,7 @@ cmd_run() {
   } > "${summary}"
   : > "${details}"
 
-  local name dir work status=0 failed_unit="" stage
+  local name dir work status=0 failed_unit="" stage report_missing=0
   while IFS=$'\t' read -r name dir; do
     work="${work_root}/units/${name}"
     rm -rf "${work}"
@@ -251,12 +251,12 @@ cmd_run() {
     deploy_unit "${name}" "${dir}" "${work}" "${environment}" "${run_id}" "${settings_digest}" "${out}" || status=$?
     echo "::endgroup::"
     echo "| ${name} | ${UNIT_RESULTS[0]} | ${UNIT_RESULTS[1]} | ${UNIT_RESULTS[2]} | ${UNIT_RESULTS[3]} |" >> "${summary}"
-    for stage in state-check plan pre-deploy post-deploy; do
+    for stage in state-check plan pre_deploy post_deploy; do
       [[ -f "${work}/${stage}.txt" ]] || continue
-      details_block "${name}: ${stage}" "${work}/${stage}.txt" >> "${details}"
+      details_block "${name}: ${stage//_/-}" "${work}/${stage}.txt" >> "${details}"
     done
     if [[ "${report}" == true && -f "${out}/units/${name}/car.json" ]]; then
-      write_report "${name}" "${out}/units/${name}" "${reports}" "${details}" "${work}/report.txt"
+      write_report "${name}" "${out}/units/${name}" "${reports}" "${details}" "${work}/report.txt" || report_missing=1
     fi
     if [[ "${status}" -ne 0 ]]; then
       failed_unit="${name}"
@@ -274,6 +274,7 @@ cmd_run() {
     echo "::error::The deploy stopped at unit '${failed_unit}'. Later units were not deployed. See the job summary."
     exit "${status}"
   fi
+  [[ "${report_missing}" -eq 0 ]] || die "The CLI wrote no report for one or more units. See the log."
 }
 
 main() {

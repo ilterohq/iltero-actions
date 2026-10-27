@@ -46,25 +46,27 @@ STUB
 
   # A stand-in for the CLI. A file under MARKS named exit-<stage>-<unit> holds
   # the exit code of that stage for that unit; exit-state-<unit> holds the
-  # state check's, and exit-report-<unit> the report's; no-report-<unit> makes
-# the report exit 5 without writing. Each stage writes the
-  # unit's record; the report writes car-report.<format> into --out.
+  # state check's, and exit-report-<unit> the report's. no-report-<unit> makes
+  # the report exit 5 without writing, and no-markdown-<unit> makes it write
+  # only the HTML page. Each stage writes the unit's record; the report writes
+  # record-report.<format> into --out.
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
 echo "iltero $*" >> "${STUB_LOG}"
 if [[ "$1 $2" == "state check" ]]; then
-  unit="$(basename "${3#--dir=}")"
+  unit="$(basename "${3#--working-directory=}")"
   echo "state check data ${TF_DATA_DIR}" >> "${STUB_LOG}"
   echo "state <checked> for ${unit}"
   mark="${MARKS}/exit-state-${unit}"
   [[ -e "${mark}" ]] && exit "$(cat "${mark}")"
   exit 0
 fi
-if [[ "$1 $2" == "car report" ]]; then
+if [[ "$1 $2" == "record report" ]]; then
   unit="$(basename "$3")" format="${4#--format=}" dir="${5#--out=}"
   [[ "${format}" == markdown ]] && extension=md || extension="${format}"
   [[ -e "${MARKS}/no-report-${unit}" ]] && exit 5
-  echo "report <${format}> of ${unit}" > "${dir}/car-report.${extension}"
+  [[ -e "${MARKS}/no-markdown-${unit}" && "${format}" == markdown ]] && exit 0
+  echo "report <${format}> of ${unit}" > "${dir}/record-report.${extension}"
   echo "report written for ${unit}"
   mark="${MARKS}/exit-report-${unit}"
   [[ -e "${mark}" ]] && exit "$(cat "${mark}")"
@@ -180,9 +182,9 @@ deploy_locally() {
   unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
   LINKED=false deploy_locally
   [ "${status}" -eq 0 ]
-  ! grep -qE -- "--run-id|--pins-digest|--upload|--stage=pre-deploy" "${STUB_LOG}" || false
+  ! grep -qE -- "--run-id|--run-settings-digest|--upload|--stage=pre_deploy" "${STUB_LOG}" || false
   grep -q "iltero assure --stage=plan .*--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out$" "${STUB_LOG}"
-  grep -q "iltero assure --stage=post-deploy .*--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out$" "${STUB_LOG}"
+  grep -q "iltero assure --stage=post_deploy .*--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out$" "${STUB_LOG}"
   grep -q "terraform network apply" "${STUB_LOG}"
   grep -q "| network | exit 0 | not in scope | exit 0 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
 }
@@ -239,17 +241,17 @@ deploy_locally() {
   echo '[{"name": "network", "working_directory": "units/network"}]' > "${UNITS_JSON}"
   deploy
   [ "${status}" -eq 0 ]
-  run bash -c "grep -oE '^(terraform network [a-z]+|iltero assure --stage=[a-z-]+|iltero state check)' '${STUB_LOG}' | tr '\n' ','"
-  [ "${output}" = "terraform network init,iltero state check,terraform network plan,terraform network show,iltero assure --stage=plan,iltero assure --stage=pre-deploy,terraform network apply,terraform network show,iltero assure --stage=post-deploy," ]
+  run bash -c "grep -oE '^(terraform network [a-z]+|iltero assure --stage=[a-z_]+|iltero state check)' '${STUB_LOG}' | tr '\n' ','"
+  [ "${output}" = "terraform network init,iltero state check,terraform network plan,terraform network show,iltero assure --stage=plan,iltero assure --stage=pre_deploy,terraform network apply,terraform network show,iltero assure --stage=post_deploy," ]
 }
 
 @test "every stage joins the run and uploads" {
   deploy
   local work="${RUNNER_TEMP}/iltero-deploy/units/network"
-  local run_args="--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --run-id=${RUN_ID} --pins-digest=${RUN_SETTINGS_DIGEST} --upload"
-  grep -qx "iltero assure --stage=plan --plan=${work}/plan.json --plan-binary=${work}/tfplan --environment=production ${run_args}" "${STUB_LOG}"
-  grep -qx "iltero assure --stage=pre-deploy ${run_args}" "${STUB_LOG}"
-  grep -qx "iltero assure --stage=post-deploy --plan=${work}/plan.json --plan-binary=${work}/tfplan --apply-log=${work}/apply.ndjson --state=${work}/state.json ${run_args}" "${STUB_LOG}"
+  local run_args="--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --run-id=${RUN_ID} --run-settings-digest=${RUN_SETTINGS_DIGEST} --upload"
+  grep -qx "iltero assure --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan --environment=production ${run_args}" "${STUB_LOG}"
+  grep -qx "iltero assure --stage=pre_deploy ${run_args}" "${STUB_LOG}"
+  grep -qx "iltero assure --stage=post_deploy --plan=${work}/plan.json --saved-plan=${work}/tfplan --apply-log=${work}/apply.ndjson --state=${work}/state.json ${run_args}" "${STUB_LOG}"
 }
 
 @test "the apply uses the saved plan and its output is kept unchanged for the CLI" {
@@ -333,14 +335,14 @@ deploy_locally() {
   echo 1 > "${MARKS}/exit-plan-network"
   deploy
   [ "${status}" -eq 1 ]
-  ! grep -q "stage=pre-deploy" "${STUB_LOG}" || false
+  ! grep -q "stage=pre_deploy" "${STUB_LOG}" || false
   ! grep -q "terraform network apply" "${STUB_LOG}" || false
   ! grep -q "terraform compute" "${STUB_LOG}" || false
   grep -q "| network | exit 1 | - | - | - |" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a failed pre-deploy check stops the deploy before the apply" {
-  echo 3 > "${MARKS}/exit-pre-deploy-network"
+  echo 3 > "${MARKS}/exit-pre_deploy-network"
   deploy
   [ "${status}" -eq 3 ]
   ! grep -q "terraform network apply" "${STUB_LOG}" || false
@@ -350,13 +352,13 @@ deploy_locally() {
   touch "${MARKS}/fail-apply-network"
   deploy
   [ "${status}" -eq 1 ]
-  grep -q "stage=post-deploy" "${STUB_LOG}"
+  grep -q "stage=post_deploy" "${STUB_LOG}"
   ! grep -q "terraform compute" "${STUB_LOG}" || false
   grep -q "| network | exit 0 | exit 0 | exit 1 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a failed post-deploy check fails with the CLI's exit code and stops later units" {
-  echo 9 > "${MARKS}/exit-post-deploy-network"
+  echo 9 > "${MARKS}/exit-post_deploy-network"
   deploy
   [ "${status}" -eq 9 ]
   ! grep -q "terraform compute" "${STUB_LOG}" || false
@@ -375,7 +377,7 @@ deploy_locally() {
   [ "${status}" -eq 0 ]
   local unit data
   for unit in network compute; do
-    grep -q "^iltero state check --dir=units/${unit}$" "${STUB_LOG}"
+    grep -q "^iltero state check --working-directory=units/${unit}$" "${STUB_LOG}"
     data="$(grep "^TF_DATA_DIR=" "${BATS_TEST_TMPDIR}/terraform-env-init-${unit}")"
     grep -qxF "state check data ${data#TF_DATA_DIR=}" "${STUB_LOG}"
   done
@@ -419,6 +421,13 @@ deploy_locally() {
 
 # --- summary and outputs -----------------------------------------------------
 
+@test "the summary names each stage's output in words" {
+  deploy
+  grep -q "<summary>network: plan</summary>" "${GITHUB_STEP_SUMMARY}"
+  grep -q "<summary>network: pre-deploy</summary>" "${GITHUB_STEP_SUMMARY}"
+  grep -q "<summary>network: post-deploy</summary>" "${GITHUB_STEP_SUMMARY}"
+}
+
 @test "the summary shows the CLI's output with HTML escaped" {
   deploy
   grep -q "plan &lt;checked&gt; for network" "${GITHUB_STEP_SUMMARY}"
@@ -437,9 +446,9 @@ deploy_locally() {
   [ "${status}" -eq 0 ]
   local reports="${RUNNER_TEMP}/iltero-deploy/reports" out="${RUNNER_TEMP}/iltero-deploy/out"
   grep -qx "report-directory=${reports}" "${GITHUB_OUTPUT}"
-  grep -qx "iltero car report ${out}/units/network --format=html --out=${reports}/network" "${STUB_LOG}"
-  grep -qx "iltero car report ${out}/units/compute --format=markdown --out=${reports}/compute" "${STUB_LOG}"
-  [ -f "${reports}/network/car-report.html" ]
+  grep -qx "iltero record report ${out}/units/network --format=html --out=${reports}/network" "${STUB_LOG}"
+  grep -qx "iltero record report ${out}/units/compute --format=markdown --out=${reports}/compute" "${STUB_LOG}"
+  [ -f "${reports}/network/record-report.html" ]
   grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}"
   grep -qx "report <markdown> of compute" "${GITHUB_STEP_SUMMARY}"
 }
@@ -447,7 +456,7 @@ deploy_locally() {
 @test "with report false, no report is written" {
   WRITE_REPORT=false deploy
   [ "${status}" -eq 0 ]
-  ! grep -q "car report" "${STUB_LOG}" || false
+  ! grep -q "record report" "${STUB_LOG}" || false
   ! grep -q "^report-directory=" "${GITHUB_OUTPUT}" || false
 }
 
@@ -463,20 +472,20 @@ deploy_locally() {
   deploy
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"::warning::The CLI's report of unit 'network' exited with 9. See its output in the log."* ]]
-  grep -q "iltero car report .*/units/compute --format=html" "${STUB_LOG}"
+  grep -q "iltero record report .*/units/compute --format=html" "${STUB_LOG}"
 }
 
 @test "the unit that stopped the deploy gets a report when it has a record, and a unit without one gets none" {
   echo 1 > "${MARKS}/exit-plan-network"
   deploy
   [ "${status}" -eq 1 ]
-  grep -q "iltero car report .*/units/network --format=html" "${STUB_LOG}"
+  grep -q "iltero record report .*/units/network --format=html" "${STUB_LOG}"
   echo 5 > "${MARKS}/exit-state-network"
   rm -rf "${RUNNER_TEMP}/iltero-deploy"
   : > "${STUB_LOG}"
   deploy
   [ "${status}" -eq 5 ]
-  ! grep -q "car report" "${STUB_LOG}" || false
+  ! grep -q "record report" "${STUB_LOG}" || false
 }
 
 @test "a failed stage keeps its exit code when its report fails too" {
@@ -496,16 +505,32 @@ deploy_locally() {
   ! grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}" || false
 }
 
-@test "a report the CLI does not write leaves no report in the summary, and no earlier report stays" {
+@test "a report the CLI does not write fails the step after every unit deploys, and no earlier report stays" {
   local old="${RUNNER_TEMP}/iltero-deploy/reports/network"
   mkdir -p "${old}"
-  echo "old report" > "${old}/car-report.md"
+  echo "old report" > "${old}/record-report.md"
   touch "${MARKS}/no-report-network"
   deploy
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"::warning::The CLI's report of unit 'network' exited with 5."* ]]
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"::error::The CLI wrote no record-report.html for unit 'network'."* ]]
+  [[ "${output}" == *"The CLI wrote no report for one or more units. See the log."* ]]
+  grep -q "iltero assure --stage=post_deploy .*--unit=compute" "${STUB_LOG}"
   ! grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}" || false
-  [ ! -e "${old}/car-report.md" ]
+  [ ! -e "${old}/record-report.md" ]
+}
+
+@test "a report without its Markdown file fails the step" {
+  touch "${MARKS}/no-markdown-network"
+  deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"::error::The CLI wrote no record-report.md for unit 'network'."* ]]
+}
+
+@test "a failed stage keeps its exit code when its report is missing too" {
+  echo 3 > "${MARKS}/exit-plan-network"
+  touch "${MARKS}/no-report-network"
+  deploy
+  [ "${status}" -eq 3 ]
 }
 
 @test "the report's output cannot act as a workflow command" {

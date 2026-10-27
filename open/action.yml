@@ -21,7 +21,7 @@ outputs:
     value: ${{ steps.open.outputs.run_id }}
   run-settings-digest:
     description: The digest of the run's settings. Pass it to every later job of the pipeline.
-    value: ${{ steps.open.outputs.pins_digest }}
+    value: ${{ steps.open.outputs.run_settings_digest }}
 
 runs:
   using: composite

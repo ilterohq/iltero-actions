@@ -30,7 +30,8 @@ inputs:
     description: >-
       true or false. When true, the CLI writes a report of each unit's record for a person to read, as an HTML
       page and as Markdown. The action uploads both as the artifact <artifact-name>-report and adds the Markdown
-      to the job summary.
+      to the job summary. When the CLI does not write both files for a unit, the step fails at its end. A unit
+      whose deploy failed sets the step's exit code.
     required: false
     default: "true"
   artifact-name:

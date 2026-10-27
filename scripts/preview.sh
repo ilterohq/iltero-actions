@@ -206,7 +206,7 @@ cmd_run() {
     else
       status=0
       ILTERO_OPA_PATH="${tools}/bin/opa" "${cli}" assure --stage=plan \
-        --plan="${work}/plan.json" --plan-binary="${work}/tfplan" \
+        --plan="${work}/plan.json" --saved-plan="${work}/tfplan" \
         --environment="${environment}" --unit="${name}" --out="${out}" > "${work}/assure.txt" 2>&1 || status=$?
       print_untrusted "${work}/assure.txt"
       result="exit ${status}"
