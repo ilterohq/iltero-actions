@@ -37,6 +37,7 @@ cli_release() {
   echo "opa evaluator" > "${FIXTURES}/opa_linux_amd64_static"
   export OPA_SHA="$(sha256_of "${FIXTURES}/opa_linux_amd64_static")"
   export INSTALLED_COMMIT="${CLI_COMMIT}"
+  export INSTALLED_SCHEMAS_COMMIT="${SCHEMAS_COMMIT}"
   export PIP_EXIT=0
   export DOCTOR_EXIT=0
   stub python3 '
@@ -49,12 +50,12 @@ if [[ "$1 $2" == "-m pip" ]]; then
   echo "pip failure detail"
   exit "${PIP_EXIT}"
 fi
-if [[ "$1" == "-c" && "$2" == *"PIN"* ]]; then
+if [[ "$1" == "-c" && "$2" == *"OPA_RELEASE_PIN"* ]]; then
   echo "v1.20.2 opa_linux_amd64_static ${OPA_SHA}"
   exit 0
 fi
 if [[ "$1" == "-c" && "$2" == *"direct_url"* ]]; then
-  echo "${INSTALLED_COMMIT}"
+  [[ "$3" == iltero-schemas ]] && echo "${INSTALLED_SCHEMAS_COMMIT}" || echo "${INSTALLED_COMMIT}"
   exit 0
 fi
 exit 98
@@ -222,6 +223,13 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   [[ "${output}" == *"not the pinned"* ]]
 }
 
+@test "cli refuses an installed iltero-schemas from another commit" {
+  cli_release
+  INSTALLED_SCHEMAS_COMMIT="4444444444444444444444444444444444444444" run "${SETUP}" cli
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The installed iltero-schemas is commit '4444444444444444444444444444444444444444', not the pinned"* ]]
+}
+
 @test "cli refuses an evaluator that does not match the contract's pin" {
   cli_release
   echo "tampered" >> "${FIXTURES}/opa_linux_amd64_static"
@@ -245,7 +253,7 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   grep -q "iltero doctor ILTERO_OPA_PATH=${RUNNER_TEMP}/iltero-tools/bin/opa" "${STUB_LOG}"
   [ "$(output_value cli-commit)" = "${CLI_COMMIT}" ]
   [ "$(output_value cli-path)" = "${RUNNER_TEMP}/iltero-tools/venv/bin/iltero" ]
-  [ "$(output_value opa-path)" = "${RUNNER_TEMP}/iltero-tools/bin/opa" ]
+  [ "$(output_value evaluator-path)" = "${RUNNER_TEMP}/iltero-tools/bin/opa" ]
 }
 
 # --- errors ------------------------------------------------------------------

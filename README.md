@@ -13,7 +13,7 @@ This repository has no release.
 | Action | Purpose |
 | --- | --- |
 | `setup` | Install Terraform, the Iltero CLI and its evaluator at pinned, checksum-verified versions |
-| `open` | Open a governed run on Iltero Platform, and output its run id and pins digest |
+| `open` | Open a governed run on Iltero Platform, and output its run id and the digest of its settings |
 | `deploy` | Plan, check and apply each unit of a stack: in a governed run when the project is linked to Iltero Platform, locally on the runner when it is not |
 | `close` | Close a governed run |
 | `verify` | Pack each unit's record with every file it cites, and check it |

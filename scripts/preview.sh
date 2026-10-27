@@ -170,7 +170,7 @@ cmd_run() {
   out="${work_root}/out"
   summary="${work_root}/summary.md"
   mkdir -p "${out}"
-  write_output out-dir "${out}"
+  write_output records-directory "${out}"
 
   {
     echo "## Iltero preview: $(markdown_escape "${environment}")"
@@ -206,7 +206,7 @@ cmd_run() {
     else
       status=0
       ILTERO_OPA_PATH="${tools}/bin/opa" "${cli}" assure --stage=plan \
-        --plan="${work}/plan.json" --plan-binary="${work}/tfplan" \
+        --plan="${work}/plan.json" --saved-plan="${work}/tfplan" \
         --environment="${environment}" --unit="${name}" --out="${out}" > "${work}/assure.txt" 2>&1 || status=$?
       print_untrusted "${work}/assure.txt"
       result="exit ${status}"

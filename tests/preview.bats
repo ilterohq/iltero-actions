@@ -389,7 +389,7 @@ aws_unit() {
   aws_unit units/network
   run "${PREVIEW}" run production
   local work="${RUNNER_TEMP}/iltero-preview/units/network"
-  grep -q "iltero assure --stage=plan --plan=${work}/plan.json --plan-binary=${work}/tfplan --environment=production --unit=network --out=${RUNNER_TEMP}/iltero-preview/out ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
+  grep -q "iltero assure --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan --environment=production --unit=network --out=${RUNNER_TEMP}/iltero-preview/out ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
 }
 
 @test "a failing check fails the step and the summary shows the CLI's exit code" {
@@ -408,7 +408,7 @@ aws_unit() {
 @test "the records directory is an output" {
   aws_unit units/network
   run "${PREVIEW}" run production
-  [ "$(output_value out-dir)" = "${RUNNER_TEMP}/iltero-preview/out" ]
+  [ "$(output_value records-directory)" = "${RUNNER_TEMP}/iltero-preview/out" ]
 }
 
 @test "the comment holds the summary, the escaped output and a link to the run" {
@@ -463,7 +463,7 @@ aws_unit() {
   GITHUB_RUN_ID="" run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
   [ ! -e "${RUNNER_TEMP}/iltero-preview/comment/comment.md" ]
-  [ "$(output_value out-dir)" = "${RUNNER_TEMP}/iltero-preview/out" ]
+  [ "$(output_value records-directory)" = "${RUNNER_TEMP}/iltero-preview/out" ]
 }
 
 @test "the CLI's output stays inside its block when it has blank lines" {
@@ -476,8 +476,8 @@ aws_unit() {
 
 @test "a line of the CLI's output cannot act as a workflow command" {
   aws_unit units/network
-  ASSURE_OUTPUT="::set-output name=out-dir::/elsewhere" run "${PREVIEW}" run production
-  commands_paused_around "::set-output name=out-dir::/elsewhere"
+  ASSURE_OUTPUT="::set-output name=records-directory::/elsewhere" run "${PREVIEW}" run production
+  commands_paused_around "::set-output name=records-directory::/elsewhere"
 }
 
 @test "a line of Terraform's output cannot act as a workflow command" {

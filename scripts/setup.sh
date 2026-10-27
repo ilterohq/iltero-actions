@@ -132,9 +132,9 @@ install_evaluator() {
   esac
   pin="$("${venv}/bin/python" -c '
 import sys
-from iltero_schemas.opa.pin import PIN
-binary = PIN.binaries[sys.argv[1]]
-print(PIN.release_tag, binary.asset, binary.sha256)
+from iltero_schemas.opa.pin import OPA_RELEASE_PIN
+binary = OPA_RELEASE_PIN.binaries[sys.argv[1]]
+print(OPA_RELEASE_PIN.release_tag, binary.asset, binary.sha256)
 ' "${key}")" || die "Cannot read the evaluator pin from iltero-schemas."
   read -r version asset sha <<< "${pin}"
   [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "${asset}" =~ ^[${LOWER}0-9_]+$ && "${sha}" =~ ${SHA256_PATTERN} ]] \
@@ -142,6 +142,23 @@ print(PIN.release_tag, binary.asset, binary.sha256)
 
   download_checked "${OPA_RELEASES_URL}/${version}/${asset}" "${sha}" "${dir}/bin/opa"
   chmod 0755 "${dir}/bin/opa"
+}
+
+# Stops unless the package DISTRIBUTION in VENV was installed from COMMIT.
+# LABEL names it in the message.
+check_installed_commit() {
+  local venv="$1"
+  local distribution="$2"
+  local commit="$3"
+  local label="$4"
+  local installed
+  installed="$("${venv}/bin/python" -c '
+import json, sys
+from importlib.metadata import distribution
+print(json.loads(distribution(sys.argv[1]).read_text("direct_url.json"))["vcs_info"]["commit_id"])
+' "${distribution}")" || die "Cannot read which commit of ${label} was installed."
+  [[ "${installed}" == "${commit}" ]] \
+    || die "The installed ${label} is commit '${installed}', not the pinned '${commit}'."
 }
 
 cmd_cli() {
@@ -164,14 +181,8 @@ cmd_cli() {
     "git+${GITHUB_URL}/ilterohq/iltero-schemas.git@${schemas_commit}" \
     "git+${GITHUB_URL}/ilterohq/iltero-cli.git@${cli_commit}"
 
-  local installed_commit
-  installed_commit="$("${venv}/bin/python" -c '
-import json
-from importlib.metadata import distribution
-print(json.loads(distribution("iltero").read_text("direct_url.json"))["vcs_info"]["commit_id"])
-')" || die "Cannot read which commit of the CLI was installed."
-  [[ "${installed_commit}" == "${cli_commit}" ]] \
-    || die "The installed CLI is commit '${installed_commit}', not the pinned '${cli_commit}'."
+  check_installed_commit "${venv}" iltero "${cli_commit}" "the CLI"
+  check_installed_commit "${venv}" iltero-schemas "${schemas_commit}" "iltero-schemas"
 
   install_evaluator "${venv}" "${dir}"
   ILTERO_OPA_PATH="${dir}/bin/opa" "${venv}/bin/iltero" doctor \
@@ -179,7 +190,7 @@ print(json.loads(distribution("iltero").read_text("direct_url.json"))["vcs_info"
 
   write_output cli-commit "${cli_commit}"
   write_output cli-path "${venv}/bin/iltero"
-  write_output opa-path "${dir}/bin/opa"
+  write_output evaluator-path "${dir}/bin/opa"
 }
 
 main() {

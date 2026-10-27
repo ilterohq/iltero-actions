@@ -3,12 +3,13 @@
 # Packs and checks each unit's Change Assurance Record.
 #
 # Usage:
-#   verify.sh check            Refuse untrusted events; check that setup ran.
-#   verify.sh run OUT_DIR      For each unit: iltero car build, then iltero car verify.
+#   verify.sh check                     Refuse untrusted events; check that setup ran.
+#   verify.sh run RECORDS_DIRECTORY     For each unit: iltero record build, then
+#                                       iltero record verify.
 #
-# Run from the stack's working directory, with the OUT_DIR the deploy action
-# wrote. Every unit is checked; the step fails when any unit fails. When
-# REPORT is true, the CLI also writes a report of each unit's record bundle.
+# Run from the stack's working directory, with the RECORDS_DIRECTORY the
+# deploy action wrote. Every unit is checked; the step fails when any unit fails. When
+# WRITE_REPORT is true, the CLI also writes a report of each unit's record bundle.
 
 set -euo pipefail
 
@@ -36,7 +37,7 @@ run_cli() {
 
 cmd_run() {
   local out="$1"
-  [[ -d "${out}" ]] || die "The records directory '${out}' does not exist. Pass the deploy action's out-dir."
+  [[ -d "${out}" ]] || die "The records directory '${out}' does not exist. Pass the deploy action's records-directory."
   local report
   report="$(report_enabled)"
   local work_root="${RUNNER_TEMP}/iltero-verify"
@@ -45,7 +46,7 @@ cmd_run() {
   mkdir -p "${work_root}"
   if [[ "${report}" == true ]]; then
     mkdir -p "${reports}"
-    write_output report-dir "${reports}"
+    write_output report-directory "${reports}"
   fi
   list_checked_units "${units}"
 
@@ -65,7 +66,7 @@ cmd_run() {
     echo "::group::${name}"
     build=0
     verify="-"
-    run_cli "${work}/build.txt" car build --out="${out}" --unit="${name}" || build=$?
+    run_cli "${work}/build.txt" record build --out="${out}" --unit="${name}" || build=$?
     if [[ "${build}" -eq 0 ]]; then
       shopt -s nullglob
       bundles=("${out}/units/${name}"/car-*/)
@@ -76,7 +77,7 @@ cmd_run() {
         failed=1
       else
         verify=0
-        run_cli "${work}/verify.txt" car verify "${bundles[0]}" || verify=$?
+        run_cli "${work}/verify.txt" record verify "${bundles[0]}" || verify=$?
         [[ "${verify}" -eq 0 ]] || failed=1
         verify="exit ${verify}"
       fi
@@ -91,7 +92,7 @@ cmd_run() {
       details_block "${name}: ${step}" "${work}/${step}.txt" >> "${details}"
     done
     if [[ "${report}" == true && "${verify}" == exit* ]]; then
-      write_report "${name}" "${bundles[0]}" "${reports}" "${details}" "${work}/report.txt"
+      write_report "${name}" "${bundles[0]}" "${reports}" "${details}" "${work}/report.txt" || failed=1
     fi
   done < "${units}"
 
@@ -100,7 +101,7 @@ cmd_run() {
     echo
     cat "${details}"
   } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
-  [[ "${failed}" -eq 0 ]] || die "One or more records failed to build or verify. See the job summary."
+  [[ "${failed}" -eq 0 ]] || die "One or more records failed to build, verify or report. See the job summary."
 }
 
 main() {
@@ -108,8 +109,8 @@ main() {
   shift || true
   case "${command}" in
     check) cmd_check ;;
-    run) [[ $# -eq 1 ]] || die "Usage: verify.sh run OUT_DIR"; cmd_run "$@" ;;
-    *) die "Unknown command '${command}'. Use: check | run OUT_DIR" ;;
+    run) [[ $# -eq 1 ]] || die "Usage: verify.sh run RECORDS_DIRECTORY"; cmd_run "$@" ;;
+    *) die "Unknown command '${command}'. Use: check | run RECORDS_DIRECTORY" ;;
   esac
 }
 

@@ -14,8 +14,8 @@ inputs:
     description: The run's id, from the open action. Required for a project linked to Iltero Platform; empty otherwise.
     required: false
     default: ""
-  pins-digest:
-    description: The run's pins digest, from the open action. Required with run-id; empty otherwise.
+  run-settings-digest:
+    description: The digest of the run's settings, from the open action. Required with run-id; empty otherwise.
     required: false
     default: ""
   working-directory:
@@ -26,11 +26,12 @@ inputs:
     description: Host name of the private module registry. Leave empty when the stack uses no private modules.
     required: false
     default: ""
-  report:
+  write-report:
     description: >-
       true or false. When true, the CLI writes a report of each unit's record for a person to read, as an HTML
       page and as Markdown. The action uploads both as the artifact <artifact-name>-report and adds the Markdown
-      to the job summary.
+      to the job summary. When the CLI does not write both files for a unit, the step fails at its end. A unit
+      whose deploy failed sets the step's exit code.
     required: false
     default: "true"
   artifact-name:
@@ -39,12 +40,12 @@ inputs:
     default: iltero-deploy
 
 outputs:
-  out-dir:
+  records-directory:
     description: The directory that holds the records.
-    value: ${{ steps.deploy.outputs.out-dir }}
-  report-dir:
-    description: The directory that holds the reports. Empty when report is false.
-    value: ${{ steps.deploy.outputs.report-dir }}
+    value: ${{ steps.deploy.outputs.records-directory }}
+  report-directory:
+    description: The directory that holds the reports. Empty when write-report is false.
+    value: ${{ steps.deploy.outputs.report-directory }}
 
 runs:
   using: composite
@@ -60,25 +61,25 @@ runs:
       env:
         ENVIRONMENT: ${{ inputs.environment }}
         RUN_ID: ${{ inputs.run-id }}
-        PINS_DIGEST: ${{ inputs.pins-digest }}
+        RUN_SETTINGS_DIGEST: ${{ inputs.run-settings-digest }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
-        REPORT: ${{ inputs.report }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/deploy.sh" run "${ENVIRONMENT}" "${RUN_ID}" "${PINS_DIGEST}"'
+        WRITE_REPORT: ${{ inputs.write-report }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/deploy.sh" run "${ENVIRONMENT}" "${RUN_ID}" "${RUN_SETTINGS_DIGEST}"'
 
     - name: Upload the records
-      if: always() && steps.deploy.outputs.out-dir != ''
+      if: always() && steps.deploy.outputs.records-directory != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ steps.deploy.outputs.out-dir }}
+        path: ${{ steps.deploy.outputs.records-directory }}
         retention-days: 90
         if-no-files-found: error
 
     - name: Upload the reports
-      if: always() && steps.deploy.outputs.report-dir != ''
+      if: always() && steps.deploy.outputs.report-directory != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}-report
-        path: ${{ steps.deploy.outputs.report-dir }}
+        path: ${{ steps.deploy.outputs.report-directory }}
         retention-days: 90
         if-no-files-found: ignore

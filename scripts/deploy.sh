@@ -4,7 +4,7 @@
 #
 # Usage:
 #   deploy.sh check                            Refuse untrusted and pull request events; check that setup ran.
-#   deploy.sh run ENVIRONMENT [RUN_ID PINS]    Deploy every unit; write the job summary.
+#   deploy.sh run ENVIRONMENT [RUN_ID RUN_SETTINGS_DIGEST]    Deploy every unit; write the job summary.
 #
 # Run from the stack's working directory. A project linked to Iltero Platform
 # deploys in the governed run that RUN_ID names. A project with no platform
@@ -17,16 +17,16 @@
 #      working directory;
 #   3. terraform plan, saved, and its JSON;
 #   4. iltero assure --stage plan;
-#   5. iltero assure --stage pre-deploy (linked projects only);
+#   5. iltero assure --stage pre_deploy (linked projects only);
 #   6. terraform apply of the saved plan;
 #   7. the state after the apply, as JSON;
-#   8. iltero assure --stage post-deploy, also after a failed apply.
+#   8. iltero assure --stage post_deploy, also after a failed apply.
 # The deploy stops at the first step that fails, and exits with its code.
-# When REPORT is true, the CLI also writes a report of each unit's record.
+# When WRITE_REPORT is true, the CLI also writes a report of each unit's record.
 #
 # Environment:
 #   REGISTRY_HOST    The private module registry's host name. Empty: no registry token.
-#   REPORT           true or false. True: write a report of each unit's record.
+#   WRITE_REPORT           true or false. True: write a report of each unit's record.
 
 set -euo pipefail
 
@@ -50,16 +50,16 @@ cmd_check() {
 check_mode() {
   local linked="$1"
   local run_id="$2"
-  local pins="$3"
+  local settings_digest="$3"
   [[ "${linked}" == true || "${linked}" == false ]] || die "The CLI's config report could not be read."
   [[ -z "${REGISTRY_HOST:-}" ]] || require_linked_for_registry "${linked}"
   if [[ "${linked}" == true ]]; then
-    [[ -n "${run_id}" && -n "${pins}" ]] \
-      || die "This project is linked to Iltero Platform. Deploy it in a governed run: pass the run-id and pins-digest from the open action."
+    [[ -n "${run_id}" && -n "${settings_digest}" ]] \
+      || die "This project is linked to Iltero Platform. Deploy it in a governed run: pass the run-id and run-settings-digest from the open action."
     require_id_token
   else
-    [[ -z "${run_id}" && -z "${pins}" ]] \
-      || die "This project has no platform section in .iltero/config.yml, so it cannot deploy in a governed run. Leave run-id and pins-digest empty."
+    [[ -z "${run_id}" && -z "${settings_digest}" ]] \
+      || die "This project has no platform section in .iltero/config.yml, so it cannot deploy in a governed run. Leave run-id and run-settings-digest empty."
   fi
 }
 
@@ -97,7 +97,7 @@ state_check() {
   local dir="$1"
   local work="$2"
   local status=0
-  TF_DATA_DIR="$(terraform_data_dir "${work}")" "$(cli_path)" state check --dir="${dir}" \
+  TF_DATA_DIR="$(terraform_data_dir "${work}")" "$(cli_path)" state check --working-directory="${dir}" \
     > "${work}/state-check.txt" 2>&1 || status=$?
   print_untrusted "${work}/state-check.txt"
   return "${status}"
@@ -111,11 +111,11 @@ deploy_unit() {
   local work="$3"
   local environment="$4"
   local run_id="$5"
-  local pins="$6"
+  local settings_digest="$6"
   local out="$7"
   local run_args=(--unit="${name}" --out="${out}")
-  [[ -z "${run_id}" ]] || run_args+=(--run-id="${run_id}" --pins-digest="${pins}" --upload)
-  local plan_files=(--plan="${work}/plan.json" --plan-binary="${work}/tfplan")
+  [[ -z "${run_id}" ]] || run_args+=(--run-id="${run_id}" --run-settings-digest="${settings_digest}" --upload)
+  local plan_files=(--plan="${work}/plan.json" --saved-plan="${work}/tfplan")
   UNIT_RESULTS=("-" "-" "-" "-")
 
   local backend_config var_file
@@ -180,7 +180,7 @@ deploy_unit() {
   # Pre-deploy checks facts only Iltero Platform holds, so it runs only in a
   # governed run.
   if [[ -n "${run_id}" ]]; then
-    assure_stage "${work}" pre-deploy "${run_args[@]}" || status=$?
+    assure_stage "${work}" pre_deploy "${run_args[@]}" || status=$?
     UNIT_RESULTS[1]="exit ${status}"
     [[ "${status}" -eq 0 ]] || return "${status}"
   else
@@ -205,7 +205,7 @@ deploy_unit() {
   fi
 
   status=0
-  assure_stage "${work}" post-deploy "${plan_files[@]}" --apply-log="${work}/apply.ndjson" \
+  assure_stage "${work}" post_deploy "${plan_files[@]}" --apply-log="${work}/apply.ndjson" \
     --state="${work}/state.json" "${run_args[@]}" || status=$?
   UNIT_RESULTS[3]="exit ${status}"
   [[ "${apply_status}" -eq 0 ]] || return "${apply_status}"
@@ -215,20 +215,20 @@ deploy_unit() {
 cmd_run() {
   local environment="$1"
   local run_id="${2:-}"
-  local pins="${3:-}"
+  local settings_digest="${3:-}"
   local linked report
   report="$(report_enabled)"
   linked="$(project_linked)"
-  check_mode "${linked}" "${run_id}" "${pins}"
+  check_mode "${linked}" "${run_id}" "${settings_digest}"
   local work_root="${RUNNER_TEMP}/iltero-deploy"
   local out="${work_root}/out"
   local units="${work_root}/units.tsv"
   local reports="${work_root}/reports"
   mkdir -p "${out}"
-  write_output out-dir "${out}"
+  write_output records-directory "${out}"
   if [[ "${report}" == true ]]; then
     mkdir -p "${reports}"
-    write_output report-dir "${reports}"
+    write_output report-directory "${reports}"
   fi
 
   list_checked_units "${units}"
@@ -242,21 +242,21 @@ cmd_run() {
   } > "${summary}"
   : > "${details}"
 
-  local name dir work status=0 failed_unit="" stage
+  local name dir work status=0 failed_unit="" stage report_missing=0
   while IFS=$'\t' read -r name dir; do
     work="${work_root}/units/${name}"
     rm -rf "${work}"
     mkdir -p "${work}"
     echo "::group::${name}"
-    deploy_unit "${name}" "${dir}" "${work}" "${environment}" "${run_id}" "${pins}" "${out}" || status=$?
+    deploy_unit "${name}" "${dir}" "${work}" "${environment}" "${run_id}" "${settings_digest}" "${out}" || status=$?
     echo "::endgroup::"
     echo "| ${name} | ${UNIT_RESULTS[0]} | ${UNIT_RESULTS[1]} | ${UNIT_RESULTS[2]} | ${UNIT_RESULTS[3]} |" >> "${summary}"
-    for stage in state-check plan pre-deploy post-deploy; do
+    for stage in state-check plan pre_deploy post_deploy; do
       [[ -f "${work}/${stage}.txt" ]] || continue
-      details_block "${name}: ${stage}" "${work}/${stage}.txt" >> "${details}"
+      details_block "${name}: ${stage//_/-}" "${work}/${stage}.txt" >> "${details}"
     done
     if [[ "${report}" == true && -f "${out}/units/${name}/car.json" ]]; then
-      write_report "${name}" "${out}/units/${name}" "${reports}" "${details}" "${work}/report.txt"
+      write_report "${name}" "${out}/units/${name}" "${reports}" "${details}" "${work}/report.txt" || report_missing=1
     fi
     if [[ "${status}" -ne 0 ]]; then
       failed_unit="${name}"
@@ -274,6 +274,7 @@ cmd_run() {
     echo "::error::The deploy stopped at unit '${failed_unit}'. Later units were not deployed. See the job summary."
     exit "${status}"
   fi
+  [[ "${report_missing}" -eq 0 ]] || die "The CLI wrote no report for one or more units. See the log."
 }
 
 main() {
@@ -281,8 +282,8 @@ main() {
   shift || true
   case "${command}" in
     check) cmd_check ;;
-    run) [[ $# -eq 3 ]] || die "Usage: deploy.sh run ENVIRONMENT RUN_ID PINS_DIGEST (empty for a local deploy)"; cmd_run "$@" ;;
-    *) die "Unknown command '${command}'. Use: check | run ENVIRONMENT RUN_ID PINS_DIGEST" ;;
+    run) [[ $# -eq 3 ]] || die "Usage: deploy.sh run ENVIRONMENT RUN_ID RUN_SETTINGS_DIGEST (empty for a local deploy)"; cmd_run "$@" ;;
+    *) die "Unknown command '${command}'. Use: check | run ENVIRONMENT RUN_ID RUN_SETTINGS_DIGEST" ;;
   esac
 }
 

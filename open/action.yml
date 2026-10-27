@@ -1,5 +1,5 @@
 name: Iltero Open Run
-description: Open a governed Iltero run for the stack in .iltero/config.yml, and output its id and pins digest.
+description: Open a governed Iltero run for the stack in .iltero/config.yml, and output its id and settings digest.
 author: Iltero
 
 branding:
@@ -19,9 +19,9 @@ outputs:
   run-id:
     description: The run's id. Pass it to every later job of the pipeline.
     value: ${{ steps.open.outputs.run_id }}
-  pins-digest:
-    description: The digest of the run's pins. Pass it to every later job of the pipeline.
-    value: ${{ steps.open.outputs.pins_digest }}
+  run-settings-digest:
+    description: The digest of the run's settings. Pass it to every later job of the pipeline.
+    value: ${{ steps.open.outputs.run_settings_digest }}
 
 runs:
   using: composite

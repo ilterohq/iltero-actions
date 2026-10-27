@@ -9,7 +9,7 @@ shopt -u patsub_replacement 2> /dev/null || true
 
 # The folder under the runner's temporary directory where `setup` installs the
 # tools. Every action finds the tools here, by absolute path.
-readonly ILTERO_TOOLS_DIRNAME="iltero-tools"
+readonly ILTERO_TOOLS_DIRECTORY_NAME="iltero-tools"
 
 # Characters for patterns, listed one by one: a range such as a-z can also
 # match capital letters, depending on the locale.
@@ -36,7 +36,7 @@ die() {
 # Prints the absolute path of the tools folder.
 tools_dir() {
   [[ -n "${RUNNER_TEMP:-}" ]] || die "RUNNER_TEMP is not set. Run this action inside a GitHub Actions job."
-  echo "${RUNNER_TEMP}/${ILTERO_TOOLS_DIRNAME}"
+  echo "${RUNNER_TEMP}/${ILTERO_TOOLS_DIRECTORY_NAME}"
 }
 
 # Refuses the events under which a workflow runs untrusted code with the

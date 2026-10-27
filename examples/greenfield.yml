@@ -54,7 +54,7 @@ jobs:
         with:
           environment: staging
           run-id: ${{ steps.open.outputs.run-id }}
-          pins-digest: ${{ steps.open.outputs.pins-digest }}
+          run-settings-digest: ${{ steps.open.outputs.run-settings-digest }}
           # Set when the stack uses private modules from Iltero Platform's module registry. The registry accepts the
           # job's GitHub identity token from a repository bound to an Iltero organization.
           # registry-host: registry.example.com
@@ -104,7 +104,7 @@ jobs:
         with:
           environment: production
           run-id: ${{ steps.open.outputs.run-id }}
-          pins-digest: ${{ steps.open.outputs.pins-digest }}
+          run-settings-digest: ${{ steps.open.outputs.run-settings-digest }}
           # Set when the stack uses private modules from Iltero Platform's module registry. The registry accepts the
           # job's GitHub identity token from a repository bound to an Iltero organization.
           # registry-host: registry.example.com

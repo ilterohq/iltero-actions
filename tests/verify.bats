@@ -12,16 +12,17 @@ setup() {
   TOOLS="${RUNNER_TEMP}/iltero-tools"
   export MARKS="${BATS_TEST_TMPDIR}/marks"
   export OUT="${BATS_TEST_TMPDIR}/out"
-  export REPORT="true"
+  export WRITE_REPORT="true"
   mkdir -p "${TOOLS}/venv/bin" "${MARKS}" "${OUT}"
   ln -s "$(command -v python3)" "${TOOLS}/venv/bin/python"
 
-  # A stand-in for the CLI. `car build` makes the unit's bundle unless
+  # A stand-in for the CLI. `record build` makes the unit's bundle unless
   # MARKS/exit-build-<unit> gives its exit code or MARKS/no-bundle-<unit>
-  # exists; `car verify` exits with
-  # MARKS/exit-verify-<unit> or 0; `car report` writes car-report.<format>
+  # exists; `record verify` exits with
+  # MARKS/exit-verify-<unit> or 0; `record report` writes record-report.<format>
   # into --out and exits with MARKS/exit-report-<unit> or 0, or exits 5
-  # without writing when MARKS/no-report-<unit> exists.
+  # without writing when MARKS/no-report-<unit> exists. With
+  # MARKS/no-markdown-<unit>, it writes only the HTML page.
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
 echo "iltero $* ILTERO_OPA_PATH=${ILTERO_OPA_PATH}" >> "${STUB_LOG}"
@@ -29,23 +30,24 @@ if [[ "$1 $2" == "units list" ]]; then
   echo '[{"name": "network", "working_directory": "units/network"}, {"name": "compute", "working_directory": "units/compute"}]'
   exit 0
 fi
-if [[ "$1 $2" == "car build" ]]; then
+if [[ "$1 $2" == "record build" ]]; then
   unit="${4#--unit=}"
   [[ ! -e "${MARKS}/exit-build-${unit}" ]] || exit "$(cat "${MARKS}/exit-build-${unit}")"
   [[ -e "${MARKS}/no-bundle-${unit}" ]] || mkdir -p "${OUT}/units/${unit}/car-0001"
   echo "built <${unit}>"
   exit 0
 fi
-if [[ "$1 $2" == "car report" ]]; then
+if [[ "$1 $2" == "record report" ]]; then
   unit="$(basename "$(dirname "$3")")" format="${4#--format=}" dir="${5#--out=}"
   [[ "${format}" == markdown ]] && extension=md || extension="${format}"
   [[ -e "${MARKS}/no-report-${unit}" ]] && exit 5
-  echo "report <${format}> of ${unit}" > "${dir}/car-report.${extension}"
+  [[ -e "${MARKS}/no-markdown-${unit}" && "${format}" == markdown ]] && exit 0
+  echo "report <${format}> of ${unit}" > "${dir}/record-report.${extension}"
   echo "report written for ${unit}"
   [[ ! -e "${MARKS}/exit-report-${unit}" ]] || exit "$(cat "${MARKS}/exit-report-${unit}")"
   exit 0
 fi
-if [[ "$1 $2" == "car verify" ]]; then
+if [[ "$1 $2" == "record verify" ]]; then
   unit="$(basename "$(dirname "$3")")"
   [[ ! -e "${MARKS}/exit-verify-${unit}" ]] || exit "$(cat "${MARKS}/exit-verify-${unit}")"
   exit 0
@@ -73,9 +75,9 @@ STUB
 @test "each unit's record is built, then its bundle verified, in the CLI's order" {
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 0 ]
-  run bash -c "grep -oE '^iltero car (build|verify) [^ ]+' '${STUB_LOG}' | tr '\n' ','"
-  [ "${output}" = "iltero car build --out=${OUT},iltero car verify ${OUT}/units/network/car-0001/,iltero car build --out=${OUT},iltero car verify ${OUT}/units/compute/car-0001/," ]
-  grep -q "iltero car build --out=${OUT} --unit=network ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
+  run bash -c "grep -oE '^iltero record (build|verify) [^ ]+' '${STUB_LOG}' | tr '\n' ','"
+  [ "${output}" = "iltero record build --out=${OUT},iltero record verify ${OUT}/units/network/car-0001/,iltero record build --out=${OUT},iltero record verify ${OUT}/units/compute/car-0001/," ]
+  grep -q "iltero record build --out=${OUT} --unit=network ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
 }
 
 @test "a missing records directory is refused" {
@@ -130,10 +132,10 @@ STUB
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 0 ]
   local reports="${RUNNER_TEMP}/iltero-verify/reports"
-  grep -qx "report-dir=${reports}" "${GITHUB_OUTPUT}"
-  grep -q "^iltero car report ${OUT}/units/network/car-0001/ --format=html --out=${reports}/network " "${STUB_LOG}"
-  grep -q "^iltero car report ${OUT}/units/compute/car-0001/ --format=markdown --out=${reports}/compute " "${STUB_LOG}"
-  [ -f "${reports}/network/car-report.html" ]
+  grep -qx "report-directory=${reports}" "${GITHUB_OUTPUT}"
+  grep -q "^iltero record report ${OUT}/units/network/car-0001/ --format=html --out=${reports}/network " "${STUB_LOG}"
+  grep -q "^iltero record report ${OUT}/units/compute/car-0001/ --format=markdown --out=${reports}/compute " "${STUB_LOG}"
+  [ -f "${reports}/network/record-report.html" ]
   grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}"
   grep -qx "report <markdown> of compute" "${GITHUB_STEP_SUMMARY}"
   commands_paused_around "report written for network"
@@ -143,21 +145,21 @@ STUB
   echo 9 > "${MARKS}/exit-verify-network"
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
-  grep -q "^iltero car report ${OUT}/units/network/car-0001/ --format=html" "${STUB_LOG}"
+  grep -q "^iltero record report ${OUT}/units/network/car-0001/ --format=html" "${STUB_LOG}"
 }
 
 @test "with report false, verify writes no report" {
-  REPORT=false run "${VERIFY}" run "${OUT}"
+  WRITE_REPORT=false run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 0 ]
-  ! grep -q "car report" "${STUB_LOG}" || false
-  ! grep -q "^report-dir=" "${GITHUB_OUTPUT}" || false
+  ! grep -q "record report" "${STUB_LOG}" || false
+  ! grep -q "^report-directory=" "${GITHUB_OUTPUT}" || false
 }
 
 @test "verify refuses a report value other than true or false" {
-  REPORT="" run "${VERIFY}" run "${OUT}"
+  WRITE_REPORT="" run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The report input must be true or false, not ''."* ]]
-  ! grep -q "car build" "${STUB_LOG}" || false
+  [[ "${output}" == *"The write-report input must be true or false, not ''."* ]]
+  ! grep -q "record build" "${STUB_LOG}" || false
 }
 
 @test "a report that exits with another code than 0 is a warning, and verify keeps its result" {
@@ -167,9 +169,25 @@ STUB
   [[ "${output}" == *"::warning::The CLI's report of unit 'network' exited with 9. See its output in the log."* ]]
 }
 
+@test "a report the CLI does not write fails the step, and the other units are still checked" {
+  touch "${MARKS}/no-report-network"
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"::error::The CLI wrote no record-report.html for unit 'network'."* ]]
+  [[ "${output}" == *"One or more records failed to build, verify or report."* ]]
+  grep -q "record verify ${OUT}/units/compute" "${STUB_LOG}"
+}
+
+@test "a report without its Markdown file fails the step" {
+  touch "${MARKS}/no-markdown-network"
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"::error::The CLI wrote no record-report.md for unit 'network'."* ]]
+}
+
 @test "a unit whose record did not build gets no report" {
   echo 1 > "${MARKS}/exit-build-network"
   run "${VERIFY}" run "${OUT}"
-  ! grep -q "car report ${OUT}/units/network" "${STUB_LOG}" || false
-  grep -q "car report ${OUT}/units/compute" "${STUB_LOG}"
+  ! grep -q "record report ${OUT}/units/network" "${STUB_LOG}" || false
+  grep -q "record report ${OUT}/units/compute" "${STUB_LOG}"
 }

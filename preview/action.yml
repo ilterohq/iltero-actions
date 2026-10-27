@@ -32,9 +32,9 @@ outputs:
   environment:
     description: The environment the change targets.
     value: ${{ steps.environment.outputs.environment }}
-  out-dir:
+  records-directory:
     description: The directory that holds the records.
-    value: ${{ steps.preview.outputs.out-dir }}
+    value: ${{ steps.preview.outputs.records-directory }}
   comment-artifact:
     description: >-
       Name of the artifact that holds the pull request comment, for the comment action. Empty when no comment was
@@ -72,11 +72,11 @@ runs:
       run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" run "${ENVIRONMENT}"'
 
     - name: Upload the records
-      if: always() && inputs.upload-records == 'true' && steps.preview.outputs.out-dir != ''
+      if: always() && inputs.upload-records == 'true' && steps.preview.outputs.records-directory != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ steps.preview.outputs.out-dir }}
+        path: ${{ steps.preview.outputs.records-directory }}
         retention-days: 30
         if-no-files-found: error
 

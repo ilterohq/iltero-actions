@@ -26,7 +26,7 @@ fi
 echo "iltero $*" >> "${STUB_LOG}"
 if [[ "$1 $2" == "run open" && "${CLI_EXIT}" -eq 0 ]]; then
   echo "run_id=7d8e9f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f" >> "${GITHUB_OUTPUT}"
-  echo "pins_digest=sha256:abc" >> "${GITHUB_OUTPUT}"
+  echo "run_settings_digest=sha256:abc" >> "${GITHUB_OUTPUT}"
 fi
 exit "${CLI_EXIT}"
 EOF
@@ -89,7 +89,7 @@ EOF
   run "${RUN}" open production
   [ "${status}" -eq 0 ]
   [ "$(output_value run_id)" = "${RUN_ID}" ]
-  [ "$(output_value pins_digest)" = "sha256:abc" ]
+  [ "$(output_value run_settings_digest)" = "sha256:abc" ]
 }
 
 @test "open passes a value starting with a dash as a value, not an option" {
