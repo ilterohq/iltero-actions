@@ -11,6 +11,8 @@ setup() {
   export GITHUB_REPOSITORY="octo/stack"
   export HEAD_REPOSITORY="octo/stack"
   export GITHUB_TOKEN="workflow-token"
+  # A person, not the CI run's own actor: the action posts nothing for Dependabot.
+  export GITHUB_ACTOR="octocat"
   export PR_NUMBER="7"
   export GITHUB_WORKFLOW_REF="octo/stack/.github/workflows/preview.yml@refs/pull/7/merge"
   MARKER="$(marker_for "${GITHUB_WORKFLOW_REF}")"
@@ -46,7 +48,8 @@ start_fake_github() {
     [[ "${tries}" -lt 50 ]] || { echo "the fake API did not start"; return 1; }
     sleep 0.1
   done
-  export GITHUB_API_URL="http://127.0.0.1:$(cat "${port_file}")"
+  GITHUB_API_URL="http://127.0.0.1:$(cat "${port_file}")"
+  export GITHUB_API_URL
 }
 
 # Writes COUNT comments by other people, then the given comments, as JSON.
