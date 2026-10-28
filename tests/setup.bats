@@ -220,7 +220,7 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   cli_release
   INSTALLED_COMMIT="3333333333333333333333333333333333333333" run "${SETUP}" cli
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"not the pinned"* ]]
+  [[ "${output}" == *"The installed CLI is commit '3333333333333333333333333333333333333333', not the pinned"* ]]
 }
 
 @test "cli refuses an installed iltero-schemas from another commit" {
