@@ -156,7 +156,7 @@ check_installed_commit() {
 import json, sys
 from importlib.metadata import distribution
 print(json.loads(distribution(sys.argv[1]).read_text("direct_url.json"))["vcs_info"]["commit_id"])
-' "${distribution}")" || die "Cannot read which commit of ${label} was installed."
+' "${distribution}")" || die "Cannot read the commit of the installed ${label}."
   [[ "${installed}" == "${commit}" ]] \
     || die "The installed ${label} is commit '${installed}', not the pinned '${commit}'."
 }
@@ -181,7 +181,7 @@ cmd_cli() {
     "git+${GITHUB_URL}/ilterohq/iltero-schemas.git@${schemas_commit}" \
     "git+${GITHUB_URL}/ilterohq/iltero-cli.git@${cli_commit}"
 
-  check_installed_commit "${venv}" iltero "${cli_commit}" "the CLI"
+  check_installed_commit "${venv}" iltero "${cli_commit}" "CLI"
   check_installed_commit "${venv}" iltero-schemas "${schemas_commit}" "iltero-schemas"
 
   install_evaluator "${venv}" "${dir}"
