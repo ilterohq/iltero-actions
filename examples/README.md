@@ -4,6 +4,7 @@
 | --- | --- | --- |
 | [`preview.yml`](preview.yml) | Check each pull request: plan every unit with no credentials and check each plan. A second job posts the result as a comment on the pull request. | Not needed |
 | [`deploy.yml`](deploy.yml) | Deploy on push with no Iltero account: check each unit's plan, apply it, record the deployment, then pack and check each record. | Not needed |
+| [`record-iac.yml`](record-iac.yml) | Deploy on push in a governed run on Iltero Platform, with your own Terraform commands: after plan, before apply and after apply, a step records that stage of the unit's change. A later step checks that the deployed resources still match what the apply left. | Needed |
 | [`greenfield.yml`](greenfield.yml) | Deploy each environment on push, in a governed run on Iltero Platform: plan, check, approval check, apply and record each unit, then close the run. | Needed |
 
 Replace every `0000000000000000000000000000000000000000` with the commit of the iltero-actions release you use, and

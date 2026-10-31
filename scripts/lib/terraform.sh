@@ -12,6 +12,14 @@ terraform_data_dir() {
   echo "$1/terraform-data"
 }
 
+# Stops unless ENVIRONMENT can name a unit's settings files, which sit in the
+# unit's config folder: it holds no "/" and is not "." or "..".
+require_environment_file_name() {
+  local environment="$1"
+  [[ -n "${environment}" && "${environment}" != */* && "${environment}" != . && "${environment}" != .. ]] \
+    || die "The environment '${environment}' cannot name a unit's settings file. Use a name without '/'."
+}
+
 # Prints the path of a unit's backend settings for an environment. The file
 # is optional.
 unit_backend_config() {
