@@ -12,6 +12,7 @@ setup() {
   make_runner
   stub_curl
   export GITHUB_ACTION_PATH="${BATS_TEST_TMPDIR}/setup"
+  export INSTALL_TERRAFORM="true"
   mkdir -p "${GITHUB_ACTION_PATH}"
   SETUP="${REPO_ROOT}/scripts/setup.sh"
 }
@@ -102,6 +103,20 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   [ "${status}" -eq 0 ]
   GITHUB_EVENT_NAME=pull_request RUNNER_ARCH=ARM64 run "${SETUP}" check
   [ "${status}" -eq 0 ]
+}
+
+@test "check refuses an install-terraform value other than true or false" {
+  INSTALL_TERRAFORM="yes" run "${SETUP}" check
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The install-terraform input must be true or false, not 'yes'."* ]]
+  INSTALL_TERRAFORM="false" run "${SETUP}" check
+  [ "${status}" -eq 0 ]
+}
+
+@test "the action installs Terraform only when install-terraform is true" {
+  run awk '/^    - name: Install Terraform$/ { inside = 1; next } inside && /^    - / { exit } inside && /^      if: / { print }' \
+    "${REPO_ROOT}/setup/action.yml"
+  [ "${output}" = "      if: inputs.install-terraform == 'true'" ]
 }
 
 @test "an unknown command is refused" {

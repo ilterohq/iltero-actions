@@ -1,5 +1,5 @@
 name: Iltero Close Run
-description: Close a governed Iltero run and list every check it owed and never got.
+description: Close the Iltero run of this pipeline run for a stack and environment, and list every check it owed and never got.
 author: Iltero
 
 branding:
@@ -7,9 +7,13 @@ branding:
   color: blue
 
 inputs:
-  run-id:
-    description: The run to close, as output by the open action.
+  environment:
+    description: The environment the run deploys to, as given to the deploy or record-iac action.
     required: true
+  working-directory:
+    description: The stack's directory, relative to the repository root. Its .iltero/config.yml names the stack.
+    required: false
+    default: "."
 
 runs:
   using: composite
@@ -20,6 +24,7 @@ runs:
 
     - name: Close the run
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
-        RUN_ID: ${{ inputs.run-id }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" close "${RUN_ID}"'
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" close "${ENVIRONMENT}"'

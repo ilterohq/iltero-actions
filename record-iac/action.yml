@@ -1,0 +1,131 @@
+name: Iltero Record IaC
+description: Record one stage of a unit's Terraform change, in the job that runs Terraform.
+author: Iltero
+
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  stage:
+    description: >-
+      The stage to record: plan (after terraform plan), pre_deploy (before terraform apply), post_deploy
+      (after terraform apply, also when the apply failed) or post_verify (after post_deploy, a check that the
+      deployed resources still match what the apply left). A governed run to a production environment needs
+      pre_deploy before post_deploy. On pull_request events, only plan, checked locally. record-iac refuses pull
+      request review events.
+    required: true
+  environment:
+    description: The environment the change deploys to.
+    required: true
+  unit:
+    description: The unit's name, as `iltero units list` prints it.
+    required: true
+  working-directory:
+    description: The stack's directory, relative to the repository root. File inputs are relative to it.
+    required: false
+    default: "."
+  plan:
+    description: The saved plan as JSON, from `terraform show -json`. Required for plan and post_deploy.
+    required: false
+    default: ""
+  saved-plan:
+    description: The saved plan file, from `terraform plan -out`. Required for plan and post_deploy.
+    required: false
+    default: ""
+  apply-log:
+    description: The output of `terraform apply -json` of the saved plan. Required for post_deploy.
+    required: false
+    default: ""
+  state:
+    description: The state after the apply, from `terraform show -json`. Required for post_deploy.
+    required: false
+    default: ""
+  refresh-plans:
+    description: >-
+      Two readings of the deployed resources, one path per line, in the order they were taken. Required for
+      post_verify. Take each reading with `terraform plan -refresh-only -out=FILE`, then
+      `terraform show -json FILE`. Take the second reading at least 60 seconds after the first. Never run
+      `terraform apply -refresh-only`: it writes what it reads into the state, so drift no longer shows.
+    required: false
+    default: ""
+  records-directory:
+    description: >-
+      Where the CLI keeps the records. Empty: a folder in the runner's temporary directory. A relative path is
+      relative to working-directory. pre_deploy reads the plan stage's record from it, so a job that runs
+      pre_deploy apart from plan must download the plan job's records artifact and pass its directory here.
+    required: false
+    default: ""
+  write-report:
+    description: >-
+      true or false. When true, the CLI writes a report of the unit's record for a person to read, as an HTML
+      page and as Markdown. The action uploads both as the artifact <artifact-name>-report and adds the Markdown
+      to the job summary. When the CLI does not write both files, the step fails at its end.
+    required: false
+    default: "true"
+  artifact-name:
+    description: >-
+      Name of the artifact that holds the records. Empty: iltero-records-<unit>. Each step replaces the artifact
+      with the records in records-directory, so two jobs that record the same unit at the same time need
+      different names.
+    required: false
+    default: ""
+
+outputs:
+  records-directory:
+    description: The directory that holds the records.
+    value: ${{ steps.record.outputs.records-directory }}
+  report-directory:
+    description: The directory that holds the reports. Empty when write-report is false.
+    value: ${{ steps.record.outputs.report-directory }}
+  artifact-name:
+    description: The name of the artifact that holds the records.
+    value: ${{ steps.record.outputs.artifact-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the event and the job
+      shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/record-iac.sh" check "${STAGE}"'
+
+    - name: Record the stage
+      id: record
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        STAGE: ${{ inputs.stage }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        UNIT: ${{ inputs.unit }}
+        PLAN: ${{ inputs.plan }}
+        SAVED_PLAN: ${{ inputs.saved-plan }}
+        APPLY_LOG: ${{ inputs.apply-log }}
+        STATE: ${{ inputs.state }}
+        REFRESH_PLANS: ${{ inputs.refresh-plans }}
+        RECORDS_DIRECTORY: ${{ inputs.records-directory }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        WRITE_REPORT: ${{ inputs.write-report }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/record-iac.sh" run "${STAGE}"'
+
+    - name: Upload the records
+      if: always() && steps.record.outputs.records-directory != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ steps.record.outputs.artifact-name }}
+        path: ${{ steps.record.outputs.records-directory }}
+        retention-days: 90
+        if-no-files-found: ignore
+        overwrite: true
+
+    - name: Upload the reports
+      if: always() && steps.record.outputs.report-directory != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ steps.record.outputs.artifact-name }}-report
+        path: ${{ steps.record.outputs.report-directory }}
+        retention-days: 90
+        if-no-files-found: ignore
+        overwrite: true

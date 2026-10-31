@@ -33,6 +33,9 @@ jobs:
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
       - id: preview
         uses: ilterohq/iltero-actions/preview@0000000000000000000000000000000000000000 # v0.3.0
+        # Set when the pull request's target branch deploys to several environments.
+        # with:
+        #   environment: staging
 
   comment:
     name: Comment

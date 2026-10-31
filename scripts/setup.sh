@@ -3,7 +3,8 @@
 # Installs the tools the other actions use: Terraform and the Iltero CLI.
 #
 # Usage:
-#   setup.sh check                Refuse untrusted events and unsupported runners.
+#   setup.sh check                Refuse untrusted events, unsupported runners and an
+#                                 INSTALL_TERRAFORM other than true or false.
 #   setup.sh terraform VERSION    Install Terraform VERSION, checked against the pinned checksums.
 #   setup.sh cli                  Install the Iltero CLI and its evaluator at the pinned versions.
 #
@@ -50,6 +51,8 @@ runner_platform() {
 cmd_check() {
   refuse_untrusted_event
   runner_platform > /dev/null
+  [[ "${INSTALL_TERRAFORM:-}" == true || "${INSTALL_TERRAFORM:-}" == false ]] \
+    || die "The install-terraform input must be true or false, not '${INSTALL_TERRAFORM:-}'."
 }
 
 # Prints the pinned SHA-256 of a Terraform archive, or stops if the archive is
