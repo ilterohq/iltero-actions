@@ -16,8 +16,8 @@ setup() {
   export LINKED="true"
   export ACTIONS_RUNTIME_TOKEN="runtime-token"
   export TF_TOKEN_registry_example="registry-token"
-  export ASSURE_EXIT=0
-  export ASSURE_OUTPUT="verdict <b>fail</b> & more"
+  export CHECK_EXIT=0
+  export CHECK_OUTPUT="verdict <b>fail</b> & more"
   export GITHUB_SERVER_URL="https://github.example"
   export GITHUB_REPOSITORY="octo/stack"
   export GITHUB_RUN_ID="99"
@@ -86,9 +86,12 @@ if [[ "$1 $2" == "config show" ]]; then
   echo "{\"linked\": ${LINKED}, \"stack_id\": null}"
   exit 0
 fi
-if [[ "$1" == "assure" ]]; then
-  echo "${ASSURE_OUTPUT}"
-  exit "${ASSURE_EXIT}"
+if [[ "$1 $2" == "iac check" ]]; then
+  echo "${CHECK_OUTPUT}"
+  exit "${CHECK_EXIT}"
+fi
+if [[ "$1 $2" == "environment detect" ]]; then
+  exit "${DETECT_EXIT:-0}"
 fi
 EOF
   chmod +x "${TOOLS}/bin/terraform" "${TOOLS}/venv/bin/iltero" "${TOOLS}/venv/bin/python"
@@ -186,6 +189,47 @@ aws_unit() {
   run "${PREVIEW}" environment
   [ "${status}" -eq 0 ]
   grep -q "iltero environment detect --format=github-actions" "${STUB_LOG}"
+}
+
+@test "a named environment is the output, and the CLI is not asked" {
+  ENVIRONMENT=production run "${PREVIEW}" environment
+  [ "${status}" -eq 0 ]
+  [ "$(output_value environment)" = production ]
+  ! grep -q "environment detect" "${STUB_LOG}" || false
+}
+
+@test "a named environment that spans several lines is refused" {
+  ENVIRONMENT=$'production\nstaging' run "${PREVIEW}" environment
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"spans several lines"* ]]
+}
+
+@test "a named environment that cannot name a settings file is refused before anything runs" {
+  local name
+  for name in ../prod prod/x . ..; do
+    ENVIRONMENT="${name}" run "${PREVIEW}" environment
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"cannot name a unit's settings file"* ]]
+    run "${PREVIEW}" run "${name}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"cannot name a unit's settings file"* ]]
+  done
+  ! grep -q "^terraform" "${STUB_LOG}" || false
+}
+
+@test "when the CLI cannot choose an environment, the step names the environment input and keeps its exit code" {
+  DETECT_EXIT=2 run "${PREVIEW}" environment
+  [ "${status}" -eq 2 ]
+  [[ "${output}" == *"name one with the preview action's environment input"* ]]
+  DETECT_EXIT=3 run "${PREVIEW}" environment
+  [ "${status}" -eq 3 ]
+  [[ "${output}" != *"environment input"* ]]
+}
+
+@test "the environment input reaches the step that finds the environment" {
+  run awk '/- name: Find the environment/ { inside = 1; next } inside && /ENVIRONMENT:/ { sub(/^ +/, ""); print; exit }' \
+    "${REPO_ROOT}/preview/action.yml"
+  [ "${output}" = 'ENVIRONMENT: ${{ inputs.environment }}' ]
 }
 
 # --- units -------------------------------------------------------------------
@@ -385,16 +429,16 @@ aws_unit() {
 
 # --- checking ----------------------------------------------------------------
 
-@test "each plan is checked by the CLI with the pinned evaluator" {
+@test "each plan is checked locally by the CLI with the pinned evaluator, never on the server" {
   aws_unit units/network
   run "${PREVIEW}" run production
   local work="${RUNNER_TEMP}/iltero-preview/units/network"
-  grep -q "iltero assure --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan --environment=production --unit=network --out=${RUNNER_TEMP}/iltero-preview/out ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
+  grep -q "iltero iac check --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan --environment=production --unit=network --out=${RUNNER_TEMP}/iltero-preview/out --local ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
 }
 
 @test "a failing check fails the step and the summary shows the CLI's exit code" {
   aws_unit units/network
-  ASSURE_EXIT=1 run "${PREVIEW}" run production
+  CHECK_EXIT=1 run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
   grep -q "| network | exit 1 |" "${GITHUB_STEP_SUMMARY}"
 }
@@ -437,20 +481,20 @@ aws_unit() {
 
 @test "the environment's name cannot add Markdown to the heading" {
   aws_unit units/network
-  run "${PREVIEW}" run "[x](https://e.test)"
-  grep -qF '## Iltero preview: \[x\]\(https\:\/\/e\.test\)' "${GITHUB_STEP_SUMMARY}"
+  run "${PREVIEW}" run "[x](javascript:e.test)"
+  grep -qF '## Iltero preview: \[x\]\(javascript\:e\.test\)' "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "the CLI's output cannot mention anyone in the summary or the comment" {
   aws_unit units/network
-  ASSURE_OUTPUT="ping @octo/admins" run "${PREVIEW}" run production
+  CHECK_OUTPUT="ping @octo/admins" run "${PREVIEW}" run production
   grep -q "ping &#64;octo/admins" "${GITHUB_STEP_SUMMARY}"
   grep -q "ping &#64;octo/admins" "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
 }
 
 @test "output too long for a comment is left to the job summary" {
   aws_unit units/network
-  ASSURE_OUTPUT="$(printf 'x%.0s' {1..60001})" run "${PREVIEW}" run production
+  CHECK_OUTPUT="$(printf 'x%.0s' {1..60001})" run "${PREVIEW}" run production
   local comment="${RUNNER_TEMP}/iltero-preview/comment/comment.md"
   grep -q "^| network | exit 0 |$" "${comment}"
   grep -q "The CLI's output is too long for a comment." "${comment}"
@@ -468,7 +512,7 @@ aws_unit() {
 
 @test "the CLI's output stays inside its block when it has blank lines" {
   aws_unit units/network
-  ASSURE_OUTPUT=$'first\n\n[link](https://example.test)' run "${PREVIEW}" run production
+  CHECK_OUTPUT=$'first\n\n[link](https://example.test)' run "${PREVIEW}" run production
   local comment="${RUNNER_TEMP}/iltero-preview/comment/comment.md"
   run awk '/^<pre>$/ { inside = 1; next } /^<\/pre>$/ { inside = 0 } /link\]/ { print (inside ? "inside" : "outside") }' "${comment}"
   [ "${output}" = "inside" ]
@@ -476,7 +520,7 @@ aws_unit() {
 
 @test "a line of the CLI's output cannot act as a workflow command" {
   aws_unit units/network
-  ASSURE_OUTPUT="::set-output name=records-directory::/elsewhere" run "${PREVIEW}" run production
+  CHECK_OUTPUT="::set-output name=records-directory::/elsewhere" run "${PREVIEW}" run production
   commands_paused_around "::set-output name=records-directory::/elsewhere"
 }
 
