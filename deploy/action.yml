@@ -8,16 +8,8 @@ branding:
 
 inputs:
   environment:
-    description: The environment to deploy, as given to the open action in a governed run.
+    description: The environment to deploy.
     required: true
-  run-id:
-    description: The run's id, from the open action. Required for a project linked to Iltero Platform; empty otherwise.
-    required: false
-    default: ""
-  run-settings-digest:
-    description: The digest of the run's settings, from the open action. Required with run-id; empty otherwise.
-    required: false
-    default: ""
   working-directory:
     description: The stack's directory, relative to the repository root.
     required: false
@@ -46,6 +38,12 @@ outputs:
   report-directory:
     description: The directory that holds the reports. Empty when write-report is false.
     value: ${{ steps.deploy.outputs.report-directory }}
+  readings-directory:
+    description: >-
+      The directory that holds the two readings of the deployed resources for each unit whose record expects the
+      post-verify stage, as <unit>/first.json and <unit>/second.json. The readings can hold secret values. The action
+      does not upload them, and they are not meant to be kept: the record keeps only their digests.
+    value: ${{ steps.deploy.outputs.readings-directory }}
 
 runs:
   using: composite
@@ -60,11 +58,9 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         ENVIRONMENT: ${{ inputs.environment }}
-        RUN_ID: ${{ inputs.run-id }}
-        RUN_SETTINGS_DIGEST: ${{ inputs.run-settings-digest }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         WRITE_REPORT: ${{ inputs.write-report }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/deploy.sh" run "${ENVIRONMENT}" "${RUN_ID}" "${RUN_SETTINGS_DIGEST}"'
+      run: '"${GITHUB_ACTION_PATH}/../scripts/deploy.sh" run "${ENVIRONMENT}"'
 
     - name: Upload the records
       if: always() && steps.deploy.outputs.records-directory != ''

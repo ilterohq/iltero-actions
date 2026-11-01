@@ -8,8 +8,9 @@
 #   preview.sh check ARTIFACT_NAME    Refuse events other than pull_request and a bad artifact name;
 #                                     check that setup ran and, with REGISTRY_HOST set, that the host
 #                                     is valid and the job can request its identity token.
-#   preview.sh environment            Write the comment that stands until the run ends, then ask the
-#                                     CLI which environment the change targets. The CLI writes the output.
+#   preview.sh environment            Write the comment that stands until the run ends, then write the
+#                                     environment output: ENVIRONMENT when set, otherwise the one the CLI
+#                                     finds from the pull request's target branch.
 #   preview.sh run ENVIRONMENT        Plan and check every unit; write the job summary and the
 #                                     pull request comment that the comment action posts.
 #
@@ -23,11 +24,13 @@
 # evaluated, and the step fails.
 #
 # Environment:
+#   ENVIRONMENT      The environment to check against. Empty: the CLI finds it from the target branch.
 #   REGISTRY_HOST    The private module registry's host name. Empty: no registry token.
 
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/cli-stages.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/preview-providers.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/project.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/registry.sh"
@@ -69,7 +72,18 @@ cmd_environment() {
   dir="$(comment_dir)"
   write_comment "${dir}"
   write_output comment-dir "${dir}"
-  "${cli}" environment detect --format=github-actions
+  # A branch that deploys to several environments matches several rules, and
+  # the CLI does not choose one, so the workflow names it.
+  if [[ -n "${ENVIRONMENT:-}" ]]; then
+    require_environment_file_name "${ENVIRONMENT}"
+    write_output environment "${ENVIRONMENT}"
+    return 0
+  fi
+  local status=0
+  "${cli}" environment detect --format=github-actions || status=$?
+  [[ "${status}" -ne 2 ]] \
+    || echo "::notice::When the target branch deploys to several environments, name one with the preview action's environment input."
+  return "${status}"
 }
 
 # Prints the directory that holds the pull request comment.
@@ -163,9 +177,8 @@ write_comment() {
 
 cmd_run() {
   local environment="$1"
-  local cli tools work_root out summary
-  cli="$(cli_path)"
-  tools="$(tools_dir)"
+  local work_root out summary
+  require_environment_file_name "${environment}"
   work_root="${RUNNER_TEMP}/iltero-preview"
   out="${work_root}/out"
   summary="${work_root}/summary.md"
@@ -205,14 +218,13 @@ cmd_run() {
       failed=1
     else
       status=0
-      ILTERO_OPA_PATH="${tools}/bin/opa" "${cli}" assure --stage=plan \
-        --plan="${work}/plan.json" --saved-plan="${work}/tfplan" \
-        --environment="${environment}" --unit="${name}" --out="${out}" > "${work}/assure.txt" 2>&1 || status=$?
-      print_untrusted "${work}/assure.txt"
+      # A pull request's check stays local, never on the server, linked or not.
+      check_stage "${work}" plan --plan="${work}/plan.json" --saved-plan="${work}/tfplan" \
+        --environment="${environment}" --unit="${name}" --out="${out}" --local || status=$?
       result="exit ${status}"
       [[ "${PLANNED_WITHOUT_UPSTREAM}" != true ]] || result+=" (best effort: planned without upstream state)"
       [[ "${status}" -eq 0 ]] || failed=1
-      details_block "${name}" "${work}/assure.txt" >> "${details}"
+      details_block "${name}" "${work}/plan.txt" >> "${details}"
     fi
     token_env=""
     echo "::endgroup::"

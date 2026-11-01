@@ -4,9 +4,6 @@
 
 load test_helper
 
-readonly RUN_ID="7d8e9f00-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
-readonly RUN_SETTINGS_DIGEST="sha256:abc"
-
 setup() {
   make_runner
   export GITHUB_STEP_SUMMARY="${BATS_TEST_TMPDIR}/summary.md"
@@ -31,12 +28,15 @@ setup() {
 
   # A stand-in for Terraform. It records each call, and its environment at
   # init and plan. A file under MARKS named fail-<command>-<unit> makes that
-  # command fail for that unit.
+  # command fail for that unit; fail-refresh-<unit> fails only its readings,
+  # and fail-second-<unit> only its second reading.
   cat > "${TOOLS}/bin/terraform" << STUB
 #!/bin/bash
 unit="\$(basename "\${PWD}")"
 echo "terraform \${unit} \$*" >> "${STUB_LOG}"
 [[ ! -e "${MARKS}/fail-\$1-\${unit}" ]] || exit 1
+[[ "\$*" != *-refresh-only* || ! -e "${MARKS}/fail-refresh-\${unit}" ]] || exit 1
+[[ "\$*" != *reading-second.tfplan* || ! -e "${MARKS}/fail-second-\${unit}" ]] || exit 1
 case "\$1" in
   init | plan) env | sort > "${BATS_TEST_TMPDIR}/terraform-env-\$1-\${unit}"; echo "terraform says \$1" ;;
   apply) echo '{"@level":"info"}'; echo "terraform warns on apply" >&2 ;;
@@ -48,7 +48,9 @@ STUB
   # the exit code of that stage for that unit; exit-state-<unit> holds the
   # state check's, and exit-report-<unit> the report's. no-report-<unit> makes
   # the report exit 5 without writing, and no-markdown-<unit> makes it write
-  # only the HTML page. Each stage writes the unit's record; the report writes
+  # only the HTML page. Each stage writes the unit's record, which expects
+  # post-verify when expects-post-verify-<unit> exists and is unreadable when
+  # bad-record-<unit> does; the report writes
   # record-report.<format> into --out.
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
@@ -90,7 +92,10 @@ for arg in "$@"; do
   esac
 done
 mkdir -p "${out}/units/${unit}"
-touch "${out}/units/${unit}/car.json"
+expected='"plan", "pre_deploy", "post_deploy"'
+[[ ! -e "${MARKS}/expects-post-verify-${unit}" ]] || expected="${expected}, \"post_verify\""
+echo "{\"expected_stages\": [${expected}]}" > "${out}/units/${unit}/car.json"
+[[ ! -e "${MARKS}/bad-record-${unit}" ]] || echo "not a record" > "${out}/units/${unit}/car.json"
 echo "${stage} <checked> for ${unit}"
 mark="${MARKS}/exit-${stage}-${unit}"
 [[ -e "${mark}" ]] && exit "$(cat "${mark}")"
@@ -109,6 +114,7 @@ fi
 exec python3 "$@"
 STUB
   chmod +x "${TOOLS}/bin/terraform" "${TOOLS}/venv/bin/iltero" "${TOOLS}/venv/bin/python"
+  stub sleep 'echo "sleep $*" >> "${STUB_LOG}"'
   export MARKS
 
   STACK="${BATS_TEST_TMPDIR}/stack"
@@ -125,11 +131,7 @@ JSON
 }
 
 deploy() {
-  run "${DEPLOY}" run production "${RUN_ID}" "${RUN_SETTINGS_DIGEST}"
-}
-
-deploy_locally() {
-  run "${DEPLOY}" run production "" ""
+  run "${DEPLOY}" run production
 }
 
 # --- check -------------------------------------------------------------------
@@ -152,45 +154,54 @@ deploy_locally() {
 
 # --- linked or local ---------------------------------------------------------
 
-@test "a linked project deploys only in a governed run" {
-  deploy_locally
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"This project is linked to Iltero Platform. Deploy it in a governed run: "* ]]
-  ! grep -q "^terraform" "${STUB_LOG}" || false
-}
-
-@test "a governed run needs id-token: write" {
+@test "a linked project needs id-token: write" {
   ACTIONS_ID_TOKEN_REQUEST_TOKEN="" deploy
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"id-token: write"* ]]
-}
-
-@test "a project without a platform section cannot deploy in a governed run" {
-  LINKED=false deploy
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"no platform section"* ]]
   ! grep -q "^terraform" "${STUB_LOG}" || false
 }
 
+@test "an unreadable config report stops the deploy before Terraform runs" {
+  LINKED='"yes"' deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"config report could not be read"* ]]
+  ! grep -q "^terraform" "${STUB_LOG}" || false
+}
+
+@test "an environment that cannot name a settings file is refused before Terraform runs" {
+  run "${DEPLOY}" run ../production
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"cannot name a unit's settings file"* ]]
+  ! grep -q "^terraform" "${STUB_LOG}" || false
+}
+
+@test "run takes only the environment" {
+  run "${DEPLOY}" run
+  [ "${status}" -eq 1 ]
+  run "${DEPLOY}" run production extra
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Usage: deploy.sh run ENVIRONMENT"* ]]
+}
+
 @test "a project without a platform section cannot use the Iltero registry" {
-  LINKED=false REGISTRY_HOST="registry.example.io" deploy_locally
+  LINKED=false REGISTRY_HOST="registry.example.io" deploy
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"module registry"* ]]
 }
 
 @test "a project without a platform section deploys locally: no run, no upload, no pre-deploy, no identity token" {
   unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
-  LINKED=false deploy_locally
+  LINKED=false deploy
   [ "${status}" -eq 0 ]
   ! grep -qE -- "--run-id|--run-settings-digest|--upload|--stage=pre_deploy" "${STUB_LOG}" || false
-  grep -q "iltero assure --stage=plan .*--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out$" "${STUB_LOG}"
-  grep -q "iltero assure --stage=post_deploy .*--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out$" "${STUB_LOG}"
+  grep -q "iltero iac check --stage=plan .*--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --environment=production$" "${STUB_LOG}"
+  grep -q "iltero iac check --stage=post_deploy .*--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --environment=production$" "${STUB_LOG}"
   grep -q "terraform network apply" "${STUB_LOG}"
   grep -q "| network | exit 0 | not in scope | exit 0 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a config the CLI cannot report never falls back to a local deploy" {
-  CONFIG_EXIT=2 run "${DEPLOY}" run production "" ""
+  CONFIG_EXIT=2 deploy
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"no valid .iltero/config.yml"* ]]
   [ "$(grep -v '^iltero config show' "${STUB_LOG}")" = "" ]
@@ -241,17 +252,17 @@ deploy_locally() {
   echo '[{"name": "network", "working_directory": "units/network"}]' > "${UNITS_JSON}"
   deploy
   [ "${status}" -eq 0 ]
-  run bash -c "grep -oE '^(terraform network [a-z]+|iltero assure --stage=[a-z_]+|iltero state check)' '${STUB_LOG}' | tr '\n' ','"
-  [ "${output}" = "terraform network init,iltero state check,terraform network plan,terraform network show,iltero assure --stage=plan,iltero assure --stage=pre_deploy,terraform network apply,terraform network show,iltero assure --stage=post_deploy," ]
+  run bash -c "grep -oE '^(terraform network [a-z]+|iltero iac check --stage=[a-z_]+|iltero state check)' '${STUB_LOG}' | tr '\n' ','"
+  [ "${output}" = "terraform network init,iltero state check,terraform network plan,terraform network show,iltero iac check --stage=plan,iltero iac check --stage=pre_deploy,terraform network apply,terraform network show,iltero iac check --stage=post_deploy," ]
 }
 
-@test "every stage joins the run and uploads" {
+@test "every stage in a linked project names the environment, joins the run and uploads" {
   deploy
   local work="${RUNNER_TEMP}/iltero-deploy/units/network"
-  local run_args="--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --run-id=${RUN_ID} --run-settings-digest=${RUN_SETTINGS_DIGEST} --upload"
-  grep -qx "iltero assure --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan --environment=production ${run_args}" "${STUB_LOG}"
-  grep -qx "iltero assure --stage=pre_deploy ${run_args}" "${STUB_LOG}"
-  grep -qx "iltero assure --stage=post_deploy --plan=${work}/plan.json --saved-plan=${work}/tfplan --apply-log=${work}/apply.ndjson --state=${work}/state.json ${run_args}" "${STUB_LOG}"
+  local run_args="--unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --environment=production --upload"
+  grep -qx "iltero iac check --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan ${run_args}" "${STUB_LOG}"
+  grep -qx "iltero iac check --stage=pre_deploy ${run_args}" "${STUB_LOG}"
+  grep -qx "iltero iac check --stage=post_deploy --plan=${work}/plan.json --saved-plan=${work}/tfplan --apply-log=${work}/apply.ndjson --state=${work}/state.json ${run_args}" "${STUB_LOG}"
 }
 
 @test "the apply uses the saved plan and its output is kept unchanged for the CLI" {
@@ -419,6 +430,123 @@ deploy_locally() {
   grep -q "state &lt;checked&gt; for network" "${GITHUB_STEP_SUMMARY}"
 }
 
+# --- post_verify -------------------------------------------------------------
+
+@test "a unit whose record does not expect post-verify is not read back" {
+  deploy
+  [ "${status}" -eq 0 ]
+  ! grep -q -- "-refresh-only" "${STUB_LOG}" || false
+  ! grep -q "stage=post_verify" "${STUB_LOG}" || false
+  ! grep -q "^sleep" "${STUB_LOG}" || false
+  grep -q "| network | exit 0 | exit 0 | exit 0 | exit 0 | not in scope |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "every unit deploys and is read back once before any second reading, each the interval after its first" {
+  touch "${MARKS}/expects-post-verify-network" "${MARKS}/expects-post-verify-compute"
+  deploy
+  [ "${status}" -eq 0 ]
+  run bash -c "grep -oE '^(terraform [a-z]+ (apply|plan -input=false -no-color -refresh-only)|sleep [0-9]+|iltero iac check --stage=post_verify --[a-z-]+=[^ ]+/(network|compute)/)' '${STUB_LOG}' | tr '\n' ','"
+  [[ "${output}" =~ ^terraform\ network\ apply,terraform\ compute\ apply,terraform\ network\ plan[^,]*,terraform\ compute\ plan[^,]*,sleep\ 6[01],terraform\ network\ plan[^,]*,iltero[^,]*network/,sleep\ 6[01],terraform\ compute\ plan[^,]*,iltero[^,]*compute/,$ ]]
+}
+
+@test "post-verify gets both readings in order, and joins the run" {
+  touch "${MARKS}/expects-post-verify-network"
+  deploy
+  [ "${status}" -eq 0 ]
+  local readings="${RUNNER_TEMP}/iltero-deploy/readings/network"
+  grep -qx "iltero iac check --stage=post_verify --refresh-plan=${readings}/first.json --refresh-plan=${readings}/second.json --minimum-interval-seconds=60 --unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --environment=production --upload" "${STUB_LOG}"
+  [ "$(cat "${readings}/first.json")" = '{}' ]
+  [ "$(cat "${readings}/second.json")" = '{}' ]
+  [ "$(output_value readings-directory)" = "${RUNNER_TEMP}/iltero-deploy/readings" ]
+  grep -q "| network | exit 0 | exit 0 | exit 0 | exit 0 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "<summary>network: post-verify</summary>" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a reading is a saved refresh-only plan with the plan's variables, and is never applied" {
+  touch "${MARKS}/expects-post-verify-compute"
+  mkdir -p units/compute/config
+  echo '{}' > units/compute/config/production.tfvars.json
+  echo 'variable "enable_remote_state_dependencies" {}' > units/compute/main.tf
+  deploy
+  [ "${status}" -eq 0 ]
+  local work="${RUNNER_TEMP}/iltero-deploy/units/compute"
+  grep -qx "terraform compute plan -input=false -no-color -refresh-only -lock-timeout=5m -out=${work}/reading-first.tfplan -var-file=${STACK}/units/compute/config/production.tfvars.json -var-file=${work}/with-upstream.tfvars" "${STUB_LOG}"
+  grep -qx "terraform compute show -json ${work}/reading-second.tfplan" "${STUB_LOG}"
+  [ "$(grep -c "^terraform compute apply" "${STUB_LOG}")" -eq 1 ]
+}
+
+@test "no unit is read back when a unit failed to deploy" {
+  touch "${MARKS}/expects-post-verify-network" "${MARKS}/expects-post-verify-compute"
+  echo 1 > "${MARKS}/exit-plan-compute"
+  deploy
+  [ "${status}" -eq 1 ]
+  ! grep -q -- "-refresh-only" "${STUB_LOG}" || false
+  grep -q "| network | exit 0 | exit 0 | exit 0 | exit 0 | - |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a failed post-verify check fails the step with the CLI's code, after every unit is verified" {
+  touch "${MARKS}/expects-post-verify-network" "${MARKS}/expects-post-verify-compute"
+  echo 1 > "${MARKS}/exit-post_verify-network"
+  deploy
+  [ "${status}" -eq 1 ]
+  grep -q "stage=post_verify.*--unit=compute" "${STUB_LOG}"
+  [[ "${output}" == *"::error::The post-verify stage failed for one or more units. See the job summary."* ]]
+  grep -q "| network | exit 0 | exit 0 | exit 0 | exit 0 | exit 1 |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| compute | exit 0 | exit 0 | exit 0 | exit 0 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a failed reading fails the step, and the unit gets no post-verify check" {
+  touch "${MARKS}/expects-post-verify-network" "${MARKS}/fail-refresh-network"
+  deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"::error::Terraform could not read back unit 'network'."* ]]
+  ! grep -q "stage=post_verify" "${STUB_LOG}" || false
+  grep -q "| network | exit 0 | exit 0 | exit 0 | exit 0 | terraform failed |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a unit's report is written after its post-verify stage" {
+  touch "${MARKS}/expects-post-verify-network"
+  deploy
+  [ "${status}" -eq 0 ]
+  run bash -c "grep -nE '^iltero (iac check --stage=post_verify .*--unit=network|record report [^ ]*/network )' '${STUB_LOG}' | cut -d: -f2 | cut -c1-30"
+  [[ "${output}" == "iltero iac check --stage=post_"*"iltero record report"* ]]
+}
+
+@test "a record the action cannot read stops the step" {
+  touch "${MARKS}/bad-record-compute" "${MARKS}/expects-post-verify-network"
+  deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The CLI's record of unit 'compute' could not be read."* ]]
+  grep -q "| network | exit 0 | exit 0 | exit 0 | exit 0 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| compute | exit 0 | exit 0 | exit 0 | exit 0 | record unreadable |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a failed second reading fails the step, is not kept, and the unit gets no post-verify check" {
+  touch "${MARKS}/expects-post-verify-network" "${MARKS}/fail-second-network"
+  deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"::error::Terraform could not read back unit 'network'."* ]]
+  ! grep -q "stage=post_verify" "${STUB_LOG}" || false
+  [ -f "${RUNNER_TEMP}/iltero-deploy/readings/network/first.json" ]
+  [ ! -e "${RUNNER_TEMP}/iltero-deploy/readings/network/second.json" ]
+  grep -q "| network | exit 0 | exit 0 | exit 0 | exit 0 | terraform failed |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "post-verify in a local deploy neither joins a run nor uploads" {
+  LINKED=false
+  touch "${MARKS}/expects-post-verify-network"
+  deploy
+  [ "${status}" -eq 0 ]
+  local readings="${RUNNER_TEMP}/iltero-deploy/readings/network"
+  grep -qx "iltero iac check --stage=post_verify --refresh-plan=${readings}/first.json --refresh-plan=${readings}/second.json --minimum-interval-seconds=60 --unit=network --out=${RUNNER_TEMP}/iltero-deploy/out --environment=production" "${STUB_LOG}"
+}
+
+@test "the deploy says why it waits before a second reading" {
+  touch "${MARKS}/expects-post-verify-network"
+  deploy
+  [[ "${output}" == *"Waiting 6"[01]" seconds before the second reading of unit 'network'."* ]]
+}
+
 # --- summary and outputs -----------------------------------------------------
 
 @test "the summary names each stage's output in words" {
@@ -514,7 +642,7 @@ deploy_locally() {
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"::error::The CLI wrote no record-report.html for unit 'network'."* ]]
   [[ "${output}" == *"The CLI wrote no report for one or more units. See the log."* ]]
-  grep -q "iltero assure --stage=post_deploy .*--unit=compute" "${STUB_LOG}"
+  grep -q "iltero iac check --stage=post_deploy .*--unit=compute" "${STUB_LOG}"
   ! grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}" || false
   [ ! -e "${old}/record-report.md" ]
 }

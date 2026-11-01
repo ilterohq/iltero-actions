@@ -53,15 +53,19 @@ refuse_untrusted_event() {
   esac
 }
 
+# Succeeds when the job runs on a pull request event.
+is_pull_request_event() {
+  case "${GITHUB_EVENT_NAME:-}" in
+    pull_request | pull_request_review | pull_request_review_comment) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Refuses pull request events. A pull request may only run a local preview,
 # never a governed run.
 refuse_pull_request() {
-  case "${GITHUB_EVENT_NAME:-}" in
-    pull_request | pull_request_review | pull_request_review_comment)
-      die "This action does not run on pull request events. Use the preview action instead."
-      ;;
-    *) ;;
-  esac
+  ! is_pull_request_event \
+    || die "This action does not run on pull request events. Use the preview action instead."
 }
 
 # Stops unless the job may request its GitHub identity token, which the CLI
@@ -83,7 +87,7 @@ cli_path() {
 terraform_path() {
   local terraform
   terraform="$(tools_dir)/bin/terraform"
-  [[ -x "${terraform}" ]] || die "Terraform is not installed. Run the setup action first in this job."
+  [[ -x "${terraform}" ]] || die "Terraform is not installed. Run the setup action first in this job, with install-terraform true."
   echo "${terraform}"
 }
 
