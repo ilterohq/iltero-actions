@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 #
-# Tests for scripts/lib/terraform.sh, which runs Terraform for deploy and preview.
+# Tests for scripts/iac/lib/terraform.sh, which runs Terraform for deploy and preview.
 
-load test_helper
+load ../test_helper
 
 setup() {
   make_runner
@@ -27,7 +27,7 @@ STUB
   stub env 'if [[ $# -gt 0 ]]; then echo "env $*" >> "${STUB_LOG}"; fi; exec /usr/bin/env "$@"'
   export JOB_SECRET="job-secret"
   source "${REPO_ROOT}/scripts/lib/common.sh"
-  source "${REPO_ROOT}/scripts/lib/terraform.sh"
+  source "${REPO_ROOT}/scripts/iac/lib/terraform.sh"
 }
 
 @test "Terraform gets only PATH, HOME, its own settings and the pairs given" {
@@ -45,7 +45,7 @@ STUB
   hidden() { :; }
   export -f hidden
   run /usr/bin/env "a-b=hyphen" "x.y=dot" "BASH_FUNC_bad%%=x" bash -c \
-    "source '${REPO_ROOT}/scripts/lib/common.sh'; source '${REPO_ROOT}/scripts/lib/terraform.sh'; run_terraform '${BATS_TEST_TMPDIR}/work' -- version"
+    "source '${REPO_ROOT}/scripts/lib/common.sh'; source '${REPO_ROOT}/scripts/iac/lib/terraform.sh'; run_terraform '${BATS_TEST_TMPDIR}/work' -- version"
   [ "${status}" -eq 0 ]
   [[ "${output}" == *"args version"* ]]
   [[ "${output}" != *"BASH_FUNC_"* ]]

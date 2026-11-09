@@ -18,7 +18,10 @@ inputs:
     required: false
     default: "."
   registry-host:
-    description: Host name of the private module registry. Leave empty when the stack uses no private modules.
+    description: >-
+      Host name of Iltero Platform's private module registry, from which terraform init downloads private modules.
+      Leave empty when the stack uses no private modules. When it is set, the project must be linked to Iltero
+      Platform, and the job needs id-token: write.
     required: false
     default: ""
   upload-records:
@@ -45,7 +48,7 @@ outputs:
     description: >-
       Name of the artifact that holds the pull request comment, for the comment action. Empty when no comment was
       written.
-    value: ${{ steps.environment.outputs.comment-dir != '' && format('{0}-comment', inputs.artifact-name) || '' }}
+    value: ${{ steps.environment.outputs.comment-directory != '' && format('{0}-comment', inputs.artifact-name) || '' }}
 
 runs:
   using: composite
@@ -56,7 +59,7 @@ runs:
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         UPLOAD_RECORDS: ${{ inputs.upload-records }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" check "${ARTIFACT_NAME}"'
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/preview.sh" check "${ARTIFACT_NAME}"'
 
     - name: Find the environment
       id: environment
@@ -66,7 +69,7 @@ runs:
         ENVIRONMENT: ${{ inputs.environment }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" environment'
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/preview.sh" environment'
 
     - name: Plan and check each unit
       id: preview
@@ -76,7 +79,7 @@ runs:
         ENVIRONMENT: ${{ steps.environment.outputs.environment }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/preview.sh" run "${ENVIRONMENT}"'
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/preview.sh" run "${ENVIRONMENT}"'
 
     - name: Upload the records
       if: always() && inputs.upload-records == 'true' && steps.preview.outputs.records-directory != ''
@@ -88,10 +91,10 @@ runs:
         if-no-files-found: error
 
     - name: Upload the comment
-      if: always() && steps.environment.outputs.comment-dir != ''
+      if: always() && steps.environment.outputs.comment-directory != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}-comment
-        path: ${{ steps.environment.outputs.comment-dir }}
+        path: ${{ steps.environment.outputs.comment-directory }}
         retention-days: 1
         if-no-files-found: error

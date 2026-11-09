@@ -38,9 +38,18 @@ inputs:
     required: false
     default: ""
   state:
-    description: The state after the apply, from `terraform show -json`. Required for post_deploy.
+    description: >-
+      The state after the apply, from `terraform show -json`. Required for post_deploy, unless state-unreadable is
+      true.
     required: false
     default: ""
+  state-unreadable:
+    description: >-
+      true or false. For the post_deploy stage only. Set it to true when `terraform show -json` could not read the
+      state after the apply, and leave state empty. The CLI then records the apply from the apply log alone, and the
+      step fails.
+    required: false
+    default: "false"
   refresh-plans:
     description: >-
       Two readings of the deployed resources, one path per line, in the order they were taken. Required for
@@ -51,9 +60,10 @@ inputs:
     default: ""
   records-directory:
     description: >-
-      Where the CLI keeps the records. Empty: a folder in the runner's temporary directory. A relative path is
-      relative to working-directory. pre_deploy reads the plan stage's record from it, so a job that runs
-      pre_deploy apart from plan must download the plan job's records artifact and pass its directory here.
+      Where the CLI keeps the records. Empty: a directory of its own for each environment, under the runner's
+      temporary directory. A relative path is relative to working-directory. pre_deploy reads the plan stage's record
+      from it. When pre_deploy runs in a different job from plan, download the plan job's records artifact and pass
+      its directory here.
     required: false
     default: ""
   write-report:
@@ -63,11 +73,18 @@ inputs:
       to the job summary. When the CLI does not write both files, the step fails at its end.
     required: false
     default: "true"
+  store-records:
+    description: >-
+      true or false. When true, the CLI keeps the stage's record and every file it cites in the run's artifact store,
+      the bucket that Iltero Platform names for the run, with the job's own cloud credentials. Only in a project
+      linked to Iltero Platform. Not used on pull_request events. A failed store fails the step.
+    required: false
+    default: "false"
   artifact-name:
     description: >-
-      Name of the artifact that holds the records. Empty: iltero-records-<unit>. Each step replaces the artifact
-      with the records in records-directory, so two jobs that record the same unit at the same time need
-      different names.
+      Name of the artifact that holds the records. Empty: iltero-records-<environment>-<unit>. Each step replaces the
+      artifact with the records in records-directory, so two jobs that record the same environment and unit from
+      different records directories need different names.
     required: false
     default: ""
 
@@ -90,7 +107,7 @@ runs:
       env:
         STAGE: ${{ inputs.stage }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/record-iac.sh" check "${STAGE}"'
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/record.sh" check "${STAGE}"'
 
     - name: Record the stage
       id: record
@@ -104,11 +121,13 @@ runs:
         SAVED_PLAN: ${{ inputs.saved-plan }}
         APPLY_LOG: ${{ inputs.apply-log }}
         STATE: ${{ inputs.state }}
+        STATE_UNREADABLE: ${{ inputs.state-unreadable }}
         REFRESH_PLANS: ${{ inputs.refresh-plans }}
         RECORDS_DIRECTORY: ${{ inputs.records-directory }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         WRITE_REPORT: ${{ inputs.write-report }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/record-iac.sh" run "${STAGE}"'
+        STORE_RECORDS: ${{ inputs.store-records }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/record.sh" run "${STAGE}"'
 
     - name: Upload the records
       if: always() && steps.record.outputs.records-directory != ''
@@ -116,8 +135,7 @@ runs:
       with:
         name: ${{ steps.record.outputs.artifact-name }}
         path: ${{ steps.record.outputs.records-directory }}
-        retention-days: 90
-        if-no-files-found: ignore
+        if-no-files-found: warn
         overwrite: true
 
     - name: Upload the reports
@@ -126,6 +144,5 @@ runs:
       with:
         name: ${{ steps.record.outputs.artifact-name }}-report
         path: ${{ steps.record.outputs.report-directory }}
-        retention-days: 90
         if-no-files-found: ignore
         overwrite: true

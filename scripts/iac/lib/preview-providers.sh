@@ -9,6 +9,11 @@
 # Environment variables the adapters set for Terraform, as NAME=value.
 PREVIEW_PROVIDER_ENV=()
 
+# The mock credential and the region the AWS adapter gives Terraform. Neither
+# reaches AWS: every credential check is skipped.
+readonly AWS_PREVIEW_MOCK_CREDENTIAL="iltero-preview-mock"
+readonly AWS_PREVIEW_REGION="us-east-1"
+
 preview_provider_aws() {
   local dir="$1"
   local assume_role=""
@@ -26,10 +31,10 @@ ${assume_role}
 }
 HCL
   PREVIEW_PROVIDER_ENV+=(
-    AWS_ACCESS_KEY_ID=iltero-preview-mock
-    AWS_SECRET_ACCESS_KEY=iltero-preview-mock
+    AWS_ACCESS_KEY_ID="${AWS_PREVIEW_MOCK_CREDENTIAL}"
+    AWS_SECRET_ACCESS_KEY="${AWS_PREVIEW_MOCK_CREDENTIAL}"
     AWS_EC2_METADATA_DISABLED=true
-    AWS_REGION=us-east-1
+    AWS_REGION="${AWS_PREVIEW_REGION}"
   )
 }
 

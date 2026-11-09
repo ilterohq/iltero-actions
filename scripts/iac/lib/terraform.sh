@@ -1,23 +1,25 @@
 #!/bin/bash
 #
-# Runs Terraform with a scrubbed environment, and reads what a unit declares.
+# Finds the Terraform that setup installed, runs it with a scrubbed
+# environment, and reads what a unit declares.
 # Source this file after common.sh.
 
 # The variable a unit declares to read other units' state. A deploy sets it
-# to true, so a placeholder can never be deployed; a preview sets it to false.
+# to true, so a unit never deploys with placeholder values in place of
+# upstream state. A preview sets it to false.
 readonly REMOTE_STATE_SWITCH="enable_remote_state_dependencies"
+
+# Prints the absolute path of the Terraform binary that `setup` installed.
+terraform_path() {
+  local terraform
+  terraform="$(tools_dir)/bin/terraform"
+  [[ -x "${terraform}" ]] || die "Terraform is not installed. Run the setup action first in this job, with install-terraform true."
+  echo "${terraform}"
+}
 
 # Prints the folder where Terraform keeps a unit's working data.
 terraform_data_dir() {
   echo "$1/terraform-data"
-}
-
-# Stops unless ENVIRONMENT can name a unit's settings files, which sit in the
-# unit's config folder: it holds no "/" and is not "." or "..".
-require_environment_file_name() {
-  local environment="$1"
-  [[ -n "${environment}" && "${environment}" != */* && "${environment}" != . && "${environment}" != .. ]] \
-    || die "The environment '${environment}' cannot name a unit's settings file. Use a name without '/'."
 }
 
 # Prints the path of a unit's backend settings for an environment. The file
@@ -46,8 +48,8 @@ readonly TERRAFORM_BASE_ENV=(PATH HOME TF_IN_AUTOMATION TF_INPUT TF_DATA_DIR)
 # Runs Terraform for the unit whose work folder is WORK. Its environment holds
 # only PATH, HOME, Terraform's automation settings and the NAME=VALUE pairs
 # given before "--", and nothing else from the job's environment. The pairs
-# are exported in a subshell, and the CLI's Python starts Terraform with only
-# those names, so no value is passed on a command line.
+# are exported in a subshell, and the Python that `setup` installed starts
+# Terraform with only those names, so no value is passed on a command line.
 run_terraform() {
   local work="$1"
   shift

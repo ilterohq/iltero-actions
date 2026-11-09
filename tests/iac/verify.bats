@@ -1,18 +1,21 @@
 #!/usr/bin/env bats
 #
-# Tests for scripts/verify.sh, the body of the `verify` action.
+# Tests for scripts/iac/verify.sh, the body of the `verify` action.
 
-load test_helper
+load ../test_helper
 
 setup() {
   make_runner
   export GITHUB_STEP_SUMMARY="${BATS_TEST_TMPDIR}/summary.md"
   : > "${GITHUB_STEP_SUMMARY}"
-  VERIFY="${REPO_ROOT}/scripts/verify.sh"
+  VERIFY="${REPO_ROOT}/scripts/iac/verify.sh"
   TOOLS="${RUNNER_TEMP}/iltero-tools"
   export MARKS="${BATS_TEST_TMPDIR}/marks"
   export OUT="${BATS_TEST_TMPDIR}/out"
+  # The CLI stand-in lists these units when a test writes this file.
+  export UNITS_JSON="${BATS_TEST_TMPDIR}/units.json"
   export WRITE_REPORT="true"
+  export ENVIRONMENT="production"
   mkdir -p "${TOOLS}/venv/bin" "${MARKS}" "${OUT}"
   ln -s "$(command -v python3)" "${TOOLS}/venv/bin/python"
 
@@ -27,13 +30,14 @@ setup() {
 #!/bin/bash
 echo "iltero $* ILTERO_OPA_PATH=${ILTERO_OPA_PATH}" >> "${STUB_LOG}"
 if [[ "$1 $2" == "units list" ]]; then
+  [[ ! -e "${UNITS_JSON:-}" ]] || { cat "${UNITS_JSON}"; exit 0; }
   echo '[{"name": "network", "working_directory": "units/network"}, {"name": "compute", "working_directory": "units/compute"}]'
   exit 0
 fi
 if [[ "$1 $2" == "record build" ]]; then
   unit="${4#--unit=}"
   [[ ! -e "${MARKS}/exit-build-${unit}" ]] || exit "$(cat "${MARKS}/exit-build-${unit}")"
-  [[ -e "${MARKS}/no-bundle-${unit}" ]] || mkdir -p "${OUT}/units/${unit}/car-0001"
+  [[ -e "${MARKS}/no-bundle-${unit}" ]] || mkdir -p "${3#--out=}/units/${unit}/car-0001"
   echo "built <${unit}>"
   exit 0
 fi
@@ -57,7 +61,7 @@ STUB
 
   STACK="${BATS_TEST_TMPDIR}/stack"
   mkdir -p "${STACK}/units/network" "${STACK}/units/compute"
-  cd "${STACK}"
+  cd "${STACK}" || return
 }
 
 @test "check refuses pull_request_target and workflow_run events, and needs setup" {
@@ -80,10 +84,105 @@ STUB
   grep -q "iltero record build --out=${OUT} --unit=network ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
 }
 
+@test "an empty records directory is refused" {
+  run "${VERIFY}" run ""
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The records directory is empty. Pass the deploy action's records-directory."* ]]
+  ! grep -q "^records-directory=" "${GITHUB_OUTPUT}" || false
+  ! grep -q "record build" "${STUB_LOG}" || false
+}
+
+@test "a missing relative records directory is named as given" {
+  run "${VERIFY}" run "nowhere"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The records directory 'nowhere' does not exist."* ]]
+  ! grep -q "^records-directory=" "${GITHUB_OUTPUT}" || false
+  ! grep -q "record build" "${STUB_LOG}" || false
+}
+
 @test "a missing records directory is refused" {
   run "${VERIFY}" run "${BATS_TEST_TMPDIR}/nowhere"
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"does not exist"* ]]
+}
+
+@test "the step fails with the first failing unit's exit code" {
+  echo 4 > "${MARKS}/exit-build-network"
+  echo 9 > "${MARKS}/exit-verify-compute"
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 4 ]
+}
+
+@test "a stack with no unit stops the step" {
+  echo '[]' > "${UNITS_JSON}"
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The CLI lists no units in this stack, so there is nothing to check."* ]]
+}
+
+@test "the bundles artifact is named after the environment unless a name is given" {
+  run "${VERIFY}" run "${OUT}"
+  [ "$(output_value artifact-name)" = "iltero-record-bundles-production" ]
+  : > "${GITHUB_OUTPUT}"
+  ARTIFACT_NAME=network-bundles run "${VERIFY}" run "${OUT}"
+  [ "$(output_value artifact-name)" = "network-bundles" ]
+}
+
+@test "the summary names the environment" {
+  run "${VERIFY}" run "${OUT}"
+  grep -q "^## Iltero record bundles: production$" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "an environment that cannot name an artifact needs an artifact name" {
+  ENVIRONMENT="prod env" run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The default artifact name 'iltero-record-bundles-prod env' is not a valid artifact name."* ]]
+}
+
+@test "an environment that cannot name a directory or a file is refused before anything is written" {
+  local name
+  for name in .. . a/b ../x; do
+    : > "${GITHUB_OUTPUT}"
+    ENVIRONMENT="${name}" run "${VERIFY}" run "${OUT}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"cannot name a directory or a file"* ]]
+    [ ! -s "${GITHUB_OUTPUT}" ]
+  done
+  ! grep -q "record build" "${STUB_LOG}" || false
+}
+
+@test "verify needs the environment" {
+  ENVIRONMENT="" run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The environment input is required."* ]]
+  ! grep -q "record build" "${STUB_LOG}" || false
+}
+
+@test "check refuses an artifact name that is not a valid name" {
+  ARTIFACT_NAME="records/../x" run "${VERIFY}" check
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Invalid artifact name 'records/../x'."* ]]
+}
+
+@test "a relative records directory is given to the upload as an absolute path" {
+  mkdir -p records
+  run "${VERIFY}" run records
+  [ "$(output_value records-directory)" = "${STACK}/records" ]
+}
+
+@test "the bundles are uploaded from the directory the step checked, and only when it ran" {
+  grep -qF "if: always() && steps.verify.outputs.records-directory != ''" "${REPO_ROOT}/verify/action.yml"
+  # The action's own text is matched as written.
+  # shellcheck disable=SC2016
+  grep -qF 'path: ${{ steps.verify.outputs.records-directory }}/units/*/car-*/' "${REPO_ROOT}/verify/action.yml"
+}
+
+@test "each unit starts with an empty work directory" {
+  mkdir -p "${RUNNER_TEMP}/iltero-verify/production/units/network"
+  echo "old output" > "${RUNNER_TEMP}/iltero-verify/production/units/network/verify.txt"
+  touch "${MARKS}/no-bundle-network"
+  run "${VERIFY}" run "${OUT}"
+  ! grep -q "old output" "${GITHUB_STEP_SUMMARY}" || false
 }
 
 @test "a failed build is reported, the other units are still checked, and the step fails" {
@@ -97,7 +196,7 @@ STUB
 @test "a failed verification fails the step with the CLI's code in the summary" {
   echo 9 > "${MARKS}/exit-verify-compute"
   run "${VERIFY}" run "${OUT}"
-  [ "${status}" -eq 1 ]
+  [ "${status}" -eq 9 ]
   grep -q "| compute | exit 0 | exit 9 |" "${GITHUB_STEP_SUMMARY}"
 }
 
@@ -131,7 +230,7 @@ STUB
 @test "each unit's bundle gets a report, as an HTML page for the artifact and in the summary" {
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 0 ]
-  local reports="${RUNNER_TEMP}/iltero-verify/reports"
+  local reports="${RUNNER_TEMP}/iltero-verify/production/reports"
   grep -qx "report-directory=${reports}" "${GITHUB_OUTPUT}"
   grep -q "^iltero record report ${OUT}/units/network/car-0001/ --format=html --out=${reports}/network " "${STUB_LOG}"
   grep -q "^iltero record report ${OUT}/units/compute/car-0001/ --format=markdown --out=${reports}/compute " "${STUB_LOG}"
@@ -144,7 +243,7 @@ STUB
 @test "a bundle that fails verification still gets a report" {
   echo 9 > "${MARKS}/exit-verify-network"
   run "${VERIFY}" run "${OUT}"
-  [ "${status}" -eq 1 ]
+  [ "${status}" -eq 9 ]
   grep -q "^iltero record report ${OUT}/units/network/car-0001/ --format=html" "${STUB_LOG}"
 }
 
@@ -190,4 +289,24 @@ STUB
   run "${VERIFY}" run "${OUT}"
   ! grep -q "record report ${OUT}/units/network" "${STUB_LOG}" || false
   grep -q "record report ${OUT}/units/compute" "${STUB_LOG}"
+}
+
+@test "a unit directory that starts with a dash is refused" {
+  echo '[{"name": "network", "working_directory": "-L"}]' > "${UNITS_JSON}"
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Unit 'network' has a directory that starts with '-': '-L'. Rename the directory."* ]]
+}
+
+@test "a records directory that looks like an option is a directory in the project" {
+  local project="${BATS_TEST_TMPDIR}/project" name
+  mkdir -p "${project}/units/network" "${project}/units/compute"
+  cd "${project}" || return
+  for name in -- - -e; do
+    mkdir -p "./${name}"
+    : > "${GITHUB_OUTPUT}"
+    OLDPWD="${OUT}" run "${VERIFY}" run "${name}"
+    [ "${status}" -eq 0 ]
+    grep -qx -- "records-directory=${project}/${name}" "${GITHUB_OUTPUT}"
+  done
 }

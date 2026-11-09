@@ -15,7 +15,10 @@ inputs:
     required: false
     default: "."
   registry-host:
-    description: Host name of the private module registry. Leave empty when the stack uses no private modules.
+    description: >-
+      Host name of Iltero Platform's private module registry, from which terraform init downloads private modules.
+      Leave empty when the stack uses no private modules. When it is set, the project must be linked to Iltero
+      Platform, and the job needs id-token: write.
     required: false
     default: ""
   write-report:
@@ -26,15 +29,27 @@ inputs:
       whose deploy failed sets the step's exit code.
     required: false
     default: "true"
-  artifact-name:
-    description: Name of the artifact that holds the records.
+  store-records:
+    description: >-
+      true or false. When true, the CLI keeps each stage's record and every file it cites in the run's artifact store, the
+      bucket that Iltero Platform names for the run, with the job's own cloud credentials. Only in a project
+      linked to Iltero Platform. A failed store fails the step.
     required: false
-    default: iltero-deploy
+    default: "false"
+  artifact-name:
+    description: >-
+      Name of the artifact that holds the records. Empty: iltero-deploy-<environment>. Two deploy steps in one
+      pipeline run (on GitHub, one workflow run) that deploy the same environment need different names.
+    required: false
+    default: ""
 
 outputs:
   records-directory:
     description: The directory that holds the records.
     value: ${{ steps.deploy.outputs.records-directory }}
+  artifact-name:
+    description: The name of the artifact that holds the records.
+    value: ${{ steps.deploy.outputs.artifact-name }}
   report-directory:
     description: The directory that holds the reports. Empty when write-report is false.
     value: ${{ steps.deploy.outputs.report-directory }}
@@ -50,7 +65,10 @@ runs:
   steps:
     - name: Check the event and the job
       shell: bash
-      run: '"${GITHUB_ACTION_PATH}/../scripts/deploy.sh" check'
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        REGISTRY_HOST: ${{ inputs.registry-host }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/deploy.sh" check'
 
     - name: Deploy each unit
       id: deploy
@@ -60,22 +78,22 @@ runs:
         ENVIRONMENT: ${{ inputs.environment }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         WRITE_REPORT: ${{ inputs.write-report }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/deploy.sh" run "${ENVIRONMENT}"'
+        STORE_RECORDS: ${{ inputs.store-records }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/deploy.sh" run "${ENVIRONMENT}"'
 
     - name: Upload the records
       if: always() && steps.deploy.outputs.records-directory != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: ${{ inputs.artifact-name }}
+        name: ${{ steps.deploy.outputs.artifact-name }}
         path: ${{ steps.deploy.outputs.records-directory }}
-        retention-days: 90
         if-no-files-found: error
 
     - name: Upload the reports
       if: always() && steps.deploy.outputs.report-directory != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: ${{ inputs.artifact-name }}-report
+        name: ${{ steps.deploy.outputs.artifact-name }}-report
         path: ${{ steps.deploy.outputs.report-directory }}
-        retention-days: 90
         if-no-files-found: ignore

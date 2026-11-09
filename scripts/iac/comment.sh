@@ -4,8 +4,8 @@
 # preview keeps one comment, which this action updates on every push.
 #
 # Usage:
-#   comment.sh check ARTIFACT_NAME             Refuse untrusted events and other events than pull_request.
-#   comment.sh post ARTIFACT_NAME COMMENT_FILE  Create or update the comment.
+#   iac/comment.sh check ARTIFACT_NAME              Refuse any event other than pull_request.
+#   iac/comment.sh post ARTIFACT_NAME COMMENT_FILE  Create or update the comment.
 #
 # The job runs no code from the pull request, and needs only
 # `pull-requests: write`. A pull request from a fork or from Dependabot gets a
@@ -13,13 +13,15 @@
 
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 
 # The account whose pull requests get a read-only token.
 readonly DEPENDABOT_LOGIN="dependabot[bot]"
 # Starts every comment this action writes. The artifact name and the
 # workflow file follow it, so each preview keeps its own comment.
 readonly MARKER_PREFIX="<!-- iltero-preview:"
+# How many hex characters of the workflow file's digest the marker keeps.
+readonly WORKFLOW_DIGEST_LENGTH=12
 
 cmd_check() {
   local name="$1"
@@ -46,16 +48,16 @@ cmd_post() {
   [[ -f "${file}" ]] || die "The comment file is missing."
   [[ -n "${GITHUB_WORKFLOW_REF:-}" ]] || die "GITHUB_WORKFLOW_REF is not set. Run this action inside a GitHub Actions job."
   local workflow
-  workflow="$(printf '%s' "${GITHUB_WORKFLOW_REF%%@*}" | sha256sum | cut -c1-12)"
-  python3 "$(dirname "${BASH_SOURCE[0]}")/lib/pr_comment.py" "${MARKER_PREFIX}${name}:${workflow} -->" "${file}"
+  workflow="$(printf '%s' "${GITHUB_WORKFLOW_REF%%@*}" | sha256sum | cut -c"1-${WORKFLOW_DIGEST_LENGTH}")"
+  python3 -I "$(dirname "${BASH_SOURCE[0]}")/lib/pr_comment.py" "${MARKER_PREFIX}${name}:${workflow} -->" "${file}"
 }
 
 main() {
   local command="${1:-}"
   shift || true
   case "${command}" in
-    check) [[ $# -eq 1 ]] || die "Usage: comment.sh check ARTIFACT_NAME"; cmd_check "$@" ;;
-    post) [[ $# -eq 2 ]] || die "Usage: comment.sh post ARTIFACT_NAME COMMENT_FILE"; cmd_post "$@" ;;
+    check) [[ $# -eq 1 ]] || die "Usage: iac/comment.sh check ARTIFACT_NAME"; cmd_check "$@" ;;
+    post) [[ $# -eq 2 ]] || die "Usage: iac/comment.sh post ARTIFACT_NAME COMMENT_FILE"; cmd_post "$@" ;;
     *) die "Unknown command '${command}'. Use: check ARTIFACT_NAME | post ARTIFACT_NAME COMMENT_FILE" ;;
   esac
 }

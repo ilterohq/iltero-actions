@@ -3,15 +3,14 @@
 # Deploys every unit of a stack.
 #
 # Usage:
-#   deploy.sh check                            Refuse untrusted and pull request events; check that setup ran.
-#   deploy.sh run ENVIRONMENT                  Deploy every unit; write the job summary.
+#   iac/deploy.sh check            Refuse untrusted and pull request events; check that setup ran.
+#   iac/deploy.sh run ENVIRONMENT  Deploy every unit; write the job summary.
 #
-# Run from the stack's working directory. In a project linked to Iltero
-# Platform, the plan stage's check opens the run on the server for the
-# pipeline run and environment, each later stage joins it, and the deploy
-# sends each stage's record. A
-# project with no platform section in .iltero/config.yml deploys locally: no
-# run, no upload and no pre-deploy stage.
+# Run from the stack's working directory. In a project linked to the server,
+# the plan stage's check opens the run on the server for the pipeline run and
+# environment, each later stage joins it, and the deploy sends each stage's
+# record. A project with no platform section in .iltero/config.yml deploys
+# locally: no run, no upload and no pre-deploy stage.
 #
 # For each unit, in the order `iltero units list` prints:
 #   1. terraform init, with a registry token when REGISTRY_HOST is set;
@@ -36,16 +35,18 @@
 # Environment:
 #   REGISTRY_HOST   The private module registry's host name. Empty: no registry token.
 #   WRITE_REPORT    true or false. True: write a report of each unit's record.
+#   STORE_RECORDS   true or false. True: keep each stage's record in the run's artifact store.
 
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/registry.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
-source "$(dirname "${BASH_SOURCE[0]}")/lib/project.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/project.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-credentials.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/report.sh"
-source "$(dirname "${BASH_SOURCE[0]}")/lib/cli-stages.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/cli-stages.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/stages.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/terraform.sh"
 
 # The shortest time between a unit's two readings, which the deploy gives the
@@ -58,6 +59,8 @@ readonly READING_LOCK_TIMEOUT=5m
 cmd_check() {
   refuse_untrusted_event
   refuse_pull_request
+  [[ -z "${ARTIFACT_NAME:-}" ]] || check_artifact_name "${ARTIFACT_NAME}"
+  [[ -z "${REGISTRY_HOST:-}" ]] || registry_token_variable "${REGISTRY_HOST}" > /dev/null
   cli_path > /dev/null
   terraform_path > /dev/null
 }
@@ -65,7 +68,7 @@ cmd_check() {
 # Stops unless the registry is used only by a linked project. In a linked
 # project, the CLI opens or joins the run on the server at each stage, so the
 # job must be able to request its identity token.
-check_mode() {
+require_project_permissions() {
   local linked="$1"
   [[ -z "${REGISTRY_HOST:-}" ]] || require_linked_for_registry "${linked}"
   [[ "${linked}" == false ]] || require_id_token
@@ -73,7 +76,7 @@ check_mode() {
 
 # Runs Terraform with the cloud's credentials and TF_VAR_* values added to
 # what run_terraform keeps. Takes run_terraform's arguments.
-terraform_scrubbed() {
+terraform_with_cloud_credentials() {
   local work="$1"
   shift
   local kept=() name
@@ -93,10 +96,9 @@ deploy_unit() {
   local linked="$5"
   local out="$6"
   # A linked project's run is found by its stack and environment, at every stage.
-  local run_args=(--unit="${name}" --out="${out}" --environment="${environment}")
-  [[ "${linked}" == false ]] || run_args+=(--upload)
+  local run_args=(--unit="${name}" --out="${out}" --environment="${environment}" ${SERVER_ARGS[@]+"${SERVER_ARGS[@]}"})
   local plan_files=(--plan="${work}/plan.json" --saved-plan="${work}/tfplan")
-  UNIT_RESULTS=("-" "-" "-" "-")
+  UNIT_RESULTS=("not run" "not run" "not run" "not run")
 
   local backend_config var_file
   backend_config="$(unit_backend_config "${dir}" "${environment}")"
@@ -122,15 +124,18 @@ deploy_unit() {
   # A fresh registry token for each init: it lives only a few minutes.
   local token_env=() status=0
   if [[ -n "${REGISTRY_HOST:-}" ]]; then
-    mint_registry_token "${REGISTRY_HOST}"
+    mint_registry_token "${REGISTRY_HOST}" || {
+      UNIT_RESULTS[0]="registry token failed"
+      return 1
+    }
     token_env=("${REGISTRY_TOKEN_ENV}")
     REGISTRY_TOKEN_ENV=""
   fi
   pause_commands
   (
     cd "${dir}" || exit 1
-    terraform_scrubbed "${work}" ${token_env[@]+"${token_env[@]}"} -- init "${init_args[@]}"
-  ) || status=$?
+    terraform_with_cloud_credentials "${work}" ${token_env[@]+"${token_env[@]}"} -- init "${init_args[@]}"
+  ) 2>&1 || status=$?
   resume_commands
   token_env=()
   if [[ "${status}" -ne 0 ]]; then
@@ -150,53 +155,89 @@ deploy_unit() {
   pause_commands
   (
     cd "${dir}" || exit 1
-    terraform_scrubbed "${work}" -- plan "${plan_args[@]}" \
-      && terraform_scrubbed "${work}" -- show -json "${work}/tfplan" > "${work}/plan.json"
-  ) || status=$?
+    terraform_with_cloud_credentials "${work}" -- plan "${plan_args[@]}" \
+      && terraform_with_cloud_credentials "${work}" -- show -json "${work}/tfplan" > "${work}/plan.json"
+  ) 2>&1 || status=$?
   resume_commands
   if [[ "${status}" -ne 0 ]]; then
     UNIT_RESULTS[0]="terraform failed"
     echo "::error::Terraform could not plan unit '${name}'."
     return "${status}"
   fi
+  local checked_plan
+  if ! checked_plan="$(file_digest "${work}/tfplan")" || [[ ! "${checked_plan}" =~ ${SHA256_PATTERN} ]]; then
+    UNIT_RESULTS[0]="plan unreadable"
+    echo "::error::The saved plan of unit '${name}' could not be read."
+    return 1
+  fi
 
   check_stage "${work}" plan "${plan_files[@]}" "${run_args[@]}" || status=$?
   UNIT_RESULTS[0]="exit ${status}"
   [[ "${status}" -eq 0 ]] || return "${status}"
 
-  # Pre-deploy checks facts only Iltero Platform holds, so it runs only in a
+  # Pre-deploy checks facts only the server holds, so it runs only in a
   # linked project.
   if [[ "${linked}" == true ]]; then
     check_stage "${work}" pre_deploy "${run_args[@]}" || status=$?
     UNIT_RESULTS[1]="exit ${status}"
     [[ "${status}" -eq 0 ]] || return "${status}"
   else
-    UNIT_RESULTS[1]="not in scope"
+    UNIT_RESULTS[1]="$(local_pre_deploy_result "${work}" "${out}" "${name}")" || status=$?
+    if [[ "${status}" -ne 0 ]]; then
+      UNIT_RESULTS[1]="$(record_scope_failure "${status}")"
+      [[ -f "${out}/units/${name}/car.json" ]] || UNIT_RESULTS[1]="no record"
+      return "${status}"
+    fi
+  fi
+
+  # Only the plan that was checked is applied.
+  local plan_to_apply
+  if ! plan_to_apply="$(file_digest "${work}/tfplan")"; then
+    UNIT_RESULTS[2]="plan unreadable"
+    echo "::error::The saved plan of unit '${name}' could not be read, so the unit was not applied."
+    return 1
+  fi
+  if [[ "${plan_to_apply}" != "${checked_plan}" ]]; then
+    UNIT_RESULTS[2]="plan changed"
+    echo "::error::The saved plan of unit '${name}' changed after it was checked, so the unit was not applied."
+    return 1
   fi
 
   local apply_status=0 show_status=0
   pause_commands
   (
     cd "${dir}" || exit 1
-    terraform_scrubbed "${work}" -- apply -input=false -json "${work}/tfplan" > "${work}/apply.ndjson"
-  ) || apply_status=$?
+    terraform_with_cloud_credentials "${work}" -- apply -input=false -json "${work}/tfplan" > "${work}/apply.ndjson"
+  ) 2>&1 || apply_status=$?
   UNIT_RESULTS[2]="exit ${apply_status}"
-  (cd "${dir}" && terraform_scrubbed "${work}" -- show -json > "${work}/state.json") || show_status=$?
+  (cd "${dir}" && terraform_with_cloud_credentials "${work}" -- show -json > "${work}/state.json") 2>&1 || show_status=$?
   resume_commands
 
+  # The apply is recorded also when Terraform could not read the state after
+  # it: the record then holds the apply log alone.
+  local state_args=(--state="${work}/state.json")
   if [[ "${show_status}" -ne 0 ]]; then
     echo "::error::Terraform could not read the state of unit '${name}' after the apply."
-    UNIT_RESULTS[3]="no state"
-    [[ "${apply_status}" -eq 0 ]] || return "${apply_status}"
-    return 1
+    state_args=(--state-unreadable)
   fi
 
   status=0
   check_stage "${work}" post_deploy "${plan_files[@]}" --apply-log="${work}/apply.ndjson" \
-    --state="${work}/state.json" "${run_args[@]}" || status=$?
+    "${state_args[@]}" "${run_args[@]}" || status=$?
   UNIT_RESULTS[3]="exit ${status}"
+  [[ "${show_status}" -eq 0 ]] || UNIT_RESULTS[3]+=", state not read"
+  # The apply's own failure comes first, then the CLI's code.
   [[ "${apply_status}" -eq 0 ]] || return "${apply_status}"
   return "${status}"
+}
+
+# Prints the SHA-256 digest of FILE.
+file_digest() {
+  "$(tools_dir)/venv/bin/python" -I -c '
+import hashlib, sys
+with open(sys.argv[1], "rb") as data:
+    print(hashlib.sha256(data.read()).hexdigest())
+' "$1"
 }
 
 # Takes a reading of the deployed resources of the unit in DIR into FILE, as
@@ -216,10 +257,10 @@ take_reading() {
   pause_commands
   (
     cd "${dir}" || exit 1
-    terraform_scrubbed "${work}" -- plan -input=false -no-color -refresh-only \
+    terraform_with_cloud_credentials "${work}" -- plan -input=false -no-color -refresh-only \
       -lock-timeout="${READING_LOCK_TIMEOUT}" -out="${saved}" ${variable_args[@]+"${variable_args[@]}"} \
-      && terraform_scrubbed "${work}" -- show -json "${saved}" > "${file}"
-  ) || status=$?
+      && terraform_with_cloud_credentials "${work}" -- show -json "${saved}" > "${file}"
+  ) 2>&1 || status=$?
   resume_commands
   # A reading Terraform did not finish is not kept.
   [[ "${status}" -eq 0 ]] || rm -f "${file}"
@@ -234,15 +275,17 @@ post_verify_units() {
   local work_root="$1"
   local out="$2"
   local environment="$3"
-  local linked="$4"
   local readings="${work_root}/readings"
-  local i name work expects in_scope=() first_done=() status=0 first_status=0 wait
+  local i name work expects in_scope=() first_done=() status=0 first_status=0 wait_seconds
   POST_VERIFY_RESULTS=()
   for i in "${!UNIT_NAMES[@]}"; do
     POST_VERIFY_RESULTS[i]="not in scope"
-    if ! expects="$(record_expects_stage "${out}" "${UNIT_NAMES[i]}" post_verify)"; then
-      POST_VERIFY_RESULTS[i]="record unreadable"
-      [[ "${first_status}" -ne 0 ]] || first_status=1
+    status=0
+    expects="$(record_expects_stage "${work_root}/units/${UNIT_NAMES[i]}" "${out}" "${UNIT_NAMES[i]}" post_verify)" \
+      || status=$?
+    if [[ "${status}" -ne 0 ]]; then
+      POST_VERIFY_RESULTS[i]="$(record_scope_failure "${status}")"
+      [[ "${first_status}" -ne 0 ]] || first_status="${status}"
       continue
     fi
     [[ "${expects}" == true ]] || continue
@@ -270,10 +313,10 @@ post_verify_units() {
     [[ "${POST_VERIFY_RESULTS[i]}" == "not run" ]] || continue
     name="${UNIT_NAMES[i]}"
     work="${work_root}/units/${name}"
-    wait=$((first_done[i] + READING_INTERVAL_SECONDS + 1 - SECONDS))
-    if [[ "${wait}" -gt 0 ]]; then
-      echo "Waiting ${wait} seconds before the second reading of unit '${name}'."
-      sleep "${wait}"
+    wait_seconds=$((first_done[i] + READING_INTERVAL_SECONDS + 1 - SECONDS))
+    if [[ "${wait_seconds}" -gt 0 ]]; then
+      echo "Waiting ${wait_seconds} seconds before the second reading of unit '${name}'."
+      sleep "${wait_seconds}"
     fi
     status=0
     echo "::group::${name}: second reading and post-verify"
@@ -282,8 +325,7 @@ post_verify_units() {
       POST_VERIFY_RESULTS[i]="terraform failed"
       echo "::error::Terraform could not read back unit '${name}'."
     else
-      local run_args=(--unit="${name}" --out="${out}" --environment="${environment}")
-      [[ "${linked}" == false ]] || run_args+=(--upload)
+      local run_args=(--unit="${name}" --out="${out}" --environment="${environment}" ${SERVER_ARGS[@]+"${SERVER_ARGS[@]}"})
       check_stage "${work}" post_verify --refresh-plan="${readings}/${name}/first.json" \
         --refresh-plan="${readings}/${name}/second.json" \
         --minimum-interval-seconds="${READING_INTERVAL_SECONDS}" "${run_args[@]}" || status=$?
@@ -298,16 +340,21 @@ post_verify_units() {
 cmd_run() {
   local environment="$1"
   local linked report
-  require_environment_file_name "${environment}"
+  require_environment_name "${environment}"
   report="$(report_enabled)"
   linked="$(project_linked)"
-  check_mode "${linked}"
-  local work_root="${RUNNER_TEMP}/iltero-deploy"
-  local out="${work_root}/out"
+  require_project_permissions "${linked}"
+  set_server_args "${linked}"
+  # Each environment has its own work folder, so two deploys in one job keep
+  # their records apart.
+  local work_root="${RUNNER_TEMP}/iltero-deploy/${environment}"
+  local out="${work_root}/out" artifact
+  artifact="$(artifact_name "${ARTIFACT_NAME:-}" "iltero-deploy-${environment}")"
   local units="${work_root}/units.tsv"
   local reports="${work_root}/reports"
   mkdir -p "${out}" "${work_root}/readings"
   write_output records-directory "${out}"
+  write_output artifact-name "${artifact}"
   write_output readings-directory "${work_root}/readings"
   if [[ "${report}" == true ]]; then
     mkdir -p "${reports}"
@@ -343,21 +390,32 @@ cmd_run() {
     fi
   done < "${units}"
   if [[ -z "${failed_unit}" ]]; then
-    post_verify_units "${work_root}" "${out}" "${environment}" "${linked}" || { status=$?; verify_failed=true; }
+    post_verify_units "${work_root}" "${out}" "${environment}" || { status=$?; verify_failed=true; }
   fi
 
   for i in "${!UNIT_NAMES[@]}"; do
     name="${UNIT_NAMES[i]}"
     work="${work_root}/units/${name}"
-    echo "${rows[i]} ${POST_VERIFY_RESULTS[i]:--} |" >> "${summary}"
-    for stage in state-check plan pre_deploy post_deploy post_verify; do
+    # The post-verify stage runs only when every unit deployed.
+    if [[ -n "${failed_unit}" ]]; then
+      echo "${rows[i]} not run |" >> "${summary}"
+    else
+      echo "${rows[i]} ${POST_VERIFY_RESULTS[i]:--} |" >> "${summary}"
+    fi
+    for stage in state-check plan in-scope-pre_deploy pre_deploy post_deploy in-scope-post_verify post_verify; do
       [[ -f "${work}/${stage}.txt" ]] || continue
-      details_block "${name}: ${stage//_/-}" "${work}/${stage}.txt" >> "${details}"
+      append_details_block "${details}" "${name}: ${stage//_/-}" "${work}/${stage}.txt"
     done
     if [[ "${report}" == true && -f "${out}/units/${name}/car.json" ]]; then
       write_report "${name}" "${out}/units/${name}" "${reports}" "${details}" "${work}/report.txt" || report_missing=1
     fi
   done
+  # The summary lists every unit of the stack: those after a failed unit were
+  # not deployed.
+  local reached=" ${UNIT_NAMES[*]} "
+  while IFS=$'\t' read -r name _; do
+    [[ "${reached}" == *" ${name} "* ]] || echo "| ${name} | not run | not run | not run | not run | not run |" >> "${summary}"
+  done < "${units}"
 
   {
     cat "${summary}"
@@ -381,7 +439,7 @@ main() {
   shift || true
   case "${command}" in
     check) cmd_check ;;
-    run) [[ $# -eq 1 ]] || die "Usage: deploy.sh run ENVIRONMENT"; cmd_run "$@" ;;
+    run) [[ $# -eq 1 ]] || die "Usage: iac/deploy.sh run ENVIRONMENT"; cmd_run "$@" ;;
     *) die "Unknown command '${command}'. Use: check | run ENVIRONMENT" ;;
   esac
 }

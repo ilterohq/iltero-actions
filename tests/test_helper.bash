@@ -3,7 +3,7 @@
 # Shared setup for the BATS suites. Each test gets an empty runner layout and a
 # folder of stub commands placed first on PATH.
 
-REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export REPO_ROOT
 
 # Creates the runner environment a composite step sees.
@@ -33,6 +33,8 @@ stub() {
 # A curl stub that serves files from FIXTURES by the URL's last path segment,
 # and records each URL it was asked for.
 stub_curl() {
+  # The stub's variables expand when it runs, not here.
+  # shellcheck disable=SC2016
   stub curl '
 out=""; url=""
 while [[ $# -gt 0 ]]; do
@@ -57,6 +59,8 @@ sha256_of() {
 # workflow commands are turned off: after a ::stop-commands::TOKEN line and
 # before the ::TOKEN:: line that turns them back on.
 commands_paused_around() {
+  # bats sets output in each test's run.
+  # shellcheck disable=SC2154
   awk -v line="$1" '
     /^::stop-commands::/ { token = substr($0, 18); paused = 1; next }
     paused && $0 == "::" token "::" { paused = 0; next }

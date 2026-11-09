@@ -9,8 +9,7 @@ shell=bash
 
 # Disable specific checks:
 # SC1091 - Can't follow sourced file (dynamic paths)
-# SC2034 - Variable appears unused (may be used after sourcing)
-disable=SC1091,SC2034
+disable=SC1091
 
 # Enable optional checks
 enable=require-variable-braces

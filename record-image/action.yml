@@ -1,0 +1,194 @@
+name: Iltero Record Image
+description: >-
+  Record one stage of a container image's change: its build, in the same pipeline run as the build, or one stage of its
+  deployment to an environment.
+author: Iltero
+
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  stage:
+    description: >-
+      The stage to record: plan (after the build pushed the image, before any deployment uses it), pre_deploy
+      (before the deployment), post_deploy (after the deployment) or post_verify (after the rollout, a check of
+      what the workload's pods run). The CLI records a deployment only in a project with no platform section in
+      .iltero/config.yml. On pull_request events, only plan, checked locally and as advice: failed or undecided
+      assertions do not fail the step. record-image refuses pull request review events.
+    required: true
+  image:
+    description: >-
+      The image, by its digest. At plan, the image the build pushed: repository[:tag]@sha256:<digest>; a tag needs
+      build-metadata. At pre_deploy, the image to deploy, and at post_deploy, the image the deployment reports it
+      deployed: repository@sha256:<digest>, with no tag. Required at those three stages, and empty at post_verify.
+    required: false
+    default: ""
+  application:
+    description: >-
+      Plan only. The application key: the name Iltero Platform gives the application the image is of. Required in a
+      project linked to Iltero Platform, and empty in a project that is not. Not used on pull_request events.
+    required: false
+    default: ""
+  environment:
+    description: >-
+      Deployment stages only, and required at each of them. The environment the image is deployed to. At
+      post_deploy and post_verify, it must match the environment in the record.
+    required: false
+    default: ""
+  unit:
+    description: >-
+      The part of the project the image is built from or deployed as. Give each image its own unit when several
+      images share records-directory. root is the CLI's default unit, for a project with no units file
+      (.iltero/units.json).
+    required: false
+    default: root
+  working-directory:
+    description: The project's directory, relative to the repository root. File inputs are relative to it.
+    required: false
+    default: "."
+  build-metadata:
+    description: >-
+      Plan only. The metadata file of `docker buildx build --push --metadata-file FILE`. Required when image names a
+      tag.
+    required: false
+    default: ""
+  image-index:
+    description: >-
+      Plan only. The image's index, exactly as the registry holds it. Required unless build-metadata says the image was
+      pushed as one manifest.
+    required: false
+    default: ""
+  attestation:
+    description: >-
+      Plan only. The build's signed SLSA (Supply-chain Levels for Software Artifacts) provenance, as a Sigstore
+      bundle.
+    required: false
+    default: ""
+  test-reports:
+    description: Plan only. Test reports in JUnit XML, one path per line.
+    required: false
+    default: ""
+  scan-reports:
+    description: >-
+      Plan only. Scan reports of the pushed image, read from its registry by its digest. One per line: the scanner
+      (trivy or grype), a space, then the path of its JSON report.
+    required: false
+    default: ""
+  cluster-id:
+    description: >-
+      post_verify only. The cluster the workload runs on, by the uid of its kube-system namespace:
+      `kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'`.
+    required: false
+    default: ""
+  workload-before-pods-listing:
+    description: >-
+      post_verify only. The workload (a Deployment, StatefulSet or DaemonSet), read before its pods with
+      `kubectl get --raw /apis/apps/v1/namespaces/<namespace>/deployments/<name>`, with statefulsets or
+      daemonsets in place of deployments for those kinds. Read the four files in the order of these inputs.
+    required: false
+    default: ""
+  pods:
+    description: >-
+      post_verify only. The workload's pods, read with
+      `kubectl get --raw '/api/v1/namespaces/<namespace>/pods?labelSelector=<selector>'`.
+    required: false
+    default: ""
+  pod-owners:
+    description: >-
+      post_verify only. A Deployment's ReplicaSets, read with
+      `kubectl get --raw '/apis/apps/v1/namespaces/<namespace>/replicasets?labelSelector=<selector>'`. Required
+      for a Deployment, and empty for a StatefulSet or a DaemonSet.
+    required: false
+    default: ""
+  workload-after-pods-listing:
+    description: >-
+      post_verify only. The same workload, read again after its pods, with the same command as
+      workload-before-pods-listing.
+    required: false
+    default: ""
+  advisory:
+    description: >-
+      true or false. When true, failed or undecided assertions do not fail the step; the record still shows them.
+      For pre_deploy, and for plan in a project with no platform section. A check on the runner alone reads no
+      approvals, so an assertion that reads them is always undecided at pre_deploy. pull_request events always
+      check as advice.
+    required: false
+    default: "false"
+  records-directory:
+    description: >-
+      Where the CLI keeps the records. Empty: a directory under the runner's temporary directory, one for builds and
+      one for each environment's deployments. A relative path is relative to working-directory. Never the records
+      directory of record-iac or deploy. Each deployment needs a records directory with no record of its unit. Every
+      stage after pre_deploy reads the record from it. When a later stage runs in a different job, download the records
+      artifact of the earlier job and pass its directory here.
+    required: false
+    default: ""
+  store-records:
+    description: >-
+      Plan only. true or false. When true, the CLI keeps the image's record and every file it cites in the run's
+      artifact store, the bucket that Iltero Platform names for the run, with the job's own cloud credentials. Only
+      in a project linked to Iltero Platform. Not used on pull_request events. A failed store fails the step.
+    required: false
+    default: "false"
+  artifact-name:
+    description: >-
+      Name of the artifact that holds the records. Empty: iltero-image-records-<unit> for plan, and
+      iltero-image-deployment-records-<environment>-<unit> for a deployment stage. Each step replaces the artifact
+      with the records in records-directory. Image builds in the same pipeline run (on GitHub, the same workflow run) need different unit values or
+      different artifact names, and so do separate deployments of the same unit to the same environment.
+    required: false
+    default: ""
+
+outputs:
+  records-directory:
+    description: The directory that holds the records.
+    value: ${{ steps.record.outputs.records-directory }}
+  artifact-name:
+    description: The name of the artifact that holds the records.
+    value: ${{ steps.record.outputs.artifact-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the event and the job
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        STAGE: ${{ inputs.stage }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/image/record.sh" check "${STAGE}"'
+
+    - name: Record the image
+      id: record
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        STAGE: ${{ inputs.stage }}
+        IMAGE: ${{ inputs.image }}
+        APPLICATION: ${{ inputs.application }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        UNIT: ${{ inputs.unit }}
+        BUILD_METADATA: ${{ inputs.build-metadata }}
+        IMAGE_INDEX: ${{ inputs.image-index }}
+        ATTESTATION: ${{ inputs.attestation }}
+        TEST_REPORTS: ${{ inputs.test-reports }}
+        SCAN_REPORTS: ${{ inputs.scan-reports }}
+        CLUSTER_ID: ${{ inputs.cluster-id }}
+        WORKLOAD_BEFORE_PODS_LISTING: ${{ inputs.workload-before-pods-listing }}
+        PODS: ${{ inputs.pods }}
+        POD_OWNERS: ${{ inputs.pod-owners }}
+        WORKLOAD_AFTER_PODS_LISTING: ${{ inputs.workload-after-pods-listing }}
+        RECORDS_DIRECTORY: ${{ inputs.records-directory }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        STORE_RECORDS: ${{ inputs.store-records }}
+        ADVISORY: ${{ inputs.advisory }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/image/record.sh" run "${STAGE}"'
+
+    - name: Upload the records
+      if: always() && steps.record.outputs.records-directory != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ steps.record.outputs.artifact-name }}
+        path: ${{ steps.record.outputs.records-directory }}
+        if-no-files-found: warn
+        overwrite: true

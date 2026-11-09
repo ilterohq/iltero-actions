@@ -5,15 +5,18 @@ Run this from the repository root when moving to another CLI commit:
 
     scripts/lock-cli.py CLI_CHECKOUT SCHEMAS_COMMIT
 
-CLI_CHECKOUT is a checkout of iltero-cli at the commit to pin. SCHEMAS_COMMIT
-is the iltero-schemas commit that CLI commit is tested against.
+CLI_CHECKOUT is a checkout of iltero-cli at the commit to pin. The script
+reads the lock file of that commit, as committed, so a change in the working
+tree is never locked. SCHEMAS_COMMIT is the iltero-schemas commit that CLI
+commit is tested against.
 
 The script writes two files under setup/:
 
 - cli-sources.txt: the two commits the action installs from source.
-- cli-requirements.txt: every other package the CLI needs at run time, plus
-  the build backend for the two source installs, each with its version and
-  the SHA-256 hashes from the CLI's own lock file.
+- cli-requirements.txt: every other package the CLI needs at run time,
+  including the packages of its cloud extras, plus the build backend for the
+  two source installs, each with its version and the SHA-256 hashes from the
+  CLI's own lock file.
 """
 
 import re
@@ -21,6 +24,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import NoReturn
 
 SETUP_DIR = Path(__file__).resolve().parent.parent / "setup"
 COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -28,11 +32,14 @@ COMMIT = re.compile(r"[0-9a-f]{40}")
 # dependencies are locked as well.
 BUILD_BACKEND = "hatchling"
 REQUIREMENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# The CLI's optional groups that setup installs too: the cloud clients that
+# keep a run's records in its artifact store.
+EXTRAS = frozenset({"aws"})
 # Installed from source at a pinned commit, not from the lock.
 SOURCE_PACKAGES = frozenset({"iltero-schemas"})
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     print(f"error: {message}", file=sys.stderr)
     sys.exit(1)
 
@@ -42,6 +49,16 @@ def head_commit(checkout: Path) -> str:
         ["git", "-C", str(checkout), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
     )
     return result.stdout.strip()
+
+
+def committed_lock(checkout: Path) -> str:
+    """Return the CLI's lock file as the commit at HEAD holds it."""
+    result = subprocess.run(
+        ["git", "-C", str(checkout), "show", "HEAD:pdm.lock"], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        fail("the commit at HEAD has no pdm.lock")
+    return result.stdout
 
 
 def requirement_lines(package: dict) -> list[str]:
@@ -86,14 +103,14 @@ def main() -> None:
         fail("SCHEMAS_COMMIT must be a full 40-character commit")
     cli_commit = head_commit(checkout)
 
-    lock = tomllib.loads((checkout / "pdm.lock").read_text(encoding="utf-8"))
+    lock = tomllib.loads(committed_lock(checkout))
     packages = {package["name"]: package for package in lock["package"]}
     build = with_dependencies(BUILD_BACKEND, packages)
     selected = [
         package
         for package in packages.values()
         if package["name"] not in SOURCE_PACKAGES
-        and ("default" in package.get("groups", []) or package["name"] in build)
+        and (not {"default", *EXTRAS}.isdisjoint(package.get("groups", [])) or package["name"] in build)
     ]
 
     lines = [

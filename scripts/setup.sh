@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Installs the tools the other actions use: Terraform and the Iltero CLI.
+# Installs the tools the other actions use: Terraform, the Iltero CLI and its
+# evaluator, the policy engine that runs the assertions.
 #
 # Usage:
 #   setup.sh check                Refuse untrusted events, unsupported runners and an
@@ -51,8 +52,7 @@ runner_platform() {
 cmd_check() {
   refuse_untrusted_event
   runner_platform > /dev/null
-  [[ "${INSTALL_TERRAFORM:-}" == true || "${INSTALL_TERRAFORM:-}" == false ]] \
-    || die "The install-terraform input must be true or false, not '${INSTALL_TERRAFORM:-}'."
+  require_true_or_false install-terraform "${INSTALL_TERRAFORM:-}"
 }
 
 # Prints the pinned SHA-256 of a Terraform archive, or stops if the archive is
@@ -88,7 +88,10 @@ cmd_terraform() {
   chmod 0755 "${dir}/bin/terraform"
 
   local reported
-  reported="$("${dir}/bin/terraform" version | head -n 1)"
+  # The whole output is read before its first line is kept: a pipe into head
+  # could stop Terraform part way and fail the step under pipefail.
+  reported="$("${dir}/bin/terraform" version)" || die "The installed Terraform did not run."
+  reported="${reported%%$'\n'*}"
   [[ "${reported}" == "Terraform v${version}" ]] \
     || die "The installed Terraform reports '${reported}', not 'Terraform v${version}'."
   write_output terraform-version "${version}"
@@ -116,32 +119,28 @@ pip_install() {
   local venv="$1"
   shift
   local log="${venv}.pip.log"
-  if ! "${venv}/bin/python" -m pip install --no-input --disable-pip-version-check "$@" > "${log}" 2>&1; then
+  if ! "${venv}/bin/python" -I -m pip install --no-input --disable-pip-version-check "$@" > "${log}" 2>&1; then
     cat "${log}" >&2
     die "Installing the Iltero CLI failed."
   fi
 }
 
-# Downloads the evaluator release that the installed iltero-schemas pins, and
-# checks it against the pinned digest.
+# Downloads the evaluator release that the installed iltero-schemas pins, as
+# the CLI reports it, and checks it against the pinned digest.
 install_evaluator() {
   local venv="$1"
   local dir="$2"
-  local key pin version asset sha
+  local platform pin version asset sha extra
   case "$(runner_platform)" in
-    linux_amd64) key="linux-x86_64" ;;
-    linux_arm64) key="linux-aarch64" ;;
+    linux_amd64) platform="linux-x86_64" ;;
+    linux_arm64) platform="linux-aarch64" ;;
     *) die "No evaluator for this runner." ;;
   esac
-  pin="$("${venv}/bin/python" -c '
-import sys
-from iltero_schemas.opa.pin import OPA_RELEASE_PIN
-binary = OPA_RELEASE_PIN.binaries[sys.argv[1]]
-print(OPA_RELEASE_PIN.release_tag, binary.asset, binary.sha256)
-' "${key}")" || die "Cannot read the evaluator pin from iltero-schemas."
-  read -r version asset sha <<< "${pin}"
-  [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "${asset}" =~ ^[${LOWER}0-9_]+$ && "${sha}" =~ ${SHA256_PATTERN} ]] \
-    || die "The evaluator pin from iltero-schemas is malformed."
+  pin="$("${venv}/bin/iltero" evaluator pin --platform "${platform}")" \
+    || die "The Iltero CLI could not report the evaluator pin for ${platform}."
+  read -r version asset sha extra <<< "${pin}"
+  [[ "${pin}" != *$'\n'* && -z "${extra}" && "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "${asset}" =~ ^[${LOWER}0-9_]+$ && "${sha}" =~ ${SHA256_PATTERN} ]] \
+    || die "The evaluator pin the Iltero CLI reports is malformed."
 
   download_checked "${OPA_RELEASES_URL}/${version}/${asset}" "${sha}" "${dir}/bin/opa"
   chmod 0755 "${dir}/bin/opa"
@@ -155,7 +154,7 @@ check_installed_commit() {
   local commit="$3"
   local label="$4"
   local installed
-  installed="$("${venv}/bin/python" -c '
+  installed="$("${venv}/bin/python" -I -c '
 import json, sys
 from importlib.metadata import distribution
 print(json.loads(distribution(sys.argv[1]).read_text("direct_url.json"))["vcs_info"]["commit_id"])
@@ -175,10 +174,10 @@ cmd_cli() {
   venv="${dir}/venv"
   mkdir -p "${dir}/bin"
 
-  python3 -m venv "${venv}"
+  python3 -I -m venv "${venv}"
   # Every dependency comes from the lock, as a wheel, with a matching hash.
   pip_install "${venv}" --require-hashes --no-deps --only-binary ":all:" -r "${requirements}"
-  # The CLI and the contract are built from their pinned commits, with the
+  # The CLI and iltero-schemas are built from their pinned commits, with the
   # locked build backend.
   pip_install "${venv}" --no-deps --no-build-isolation \
     "git+${GITHUB_URL}/ilterohq/iltero-schemas.git@${schemas_commit}" \

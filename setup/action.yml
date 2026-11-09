@@ -1,5 +1,7 @@
 name: Iltero Setup
-description: Install the Iltero CLI, its evaluator and, when asked, Terraform, at pinned, checksum-verified versions.
+description: >-
+  Install the Iltero CLI, its evaluator and, unless install-terraform is false, Terraform, at pinned,
+  checksum-verified versions.
 author: Iltero
 
 branding:
@@ -9,12 +11,12 @@ branding:
 inputs:
   install-terraform:
     description: >-
-      true or false. True: install Terraform for the deploy and preview actions, which run it. False: skip it, for
-      a job that runs its own Terraform and uses record-iac.
+      true or false. True: install Terraform for the deploy and preview actions, which run it. False: skip it, in a
+      job that runs no deploy or preview.
     required: false
     default: "true"
   terraform-version:
-    description: Terraform version to install when install-terraform is true. Only versions pinned in this release are accepted.
+    description: Terraform version to install when install-terraform is true. Only versions listed in setup/terraform.sha256 are accepted.
     required: false
     default: "1.16.5"
 
@@ -32,7 +34,7 @@ outputs:
     description: Absolute path of the Iltero CLI.
     value: ${{ steps.cli.outputs.cli-path }}
   evaluator-path:
-    description: Absolute path of the evaluator the CLI runs.
+    description: Absolute path of the evaluator, the policy engine that runs the assertions.
     value: ${{ steps.cli.outputs.evaluator-path }}
 
 runs:
