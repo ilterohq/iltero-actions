@@ -1,0 +1,131 @@
+# Reference workflow for a team that deploys a container image to Kubernetes
+# and records the deployment with no Iltero account: .iltero/config.yml has
+# no platform section. A repository owner copies it into .github/workflows/
+# and replaces the example values.
+#
+# A person starts the workflow with the image to deploy, by its digest. One
+# job deploys the image to production. Iltero steps around the deployment
+# record each stage of it, on the runner. Each step names the environment:
+#   pre_deploy   before the deployment: checks the image to deploy. A check
+#                on the runner alone reads no approvals, so an assertion
+#                that reads them is undecided. The step sets advisory, so
+#                failed or undecided assertions do not stop the job: the
+#                record shows them. Here the approval is the production
+#                environment's protection rules in GitHub, such as required
+#                reviewers;
+#   post_deploy  after kubectl set image, also when it failed: reports the
+#                image the workload now names, read back from the cluster;
+#   post_verify  after the rollout: checks that every pod of the workload
+#                runs the deployed image. The job reads the workload, its
+#                pods, its ReplicaSets and the workload again, in that order.
+# Each record-image step uploads the records directory, replacing the same
+# artifact. The CLI sends nothing to Iltero.
+#
+# The readings of the workload stay in the runner's temporary directory.
+# They can hold secret values, such as a container's environment: never
+# upload or keep them. The CLI keeps only a redacted copy in the record.
+#
+# The cloud steps are for Amazon Elastic Kubernetes Service (EKS). On another
+# cluster, replace them with the steps that give kubectl its credentials.
+#
+# Values the owner replaces:
+#   the actions commit (40 hex characters), the GitHub deployment
+#   environment, the deploy role's Amazon Resource Name (ARN), region and
+#   cluster name, and the workload's namespace, name, container and label
+#   selector.
+
+name: Deploy image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: The image to deploy, by its digest, as repository@sha256:<digest>.
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  NAMESPACE: api
+  WORKLOAD: api # a Deployment
+  CONTAINER: api
+  SELECTOR: app=api # the Deployment's label selector
+
+jobs:
+  deploy:
+    name: Deploy the image to production
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: deploy-image-production
+      cancel-in-progress: false
+    permissions:
+      contents: read # read .iltero/config.yml
+      id-token: write # the job's identity token, for the deploy role
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          install-terraform: false # a deployment of an image runs no Terraform
+
+      - uses: ilterohq/iltero-actions/record-image@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: pre_deploy
+          image: ${{ inputs.image }}
+          environment: production
+          advisory: true
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/deploy
+          aws-region: eu-west-1
+      - name: Give kubectl the cluster's credentials
+        run: aws eks update-kubeconfig --name production --region eu-west-1
+
+      - id: deploy
+        name: Deploy the image
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: kubectl --namespace "${NAMESPACE}" set image "deployment/${WORKLOAD}" "${CONTAINER}=${IMAGE}"
+      # Also after a failed deployment, so the record shows the image the
+      # workload names.
+      - id: deployed
+        name: Read the image the workload now names
+        if: ${{ !cancelled() && steps.deploy.outcome != 'skipped' }}
+        run: |
+          image="$(kubectl --namespace "${NAMESPACE}" get "deployment/${WORKLOAD}" \
+            -o jsonpath="{.spec.template.spec.containers[?(@.name=='${CONTAINER}')].image}")"
+          [[ "${image}" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] || { echo "::error::The workload names no image by its digest."; exit 1; }
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+      - if: ${{ !cancelled() && steps.deployed.outcome == 'success' }}
+        uses: ilterohq/iltero-actions/record-image@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: post_deploy
+          image: ${{ steps.deployed.outputs.image }}
+          environment: production
+
+      - name: Wait for the rollout
+        run: kubectl --namespace "${NAMESPACE}" rollout status "deployment/${WORKLOAD}" --timeout=10m
+      - id: read
+        name: Read the workload, its pods and its ReplicaSets
+        run: |
+          cluster_id="$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')"
+          [[ "${cluster_id}" =~ ^[0-9a-f-]{36}$ ]] || { echo "::error::The cluster's kube-system namespace has no uid."; exit 1; }
+          workload="/apis/apps/v1/namespaces/${NAMESPACE}/deployments/${WORKLOAD}"
+          kubectl get --raw "${workload}" > "${RUNNER_TEMP}/workload-before.json"
+          kubectl get --raw "/api/v1/namespaces/${NAMESPACE}/pods?labelSelector=${SELECTOR}" > "${RUNNER_TEMP}/pods.json"
+          kubectl get --raw "/apis/apps/v1/namespaces/${NAMESPACE}/replicasets?labelSelector=${SELECTOR}" > "${RUNNER_TEMP}/pod-owners.json"
+          kubectl get --raw "${workload}" > "${RUNNER_TEMP}/workload-after.json"
+          echo "cluster-id=${cluster_id}" >> "${GITHUB_OUTPUT}"
+      - uses: ilterohq/iltero-actions/record-image@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: post_verify
+          environment: production
+          cluster-id: ${{ steps.read.outputs.cluster-id }}
+          workload-before-pods-listing: ${{ runner.temp }}/workload-before.json
+          pods: ${{ runner.temp }}/pods.json
+          pod-owners: ${{ runner.temp }}/pod-owners.json
+          workload-after-pods-listing: ${{ runner.temp }}/workload-after.json

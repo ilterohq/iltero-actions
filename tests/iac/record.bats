@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 #
-# Tests for scripts/record-iac.sh, the body of the `record-iac` action.
+# Tests for scripts/iac/record.sh, the body of the `record-iac` action.
 
-load test_helper
+load ../test_helper
 
 
 setup() {
@@ -12,10 +12,12 @@ setup() {
   export ACTIONS_ID_TOKEN_REQUEST_TOKEN="request-token"
   export LINKED="true"
   export WRITE_REPORT="true"
+  export STORE_RECORDS="false"
   export ENVIRONMENT="production"
+  export STATE_UNREADABLE="false"
   export UNIT="network"
   : > "${GITHUB_STEP_SUMMARY}"
-  RECORD="${REPO_ROOT}/scripts/record-iac.sh"
+  RECORD="${REPO_ROOT}/scripts/iac/record.sh"
   TOOLS="${RUNNER_TEMP}/iltero-tools"
   export MARKS="${BATS_TEST_TMPDIR}/marks"
   mkdir -p "${TOOLS}/venv/bin" "${MARKS}"
@@ -27,6 +29,20 @@ setup() {
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
 echo "iltero $*" >> "${STUB_LOG}"
+if [[ "$1 $2" == "record in-scope" ]]; then
+  echo "::error::injected by the record"
+  [[ ! -e "${MARKS}/in-scope-exit" ]] || exit "$(cat "${MARKS}/in-scope-exit")"
+  [[ -f "$3/car.json" ]] || exit 5
+  python3 -I -c 'import json, sys
+try:
+    stages = json.load(open(sys.argv[1]))["expected_stages"]
+except Exception:
+    sys.exit(9)
+in_scope = sys.argv[2] in stages
+print("The " + sys.argv[2] + " stage is " + ("in" if in_scope else "out of") + " scope.")
+sys.exit(0 if in_scope else 3)' "$3/car.json" "${4#--stage=}"
+  exit $?
+fi
 case "$1 $2" in
   "state check")
     echo "state check data ${TF_DATA_DIR:-default}" >> "${STUB_LOG}"
@@ -43,6 +59,10 @@ case "$1 $2" in
     ;;
   "units list")
     [[ ! -e "${MARKS}/no-units" ]] || exit 3
+    if [[ -e "${MARKS}/dash-directory" ]]; then
+      echo '[{"name": "network", "working_directory": "-L"}]'
+      exit 0
+    fi
     echo '[{"name": "network", "working_directory": "units/network"}, {"name": "app-db", "working_directory": "units/app-db"}]'
     exit 0
     ;;
@@ -60,17 +80,25 @@ for arg in "$@"; do
   esac
 done
 mkdir -p "${out}/units/${unit}"
-touch "${out}/units/${unit}/car.json"
+if [[ -e "${MARKS}/expects-pre-deploy" ]]; then
+  echo '{"expected_stages": ["plan", "pre_deploy", "post_deploy"]}' > "${out}/units/${unit}/car.json"
+else
+  echo '{"expected_stages": ["plan", "post_deploy"]}' > "${out}/units/${unit}/car.json"
+fi
 echo "::warning::${stage} <checked> for ${unit}"
+# A post-deploy check given --state-unreadable always exits 6.
+[[ " $* " != *" --state-unreadable "* ]] || exit 6
 [[ ! -e "${MARKS}/exit-${stage}" ]] || exit "$(cat "${MARKS}/exit-${stage}")"
 exit 0
 STUB
   chmod +x "${TOOLS}/venv/bin/iltero"
+  # The stub's variables expand when it runs, not here.
+  # shellcheck disable=SC2016
   stub terraform 'echo "terraform $*" >> "${STUB_LOG}"'
 
   STACK="${BATS_TEST_TMPDIR}/stack"
   mkdir -p "${STACK}/units/network" "${STACK}/units/app-db"
-  cd "${STACK}"
+  cd "${STACK}" || return
   echo '{}' > plan.json
   echo 'binary' > tfplan
   echo '{}' > apply.ndjson
@@ -79,7 +107,7 @@ STUB
   echo '{}' > second.json
   export PLAN="plan.json" SAVED_PLAN="tfplan" APPLY_LOG="apply.ndjson" STATE="state.json"
   export REFRESH_PLANS=$'first.json\nsecond.json\n'
-  RECORDS="${RUNNER_TEMP}/iltero-records"
+  RECORDS="${RUNNER_TEMP}/iltero-records/production"
 }
 
 # Prints the CLI's stage call for STAGE from the stub log.
@@ -116,7 +144,7 @@ stage_call() {
   for stage in pre_deploy post_deploy post_verify; do
     GITHUB_EVENT_NAME=pull_request run "${RECORD}" check "${stage}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"On pull request events, record-iac records only the plan stage, as a local preview."* ]]
+    [[ "${output}" == *"On pull request events, record-iac records only the plan stage, checked locally."* ]]
   done
   GITHUB_EVENT_NAME=pull_request run "${RECORD}" check plan
   [ "${status}" -eq 0 ]
@@ -133,6 +161,22 @@ stage_call() {
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"The stage input must be one of: plan pre_deploy post_deploy post_verify."* ]]
   ! grep -q "^iltero" "${STUB_LOG}" || false
+}
+
+@test "run also refuses pull_request_target and workflow_run events" {
+  local event
+  for event in pull_request_target workflow_run; do
+    GITHUB_EVENT_NAME="${event}" run "${RECORD}" run plan
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Iltero actions do not run on '${event}' events."* ]]
+  done
+  ! grep -q "^iltero" "${STUB_LOG}" || false
+}
+
+@test "check refuses a stage input that names two stages" {
+  run "${RECORD}" check "plan pre_deploy"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The stage input must be one of:"* ]]
 }
 
 @test "check needs setup" {
@@ -202,11 +246,65 @@ stage_call() {
 }
 
 @test "pre_deploy is not in scope for a local record, and checks nothing" {
+  LINKED=false run "${RECORD}" run plan
   LINKED=false run "${RECORD}" run pre_deploy
   [ "${status}" -eq 0 ]
-  [[ "${output}" == *"::notice::Pre-deploy is not in scope for a local record."* ]]
+  [[ "${output}" == *"::notice::A project with no platform section does not run the pre-deploy stage. Nothing was checked."* ]]
   ! stage_call pre_deploy || false
   grep -q "Result: not in scope." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a local pre_deploy with no record of the unit stops and says where the record comes from" {
+  LINKED=false run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The records directory holds no record of unit 'network'. Run the plan stage first. In another job, download the plan job's records artifact and pass its directory as records-directory."* ]]
+  [[ "${output}" != *"does not run the pre-deploy stage"* ]]
+  ! grep -q "Result: not in scope." "${GITHUB_STEP_SUMMARY}" || false
+}
+
+@test "a local pre_deploy whose record cannot be read fails the step and says so in the summary" {
+  LINKED=false run "${RECORD}" run plan
+  echo "not a record" > "${RECORDS}/units/network/car.json"
+  : > "${GITHUB_STEP_SUMMARY}"
+  LINKED=false run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 9 ]
+  [[ "${output}" == *"The CLI could not say whether the record of unit 'network' expects the pre-deploy stage (exit 9)."* ]]
+  grep -q "Result: record does not verify." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a unit name that breaks the unit-name rule is refused before the artifact is named" {
+  UNIT="../x" run "${RECORD}" run plan
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Unit name '../x' does not follow the unit-name rule."* ]]
+}
+
+@test "a local pre_deploy asks the CLI, keeps its answer and shows it paused and in the summary" {
+  LINKED=false run "${RECORD}" run plan
+  : > "${GITHUB_STEP_SUMMARY}"
+  LINKED=false run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 0 ]
+  grep -q "^iltero record in-scope ${RECORDS}/units/network --stage=pre_deploy$" "${STUB_LOG}"
+  grep -qx "The pre_deploy stage is out of scope." "${RUNNER_TEMP}/iltero-record-iac/production/units/network/pre_deploy/in-scope-pre_deploy.txt"
+  commands_paused_around "::error::injected by the record"
+  grep -q "<summary>network: in-scope-pre-deploy</summary>" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "any other answer than in or out of scope fails a local pre_deploy with the CLI's code" {
+  LINKED=false run "${RECORD}" run plan
+  echo 2 > "${MARKS}/in-scope-exit"
+  LINKED=false run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 2 ]
+  grep -q "Result: record unreadable." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a local pre_deploy whose record expects the stage says it did not run, and how to leave it out" {
+  touch "${MARKS}/expects-pre-deploy"
+  LINKED=false run "${RECORD}" run plan
+  LINKED=false run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 0 ]
+  [[ "${output}" == *"List pre_deploy under stages.out_of_scope in .iltero/config.yml."* ]]
+  ! stage_call pre_deploy || false
+  grep -q "Result: not run." "${GITHUB_STEP_SUMMARY}"
 }
 
 # --- post_deploy -------------------------------------------------------------
@@ -215,6 +313,29 @@ stage_call() {
   run "${RECORD}" run post_deploy
   [ "${status}" -eq 0 ]
   stage_call post_deploy | grep -qx "iltero iac check --stage=post_deploy --plan=plan.json --saved-plan=tfplan --apply-log=apply.ndjson --state=state.json --unit=network --out=${RECORDS} --environment=production --upload"
+}
+
+@test "post_deploy records an apply whose state could not be read, and fails with the CLI's code" {
+  STATE="" STATE_UNREADABLE=true run "${RECORD}" run post_deploy
+  [ "${status}" -eq 6 ]
+  stage_call post_deploy | grep -qx "iltero iac check --stage=post_deploy --plan=plan.json --saved-plan=tfplan --apply-log=apply.ndjson --state-unreadable --unit=network --out=${RECORDS} --environment=production --upload"
+  grep -q "Result: exit 6, state not read." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "post_deploy refuses both the state and state-unreadable" {
+  STATE_UNREADABLE=true run "${RECORD}" run post_deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Give either the state input or state-unreadable: true, not both."* ]]
+  ! stage_call post_deploy || false
+}
+
+@test "state-unreadable applies only to post_deploy, and is true or false" {
+  STATE_UNREADABLE=true run "${RECORD}" run plan
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The state-unreadable input applies only to the post_deploy stage."* ]]
+  STATE_UNREADABLE=yes run "${RECORD}" run post_deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The state-unreadable input must be true or false, not 'yes'."* ]]
 }
 
 @test "post_deploy refuses a missing apply log or state" {
@@ -295,6 +416,35 @@ stage_call() {
   ! grep -q "config show" "${STUB_LOG}" || false
 }
 
+@test "with store-records true, a linked project's every stage keeps its record in the run's artifact store" {
+  STORE_RECORDS=true run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  stage_call plan | grep -q -- " --upload --store$"
+  STORE_RECORDS=true run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 0 ]
+  stage_call pre_deploy | grep -q -- " --upload --store$"
+}
+
+@test "on a pull request, store-records is not used" {
+  unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  GITHUB_EVENT_NAME=pull_request STORE_RECORDS=true run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  stage_call plan | grep -q -- " --local$"
+  ! stage_call plan | grep -qE -- "--store|--upload" || false
+}
+
+@test "in a project without a platform section, store-records is passed on for the CLI to refuse" {
+  LINKED=false STORE_RECORDS=true run "${RECORD}" run plan
+  stage_call plan | grep -q -- "--environment=production --store$"
+}
+
+@test "a store-records value other than true or false is refused" {
+  STORE_RECORDS=yes run "${RECORD}" run plan
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The store-records input must be true or false, not 'yes'."* ]]
+  ! stage_call plan || false
+}
+
 @test "record-iac refuses pull request review events" {
   local event command
   for event in pull_request_review pull_request_review_comment; do
@@ -331,7 +481,7 @@ stage_call() {
 @test "an environment of more than one line is refused" {
   ENVIRONMENT=$'production\n## heading' run "${RECORD}" run plan
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The environment input must be a single line."* ]]
+  [[ "${output}" == *"The environment input must be one line, with no tab or other control character."* ]]
 }
 
 @test "the environment and unit inputs are required" {
@@ -366,7 +516,7 @@ stage_call() {
 @test "the unit's record gets a report, in the artifact and the summary" {
   run "${RECORD}" run plan
   [ "${status}" -eq 0 ]
-  local reports="${RUNNER_TEMP}/iltero-record-iac/reports"
+  local reports="${RUNNER_TEMP}/iltero-record-iac/production/reports"
   grep -qx "report-directory=${reports}" "${GITHUB_OUTPUT}"
   [ -f "${reports}/network/record-report.html" ]
   grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}"
@@ -409,10 +559,57 @@ stage_call() {
   stage_call plan | grep -q -- "--out=${STACK}/records "
 }
 
-@test "the records artifact is named after the unit unless a name is given" {
+@test "an environment that cannot name a directory is refused before anything is written" {
+  local name
+  for name in .. . a/b ../x; do
+    : > "${GITHUB_OUTPUT}"
+    ENVIRONMENT="${name}" run "${RECORD}" run plan
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"cannot name a directory or a file"* ]]
+    ENVIRONMENT="${name}" ARTIFACT_NAME=records run "${RECORD}" run plan
+    [ "${status}" -eq 1 ]
+    ! grep -q "^records-directory=" "${GITHUB_OUTPUT}" || false
+  done
+}
+
+@test "an environment that cannot name an artifact needs an artifact name" {
+  ENVIRONMENT="prod env" run "${RECORD}" run plan
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The default artifact name 'iltero-records-prod env-network' is not a valid artifact name. Set the artifact-name input."* ]]
+}
+
+@test "the records artifact is named after the environment and the unit unless a name is given" {
   run "${RECORD}" run plan
-  grep -qx "artifact-name=iltero-records-network" "${GITHUB_OUTPUT}"
+  grep -qx "artifact-name=iltero-records-production-network" "${GITHUB_OUTPUT}"
   : > "${GITHUB_OUTPUT}"
   ARTIFACT_NAME="network-production" run "${RECORD}" run plan
   grep -qx "artifact-name=network-production" "${GITHUB_OUTPUT}"
+}
+
+@test "an artifact name that looks like an option is kept as given" {
+  local name
+  for name in -n -e -E; do
+    : > "${GITHUB_OUTPUT}"
+    ARTIFACT_NAME="${name}" run "${RECORD}" run plan
+    [ "${status}" -eq 0 ]
+    grep -qx -- "artifact-name=${name}" "${GITHUB_OUTPUT}"
+  done
+}
+
+@test "a unit directory that starts with a dash is refused" {
+  touch "${MARKS}/dash-directory"
+  run "${RECORD}" run plan
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Unit 'network' has a directory that starts with '-': '-L'. Rename the directory."* ]]
+  ! stage_call plan || false
+}
+
+@test "a records directory that looks like an option is a directory in the project" {
+  local name
+  for name in -- - -e; do
+    : > "${GITHUB_OUTPUT}"
+    RECORDS_DIRECTORY="${name}" run "${RECORD}" run plan
+    [ "${status}" -eq 0 ]
+    grep -qx -- "records-directory=${STACK}/${name}" "${GITHUB_OUTPUT}"
+  done
 }

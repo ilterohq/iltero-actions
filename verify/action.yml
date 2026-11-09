@@ -1,5 +1,6 @@
 name: Iltero Verify
-description: Pack each unit's Change Assurance Record with every file it cites, and check it.
+description: >-
+  Pack each unit's Change Assurance Record and every file it cites into a record bundle, and check the bundle.
 author: Iltero
 
 branding:
@@ -7,6 +8,9 @@ branding:
   color: blue
 
 inputs:
+  environment:
+    description: The environment the deploy action deployed. The default artifact name includes it.
+    required: true
   records-directory:
     description: The records directory, from the deploy action's records-directory output.
     required: true
@@ -22,11 +26,15 @@ inputs:
     required: false
     default: "true"
   artifact-name:
-    description: Name of the artifact that holds the record bundles.
+    description: >-
+      Name of the artifact that holds the record bundles. Empty: iltero-record-bundles-<environment>.
     required: false
-    default: iltero-records
+    default: ""
 
 outputs:
+  artifact-name:
+    description: The name of the artifact that holds the record bundles.
+    value: ${{ steps.verify.outputs.artifact-name }}
   report-directory:
     description: The directory that holds the reports. Empty when write-report is false.
     value: ${{ steps.verify.outputs.report-directory }}
@@ -36,31 +44,33 @@ runs:
   steps:
     - name: Check the event and the job
       shell: bash
-      run: '"${GITHUB_ACTION_PATH}/../scripts/verify.sh" check'
+      env:
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/verify.sh" check'
 
     - name: Build and verify each record
       id: verify
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
+        ENVIRONMENT: ${{ inputs.environment }}
         RECORDS_DIRECTORY: ${{ inputs.records-directory }}
         WRITE_REPORT: ${{ inputs.write-report }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/verify.sh" run "${RECORDS_DIRECTORY}"'
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/verify.sh" run "${RECORDS_DIRECTORY}"'
 
     - name: Upload the record bundles
-      if: always()
+      if: always() && steps.verify.outputs.records-directory != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: ${{ inputs.artifact-name }}
-        path: ${{ inputs.records-directory }}/units/*/car-*/
-        retention-days: 90
+        name: ${{ steps.verify.outputs.artifact-name }}
+        path: ${{ steps.verify.outputs.records-directory }}/units/*/car-*/
         if-no-files-found: error
 
     - name: Upload the reports
       if: always() && steps.verify.outputs.report-directory != ''
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: ${{ inputs.artifact-name }}-report
+        name: ${{ steps.verify.outputs.artifact-name }}-report
         path: ${{ steps.verify.outputs.report-directory }}
-        retention-days: 90
         if-no-files-found: ignore

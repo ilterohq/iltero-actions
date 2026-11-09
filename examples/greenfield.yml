@@ -2,16 +2,19 @@
 # copies it into .github/workflows/ and replaces the example values.
 #
 # A push to an environment's branch deploys that environment in a governed run:
-# the deploy job plans, checks, applies and records each unit in order. The
-# plan stage's check opens the run on Iltero Platform, and each later stage
+# the deploy job plans, checks, applies and records each unit in order. For
+# each unit whose record expects the post-verify stage, it then checks that
+# the deployed resources still match what the apply left. The plan stage's
+# check opens the run on Iltero Platform, and each later stage joins it.
+# The close job closes the run when the deploy job succeeded. A run whose
+# deploy failed or was cancelled stays open, so a re-run of the failed job
 # joins it.
-# The close job closes the run when the deploy job succeeded.
 #
 # Values the owner replaces:
 #   the actions commit (40 hex characters), each environment's name, branch,
-#   GitHub deployment environment, deploy role ARN and region, and
-#   ILTERO_API_URL. The stack comes from the platform section of
-#   .iltero/config.yml.
+#   GitHub deployment environment, deploy role's Amazon Resource Name (ARN)
+#   and region, and ILTERO_API_URL. The stack comes from the platform
+#   section of .iltero/config.yml.
 
 name: Iltero
 
@@ -36,7 +39,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read # check out the stack
-      id-token: write # the job's identity token, for Iltero
+      id-token: write # the job's identity token, for Iltero and the deploy role
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,6 +71,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          install-terraform: false # closing a run runs no Terraform
       - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
         with:
           environment: staging
@@ -82,7 +87,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read # check out the stack
-      id-token: write # the job's identity token, for Iltero
+      id-token: write # the job's identity token, for Iltero and the deploy role
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -114,6 +119,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          install-terraform: false # closing a run runs no Terraform
       - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
         with:
           environment: production

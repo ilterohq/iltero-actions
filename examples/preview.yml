@@ -1,7 +1,8 @@
-# Checks each pull request locally: every unit is planned with no credentials
-# and its plan checked with the Iltero CLI. Nothing is sent to Iltero and the
-# job holds no secret, so it works with or without an Iltero account. A second
-# job, which runs no code from the pull request, posts the result as a comment.
+# Checks each pull request locally: the preview step plans every unit with no
+# credentials and checks its plan with the Iltero CLI. The CLI sends nothing
+# to Iltero and the job holds no secret, so the workflow works with or
+# without an Iltero account. A second job, which runs no code from the pull
+# request, posts the result as a comment.
 #
 # A repository owner copies this workflow into .github/workflows/, sets the
 # actions commit, and sets the branches .iltero/config.yml maps to

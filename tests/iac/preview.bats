@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 #
-# Tests for scripts/preview.sh, the body of the `preview` action.
+# Tests for scripts/iac/preview.sh, the body of the `preview` action.
 
-load test_helper
+load ../test_helper
 
 setup() {
   make_runner
@@ -24,14 +24,14 @@ setup() {
   export HEAD_SHA="0123456789abcdef0123456789abcdef01234567"
   export UNITS_JSON="${BATS_TEST_TMPDIR}/units.json"
   : > "${GITHUB_STEP_SUMMARY}"
-  PREVIEW="${REPO_ROOT}/scripts/preview.sh"
+  PREVIEW="${REPO_ROOT}/scripts/iac/preview.sh"
   TOOLS="${RUNNER_TEMP}/iltero-tools"
   mkdir -p "${TOOLS}/bin" "${TOOLS}/venv/bin"
   # The CLI's Python. The identity-token request is answered with a fake
   # token naming its audience; anything else runs the real interpreter.
   cat > "${TOOLS}/venv/bin/python" << 'STUB'
 #!/bin/bash
-if [[ "$1" == "-c" && "$2" == *ACTIONS_ID_TOKEN_REQUEST_URL* ]]; then
+if [[ "$1" == "-I" && "$2" == "-c" && "$3" == *ACTIONS_ID_TOKEN_REQUEST_URL* ]]; then
   echo "audience ${AUDIENCE}" >> "${STUB_LOG}"
   [[ -z "${MINT_FAILS:-}" ]] || exit 1
   echo "id-token-for-${AUDIENCE}"
@@ -98,7 +98,7 @@ EOF
 
   STACK="${BATS_TEST_TMPDIR}/stack"
   mkdir -p "${STACK}"
-  cd "${STACK}"
+  cd "${STACK}" || return
 }
 
 # Writes a unit with an AWS provider. With "role", the provider assumes a role.
@@ -201,7 +201,8 @@ aws_unit() {
 @test "a named environment that spans several lines is refused" {
   ENVIRONMENT=$'production\nstaging' run "${PREVIEW}" environment
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"spans several lines"* ]]
+  [[ "${output}" == *"The environment input must be one line, with no tab or other control character."* ]]
+  grep -q "The preview stopped before it checked every unit." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
 }
 
 @test "a named environment that cannot name a settings file is refused before anything runs" {
@@ -209,10 +210,10 @@ aws_unit() {
   for name in ../prod prod/x . ..; do
     ENVIRONMENT="${name}" run "${PREVIEW}" environment
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"cannot name a unit's settings file"* ]]
+    [[ "${output}" == *"cannot name a directory or a file"* ]]
     run "${PREVIEW}" run "${name}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"cannot name a unit's settings file"* ]]
+    [[ "${output}" == *"cannot name a directory or a file"* ]]
   done
   ! grep -q "^terraform" "${STUB_LOG}" || false
 }
@@ -229,6 +230,8 @@ aws_unit() {
 @test "the environment input reaches the step that finds the environment" {
   run awk '/- name: Find the environment/ { inside = 1; next } inside && /ENVIRONMENT:/ { sub(/^ +/, ""); print; exit }' \
     "${REPO_ROOT}/preview/action.yml"
+  # The action's own text is matched as written.
+  # shellcheck disable=SC2016
   [ "${output}" = 'ENVIRONMENT: ${{ inputs.environment }}' ]
 }
 
@@ -443,6 +446,46 @@ aws_unit() {
   grep -q "| network | exit 1 |" "${GITHUB_STEP_SUMMARY}"
 }
 
+@test "a failing check fails the step with the CLI's own exit code" {
+  aws_unit units/network
+  CHECK_EXIT=3 run "${PREVIEW}" run production
+  [ "${status}" -eq 3 ]
+  grep -q "| network | exit 3 |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "^| network | exit 3 |$" "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+  ! grep -q "preview stopped" "${RUNNER_TEMP}/iltero-preview/comment/comment.md" || false
+}
+
+@test "a stack with no unit stops the preview" {
+  echo '[]' > "${UNITS_JSON}"
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The CLI lists no units in this stack, so there is nothing to check."* ]]
+}
+
+@test "a run that stops before its result says so in the comment" {
+  run "${PREVIEW}" environment
+  grep -q "has not finished" "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+  echo '[]' > "${UNITS_JSON}"
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 1 ]
+  grep -q "The preview stopped before it checked every unit. See the job summary and the log." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+  ! grep -q "has not finished" "${RUNNER_TEMP}/iltero-preview/comment/comment.md" || false
+}
+
+@test "an environment the CLI cannot find leaves a comment that says the preview stopped" {
+  DETECT_EXIT=2 run "${PREVIEW}" environment
+  [ "${status}" -eq 2 ]
+  grep -q "The preview stopped before it checked every unit." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+}
+
+@test "each unit starts with an empty work directory" {
+  aws_unit units/network
+  mkdir -p "${RUNNER_TEMP}/iltero-preview/units/network"
+  echo "old output" > "${RUNNER_TEMP}/iltero-preview/units/network/stale.txt"
+  run "${PREVIEW}" run production
+  [ ! -e "${RUNNER_TEMP}/iltero-preview/units/network/stale.txt" ]
+}
+
 @test "the summary shows the CLI's output with HTML escaped" {
   aws_unit units/network
   run "${PREVIEW}" run production
@@ -468,7 +511,7 @@ aws_unit() {
 @test "until the run finishes, the comment says the preview has not finished" {
   run "${PREVIEW}" environment
   [ "${status}" -eq 0 ]
-  [ "$(output_value comment-dir)" = "${RUNNER_TEMP}/iltero-preview/comment" ]
+  [ "$(output_value comment-directory)" = "${RUNNER_TEMP}/iltero-preview/comment" ]
   grep -q "The preview has not finished." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
   grep -qF "Commit ${HEAD_SHA}." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
 }
@@ -532,6 +575,15 @@ aws_unit() {
 }
 
 @test "the comment artifact is named after the records artifact, and empty without a comment" {
-  grep -qF "value: \${{ steps.environment.outputs.comment-dir != '' && format('{0}-comment', inputs.artifact-name) || '' }}" "${REPO_ROOT}/preview/action.yml"
+  grep -qF "value: \${{ steps.environment.outputs.comment-directory != '' && format('{0}-comment', inputs.artifact-name) || '' }}" "${REPO_ROOT}/preview/action.yml"
+  # The action's own text is matched as written.
+  # shellcheck disable=SC2016
   grep -qF 'name: ${{ inputs.artifact-name }}-comment' "${REPO_ROOT}/preview/action.yml"
+}
+
+@test "a unit directory that starts with a dash is refused" {
+  echo '[{"name": "network", "working_directory": "-L"}]' > "${UNITS_JSON}"
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Unit 'network' has a directory that starts with '-': '-L'. Rename the directory."* ]]
 }

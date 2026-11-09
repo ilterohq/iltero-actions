@@ -1,9 +1,8 @@
 #!/usr/bin/env bats
 #
-# Tests for scripts/comment.sh, the body of the `comment` action.
+# Tests for scripts/iac/comment.sh, the body of the `comment` action.
 
-load test_helper
-
+load ../test_helper
 
 setup() {
   make_runner
@@ -16,7 +15,7 @@ setup() {
   export PR_NUMBER="7"
   export GITHUB_WORKFLOW_REF="octo/stack/.github/workflows/preview.yml@refs/pull/7/merge"
   MARKER="$(marker_for "${GITHUB_WORKFLOW_REF}")"
-  COMMENT="${REPO_ROOT}/scripts/comment.sh"
+  COMMENT="${REPO_ROOT}/scripts/iac/comment.sh"
   COMMENTS="${BATS_TEST_TMPDIR}/comments.json"
   API_LOG="${BATS_TEST_TMPDIR}/api.log"
   BODY="${BATS_TEST_TMPDIR}/comment.md"
@@ -40,7 +39,7 @@ teardown() {
 # Starts the stand-in for GitHub's API and points GITHUB_API_URL at it.
 start_fake_github() {
   local port_file="${BATS_TEST_TMPDIR}/port"
-  python3 "${REPO_ROOT}/tests/fake_github.py" "${port_file}" "${COMMENTS}" "${API_LOG}" &
+  python3 "${REPO_ROOT}/tests/iac/fake_github.py" "${port_file}" "${COMMENTS}" "${API_LOG}" &
   FAKE_PID=$!
   local tries=0
   until [[ -s "${port_file}" ]]; do

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 #
-# Tests for scripts/run.sh, the body of the `close` action.
+# Tests for scripts/close.sh, the body of the `close` action.
 
 load test_helper
 
@@ -9,7 +9,7 @@ setup() {
   export ACTIONS_ID_TOKEN_REQUEST_URL="https://token.example"
   export ACTIONS_ID_TOKEN_REQUEST_TOKEN="request-token"
   export CLI_EXIT=0
-  RUN="${REPO_ROOT}/scripts/run.sh"
+  RUN="${REPO_ROOT}/scripts/close.sh"
   # A stand-in for the CLI that setup installs. It records its arguments.
   mkdir -p "${RUNNER_TEMP}/iltero-tools/venv/bin"
   ln -s "$(command -v python3)" "${RUNNER_TEMP}/iltero-tools/venv/bin/python"
@@ -60,26 +60,61 @@ EOF
 
 # --- close -------------------------------------------------------------------
 
-@test "close closes the pipeline run's run for the environment" {
-  run "${RUN}" close production
+@test "close closes the pipeline run's change run for the environment" {
+  ENVIRONMENT=production run "${RUN}" close
   [ "${status}" -eq 0 ]
   grep -qx "iltero run close --environment=production" "${STUB_LOG}"
 }
 
+@test "close closes the pipeline run's build run for the application" {
+  APPLICATION=api run "${RUN}" close
+  [ "${status}" -eq 0 ]
+  grep -qx "iltero run close --application=api" "${STUB_LOG}"
+}
+
 @test "close passes a value starting with a dash as a value, not an option" {
-  run "${RUN}" close "--help"
+  ENVIRONMENT="--help" run "${RUN}" close
   grep -qx "iltero run close --environment=--help" "${STUB_LOG}"
 }
 
 @test "close fails with the CLI's exit code" {
-  CLI_EXIT=9 run "${RUN}" close production
+  CLI_EXIT=9 ENVIRONMENT=production run "${RUN}" close
   [ "${status}" -eq 9 ]
 }
 
-@test "close requires exactly the environment" {
+@test "close requires exactly one of the environment and the application" {
   run "${RUN}" close
   [ "${status}" -eq 1 ]
-  run "${RUN}" close production extra
+  [[ "${output}" == *"Give exactly one of the environment and application inputs."* ]]
+  ENVIRONMENT=production APPLICATION=api run "${RUN}" close
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Give exactly one of the environment and application inputs."* ]]
+  ! grep -q "^iltero" "${STUB_LOG}" || false
+}
+
+@test "close refuses an environment or application of more than one line" {
+  ENVIRONMENT=$'production\nx' run "${RUN}" close
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The environment input must be one line, with no tab or other control character."* ]]
+  APPLICATION=$'api\nx' run "${RUN}" close
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The application input must be one line, with no tab or other control character."* ]]
+  ! grep -q "^iltero" "${STUB_LOG}" || false
+}
+
+@test "close treats an input of only spaces as empty" {
+  ENVIRONMENT=" " APPLICATION=api run "${RUN}" close
+  [ "${status}" -eq 0 ]
+  grep -qx "iltero run close --application=api" "${STUB_LOG}"
+}
+
+@test "the close action passes the environment and application to the script" {
+  grep -qx '        ENVIRONMENT: ${{ inputs.environment }}' "${REPO_ROOT}/close/action.yml"
+  grep -qx '        APPLICATION: ${{ inputs.application }}' "${REPO_ROOT}/close/action.yml"
+}
+
+@test "close takes no arguments" {
+  ENVIRONMENT=production run "${RUN}" close production
   [ "${status}" -eq 1 ]
 }
 

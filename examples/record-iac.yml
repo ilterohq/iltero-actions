@@ -15,7 +15,9 @@
 #                refresh-only plan: it writes what it reads into the
 #                state, so drift no longer shows.
 # The plan stage's check opens the run on Iltero Platform, and each later
-# stage joins it. The close job closes the run when the deploy job succeeded.
+# stage joins it. The close job closes the run when the deploy job
+# succeeded. A run whose deploy failed or was cancelled stays open, so a
+# re-run of the failed job joins it.
 #
 # Plan, apply, state and reading files stay in the runner's temporary
 # directory, never in the checked-out repository. The readings can hold
@@ -24,11 +26,24 @@
 # directory. A pre_deploy step in another job must download the records
 # artifact and pass its directory as records-directory.
 #
+# Each record-iac step sets store-records, so the CLI also keeps the stage's
+# record and every file it cites in the run's artifact store: the Amazon
+# Simple Storage Service (S3) bucket that Iltero Platform names for the run,
+# in the deploy role's own account. The CLI uses the job's AWS credentials.
+# The deploy role needs s3:ListBucket on the bucket (arn:aws:s3:::BUCKET),
+# and s3:PutObject, s3:PutObjectRetention and s3:GetObjectRetention on
+# arn:aws:s3:::BUCKET/<prefix>artifacts/<organization id>/*, where <prefix>
+# is the storage location's base prefix. It needs kms:GenerateDataKey on the
+# bucket's Key Management Service (KMS) key, restricted with the
+# kms:ViaService condition to S3 in the bucket's region. The role, the bucket
+# and its key are in one AWS account.
+#
 # Values the owner replaces:
 #   the actions commit (40 hex characters), the environment's name and branch,
-#   the GitHub deployment environment, the deploy role ARN and region, the
-#   unit's name and directory, and ILTERO_API_URL. The stack comes from the
-#   platform section of .iltero/config.yml.
+#   the GitHub deployment environment, the deploy role's Amazon Resource
+#   Name (ARN) and region, the unit's name and directory, and
+#   ILTERO_API_URL. The stack comes from the platform section of
+#   .iltero/config.yml.
 
 name: Iltero
 
@@ -52,7 +67,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read # check out the stack
-      id-token: write # the job's identity token, for Iltero
+      id-token: write # the job's identity token, for Iltero and the deploy role
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,6 +93,7 @@ jobs:
           stage: plan
           environment: production
           unit: network
+          store-records: true
           plan: ${{ runner.temp }}/network-plan.json
           saved-plan: ${{ runner.temp }}/network.tfplan
       - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
@@ -85,12 +101,14 @@ jobs:
           stage: pre_deploy
           environment: production
           unit: network
+          store-records: true
 
       - id: apply
         name: Apply
         working-directory: units/network
         run: terraform apply -input=false -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-apply.ndjson"
-      - name: Read the state
+      - id: state
+        name: Read the state
         if: ${{ !cancelled() && steps.apply.outcome != 'skipped' }}
         working-directory: units/network
         run: terraform show -json > "${RUNNER_TEMP}/network-state.json"
@@ -100,10 +118,15 @@ jobs:
           stage: post_deploy
           environment: production
           unit: network
+          store-records: true
           plan: ${{ runner.temp }}/network-plan.json
           saved-plan: ${{ runner.temp }}/network.tfplan
           apply-log: ${{ runner.temp }}/network-apply.ndjson
-          state: ${{ runner.temp }}/network-state.json
+          # Pass the state when the step that reads it succeeded. When it
+          # failed, set state-unreadable instead: the CLI then records the
+          # apply from the apply log alone, and the step fails.
+          state: ${{ steps.state.outcome == 'success' && format('{0}/network-state.json', runner.temp) || '' }}
+          state-unreadable: ${{ steps.state.outcome == 'failure' }}
 
       - name: Read the deployed resources back
         working-directory: units/network
@@ -118,6 +141,7 @@ jobs:
           stage: post_verify
           environment: production
           unit: network
+          store-records: true
           refresh-plans: |
             ${{ runner.temp }}/network-first.json
             ${{ runner.temp }}/network-second.json
@@ -137,6 +161,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          install-terraform: false # closing a run runs no Terraform
       - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
         with:
           environment: production

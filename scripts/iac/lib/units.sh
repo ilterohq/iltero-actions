@@ -8,7 +8,7 @@ list_units() {
   cli="$(cli_path)"
   tools="$(tools_dir)"
   listing="$("${cli}" units list --format=json)" || die "The CLI could not list the units."
-  "${tools}/venv/bin/python" -c '
+  "${tools}/venv/bin/python" -I -c '
 import json, sys
 units = json.loads(sys.stdin.read())
 if not isinstance(units, list):
@@ -27,16 +27,23 @@ check_unit() {
   local dir="$2"
   [[ "${name}" =~ ${UNIT_NAME_PATTERN} ]] || die "Unit name '${name}' does not follow the unit-name rule."
   [[ "${dir}" != /* && "/${dir}/" != */../* ]] || die "Unit '${name}' has a directory outside the stack: '${dir}'."
+  # Commands would read such a directory as one of their options.
+  [[ "${dir}" != -* ]] || die "Unit '${name}' has a directory that starts with '-': '${dir}'. Rename the directory."
   [[ -d "${dir}" ]] || die "Unit '${name}' has no directory '${dir}'."
 }
 
 # Lists and checks every unit into FILE, before anything runs, so a bad unit
-# stops the step before the first one.
+# stops the step before the first one. It also stops the step when the stack
+# has no unit. It stops when two units share a name, because each unit's work
+# folder is named after the unit.
 list_checked_units() {
   local file="$1"
-  local name dir
+  local name dir seen=" "
   list_units > "${file}" || exit 1
+  [[ -s "${file}" ]] || die "The CLI lists no units in this stack, so there is nothing to check."
   while IFS=$'\t' read -r name dir; do
     check_unit "${name}" "${dir}"
+    [[ "${seen}" != *" ${name} "* ]] || die "Two units are named '${name}'. Give each unit its own name."
+    seen+="${name} "
   done < "${file}"
 }

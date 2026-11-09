@@ -15,22 +15,59 @@ readonly ILTERO_TOOLS_DIRECTORY_NAME="iltero-tools"
 # match capital letters, depending on the locale.
 readonly LOWER="abcdefghijklmnopqrstuvwxyz"
 readonly HEX="0123456789abcdef"
-# A full git commit: 40 lowercase hex characters.
+# A full git commit: 40 lowercase hex characters. Used by the scripts that
+# source this file.
+# shellcheck disable=SC2034
 readonly COMMIT_PATTERN="^[${HEX}]{40}$"
 # A SHA-256 digest: 64 lowercase hex characters.
+# shellcheck disable=SC2034
 readonly SHA256_PATTERN="^[${HEX}]{64}$"
 # The unit-name rule the CLI applies.
+# shellcheck disable=SC2034
 readonly UNIT_NAME_PATTERN="^[${LOWER}0-9_][${LOWER}0-9_-]{0,63}$"
 
-# Prints an error annotation and exits with status 1. The message is escaped,
+# Prints an error annotation and exits with STATUS. The message is escaped,
 # so a value inside it cannot start another workflow command.
-die() {
+exit_with_error() {
+  local status="$1"
+  shift
   local message="$*"
   message="${message//%/%25}"
   message="${message//$'\r'/%0D}"
   message="${message//$'\n'/%0A}"
   printf '::error::%s\n' "${message}" >&2
-  exit 1
+  exit "${status}"
+}
+
+# Prints an error annotation and exits with status 1.
+die() {
+  exit_with_error 1 "$@"
+}
+
+# Stops unless the input INPUT, whose value is VALUE, is true or false.
+require_true_or_false() {
+  local input="$1"
+  local value="$2"
+  [[ "${value}" == true || "${value}" == false ]] || die "The ${input} input must be true or false, not '${value}'."
+}
+
+# Stops unless the input INPUT, whose value is VALUE, is one line, with no
+# tab or other control character.
+require_one_line() {
+  local input="$1"
+  local value="$2"
+  [[ "${value}" != *[[:cntrl:]]* ]] || die "The ${input} input must be one line, with no tab or other control character."
+}
+
+# Stops unless ENVIRONMENT can name a directory or a file, as the actions
+# name their records directories and a unit's settings files after it: it is
+# one line, holds no "/", and is not "." or "..".
+require_environment_name() {
+  local environment="$1"
+  [[ -n "${environment}" ]] || die "The environment input is required."
+  require_one_line environment "${environment}"
+  [[ "${environment}" != */* && "${environment}" != . && "${environment}" != .. ]] \
+    || die "The environment '${environment}' cannot name a directory or a file. Use a name without '/' that is not '.' or '..'."
 }
 
 # Prints the absolute path of the tools folder.
@@ -61,6 +98,31 @@ is_pull_request_event() {
   esac
 }
 
+# Stops unless ACTION records STAGE, one of the STAGES that follow, on the
+# job's event. It refuses pull_request_target and workflow_run first, then
+# pull_request_review and pull_request_review_comment events. On
+# pull_request events it allows only the plan stage, which checks SUBJECT
+# locally.
+check_stage_for_event() {
+  local action="$1"
+  local subject="$2"
+  local stage="$3"
+  shift 3
+  refuse_untrusted_event
+  local known=""
+  for known in "$@"; do
+    [[ "${stage}" != "${known}" ]] || break
+  done
+  [[ -n "${stage}" && "${stage}" == "${known}" ]] \
+    || die "The stage input must be one of: $*. It is '${stage}'."
+  if is_pull_request_event; then
+    [[ "${GITHUB_EVENT_NAME}" == pull_request ]] \
+      || die "${action} does not run on ${GITHUB_EVENT_NAME} events. Run it on pull_request events, where it checks ${subject} locally."
+    [[ "${stage}" == plan ]] \
+      || die "On pull request events, ${action} records only the plan stage, checked locally."
+  fi
+}
+
 # Refuses pull request events. A pull request may only run a local preview,
 # never a governed run.
 refuse_pull_request() {
@@ -83,14 +145,6 @@ cli_path() {
   echo "${cli}"
 }
 
-# Prints the absolute path of the Terraform binary that `setup` installed.
-terraform_path() {
-  local terraform
-  terraform="$(tools_dir)/bin/terraform"
-  [[ -x "${terraform}" ]] || die "Terraform is not installed. Run the setup action first in this job, with install-terraform true."
-  echo "${terraform}"
-}
-
 # Escapes text for HTML in the job summary and the pull request comment, so
 # text from a tool cannot change how they render or mention anyone.
 html_escape() {
@@ -99,7 +153,13 @@ html_escape() {
   text="${text//</&lt;}"
   text="${text//>/&gt;}"
   text="${text//@/&#64;}"
-  echo "${text}"
+  printf '%s\n' "${text}"
+}
+
+# Prints FILE escaped as html_escape escapes text. One pass over the file, so
+# the time grows only with the file's size.
+html_escape_file() {
+  sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/@/\&#64;/g' "$1"
 }
 
 # Prints one collapsible section of the job summary: TITLE, then the escaped
@@ -108,19 +168,48 @@ html_escape() {
 details_block() {
   local title="$1"
   local file="$2"
-  echo "<details><summary>${title}</summary>"
+  echo "<details><summary>$(html_escape "${title}")</summary>"
   echo
   echo "<pre>"
-  html_escape "$(cat "${file}")"
+  html_escape_file "${file}"
   echo "</pre>"
   echo
   echo "</details>"
 }
 
+# The most bytes of details a step's job summary may hold. GitHub drops a
+# step's whole summary above 1 MiB; this leaves room for the rest.
+readonly SUMMARY_DETAILS_MAX_BYTES=800000
+
+# Appends one collapsible section to the file DETAILS: TITLE, then the escaped
+# text of FILE. When the escaped section would make DETAILS too long for the
+# job summary, it appends a pointer to the log instead.
+append_details_block() {
+  local details="$1"
+  local title="$2"
+  local file="$3"
+  local block="${details}.block" size
+  touch "${details}"
+  size="$(wc -c < "${details}")"
+  # Escaped text is never shorter than the file, so a file that is already too
+  # long is not escaped at all.
+  if [[ $((size + $(wc -c < "${file}"))) -le "${SUMMARY_DETAILS_MAX_BYTES}" ]]; then
+    details_block "${title}" "${file}" > "${block}"
+    if [[ $((size + $(wc -c < "${block}"))) -le "${SUMMARY_DETAILS_MAX_BYTES}" ]]; then
+      cat "${block}" >> "${details}"
+      rm -f "${block}"
+      return 0
+    fi
+    rm -f "${block}"
+  fi
+  printf '\nThe output of %s is too long for the job summary. It is in the log.\n' "$(markdown_escape "${title}")" >> "${details}"
+}
+
 # Turns workflow commands off until resume_commands, so a line of tool output
-# cannot act as one. Terraform's output and the CLI's check output run with
-# commands off. The CLI's CI commands (run, environment detect, config show)
-# keep them on: the CLI escapes the text it prints and may hide a value.
+# cannot act as a workflow command. Terraform's output and the output of the
+# CLI's checks print with commands off. The CLI commands `run close`,
+# `environment detect` and `config show` print with them on: the CLI escapes
+# the text they print, and masks secret values.
 pause_commands() {
   COMMANDS_TOKEN="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   echo "::stop-commands::${COMMANDS_TOKEN}"
@@ -145,12 +234,30 @@ check_artifact_name() {
     || die "Invalid artifact name '${name}'. Use letters, digits, '.', '_' and '-'."
 }
 
+# Prints GIVEN when it is set, and otherwise DEFAULT, the action's default
+# artifact name. Stops unless the name is a valid artifact name.
+artifact_name() {
+  local given="$1"
+  local default="$2"
+  if [[ -n "${given}" ]]; then
+    check_artifact_name "${given}"
+    # printf, because echo reads a name such as -n as one of its options.
+    printf '%s\n' "${given}"
+    return 0
+  fi
+  [[ "${default}" =~ ^[A-Za-z0-9._-]+$ ]] \
+    || die "The default artifact name '${default}' is not a valid artifact name. Set the artifact-name input."
+  printf '%s\n' "${default}"
+}
+
 # Escapes text for a line of Markdown, such as a heading: HTML as html_escape
 # does, then each punctuation mark Markdown reads, so the text shows as it is.
 markdown_escape() {
   local text out="" char i
   local marks='\`*_{}[]()+-.!|~"'"'"'$%,/:=?^'
-  text="$(html_escape "$1")"
+  # A control character, such as a line break, would end the Markdown line, so
+  # it becomes a space.
+  text="$(html_escape "${1//[[:cntrl:]]/ }")"
   for ((i = 0; i < ${#text}; i++)); do
     char="${text:i:1}"
     if [[ "${marks}" == *"${char}"* ]]; then
@@ -160,13 +267,6 @@ markdown_escape() {
     fi
   done
   echo "${out}"
-}
-
-# Prints the address of this workflow run's page.
-run_url() {
-  [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" && -n "${GITHUB_RUN_ID:-}" ]] \
-    || die "GITHUB_SERVER_URL, GITHUB_REPOSITORY or GITHUB_RUN_ID is not set. Run this action inside a GitHub Actions job."
-  echo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 }
 
 # Writes one step output. The value must be a single line, so it cannot add

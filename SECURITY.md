@@ -6,9 +6,9 @@ Only the latest release receives security fixes. This repository has no release 
 
 ## Reporting a Vulnerability
 
-We take the security of Iltero Actions seriously. If you discover a security vulnerability, please report it responsibly.
+Report a security vulnerability in Iltero Actions privately, by email.
 
-**Do NOT open a public GitHub issue for security vulnerabilities.**
+**Do not open a public GitHub issue for a security vulnerability.**
 
 ### How to Report
 
@@ -21,16 +21,16 @@ Email **<security@iltero.io>** with:
 
 ### What to Expect
 
-- **Acknowledgment**: We will acknowledge receipt within 2 business days
-- **Assessment**: We will assess the vulnerability within 5 business days
-- **Resolution**: We aim to release a fix within 30 days for confirmed vulnerabilities
-- **Disclosure**: We will coordinate public disclosure with you after the fix is released
+- **Acknowledgment**: Iltero acknowledges receipt within 2 business days
+- **Assessment**: Iltero assesses the vulnerability within 5 business days
+- **Resolution**: Iltero aims to release a fix within 30 days for confirmed vulnerabilities
+- **Disclosure**: Iltero coordinates public disclosure with you after the fix is released
 
 ### Scope
 
 The following are in scope for security reports:
 
-- Secret/credential exposure in action outputs or logs
+- Secret or credential exposure in action outputs or logs
 - Injection vulnerabilities in shell scripts (command injection, path traversal)
 - Insecure handling of GitHub tokens or identity tokens
 - Privilege escalation through action inputs
@@ -38,14 +38,14 @@ The following are in scope for security reports:
 
 The following are **out of scope**:
 
-- Vulnerabilities in third-party actions we reference (report to those maintainers)
+- Vulnerabilities in third-party actions that these actions use (report them to their maintainers)
 - Issues requiring physical access to the runner
 - Social engineering attacks
 - Denial of service against GitHub Actions infrastructure
 
 ## Security Best Practices for Users
 
-- Use OIDC for cloud provider authentication; never store long-lived cloud keys as secrets
+- Use OpenID Connect (OIDC) for cloud provider authentication. Never store long-lived cloud keys as secrets
 - Enable GitHub branch protection on your main branch
-- Pin every action to a full commit SHA and review the pins regularly
+- Pin every action to a full commit SHA (the commit's 40-character ID) and review the pins regularly
 - Use least-privilege permissions in workflow files

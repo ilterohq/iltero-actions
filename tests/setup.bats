@@ -2,6 +2,10 @@
 #
 # Tests for scripts/setup.sh, the body of the `setup` action.
 
+# The stubs and scripts these tests write expand their variables when they
+# run, not here.
+# shellcheck disable=SC2016
+
 load test_helper
 
 readonly TF_VERSION="9.8.7"
@@ -36,37 +40,39 @@ cli_release() {
   printf 'iltero-schemas %s\niltero-cli %s\n' "${SCHEMAS_COMMIT}" "${CLI_COMMIT}" > "${GITHUB_ACTION_PATH}/cli-sources.txt"
   printf 'typer==0.27.2 \\\n    --hash=sha256:%s\n' "$(printf 'a%.0s' {1..64})" > "${GITHUB_ACTION_PATH}/cli-requirements.txt"
   echo "opa evaluator" > "${FIXTURES}/opa_linux_amd64_static"
-  export OPA_SHA="$(sha256_of "${FIXTURES}/opa_linux_amd64_static")"
+  OPA_SHA="$(sha256_of "${FIXTURES}/opa_linux_amd64_static")"
+  export OPA_SHA
   export INSTALLED_COMMIT="${CLI_COMMIT}"
   export INSTALLED_SCHEMAS_COMMIT="${SCHEMAS_COMMIT}"
   export PIP_EXIT=0
   export DOCTOR_EXIT=0
   stub python3 '
-[[ "$1 $2" == "-m venv" ]] || exit 99
-mkdir -p "$3/bin"
-cat > "$3/bin/python" << "EOF"
+[[ "$1 $2 $3" == "-I -m venv" ]] || exit 99
+mkdir -p "$4/bin"
+cat > "$4/bin/python" << "EOF"
 #!/bin/bash
-if [[ "$1 $2" == "-m pip" ]]; then
+if [[ "$1 $2 $3" == "-I -m pip" ]]; then
   echo "pip $*" >> "${STUB_LOG}"
   echo "pip failure detail"
   exit "${PIP_EXIT}"
 fi
-if [[ "$1" == "-c" && "$2" == *"OPA_RELEASE_PIN"* ]]; then
-  echo "v1.20.2 opa_linux_amd64_static ${OPA_SHA}"
-  exit 0
-fi
-if [[ "$1" == "-c" && "$2" == *"direct_url"* ]]; then
-  [[ "$3" == iltero-schemas ]] && echo "${INSTALLED_SCHEMAS_COMMIT}" || echo "${INSTALLED_COMMIT}"
+if [[ "$1" == "-I" && "$2" == "-c" && "$3" == *"direct_url"* ]]; then
+  [[ "$4" == iltero-schemas ]] && echo "${INSTALLED_SCHEMAS_COMMIT}" || echo "${INSTALLED_COMMIT}"
   exit 0
 fi
 exit 98
 EOF
-cat > "$3/bin/iltero" << "EOF"
+cat > "$4/bin/iltero" << "EOF"
 #!/bin/bash
 echo "iltero $* ILTERO_OPA_PATH=${ILTERO_OPA_PATH}" >> "${STUB_LOG}"
+if [[ "$1 $2" == "evaluator pin" ]]; then
+  [[ -z "${PIN_EXIT:-}" ]] || exit "${PIN_EXIT}"
+  echo "${PIN_LINE:-v1.20.2 opa_linux_amd64_static ${OPA_SHA}}"
+  exit 0
+fi
 exit "${DOCTOR_EXIT}"
 EOF
-chmod +x "$3/bin/python" "$3/bin/iltero"'
+chmod +x "$4/bin/python" "$4/bin/iltero"'
 }
 
 # --- check -------------------------------------------------------------------
@@ -177,6 +183,19 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   [[ "${output}" == *"not 'Terraform v${TF_VERSION}'"* ]]
 }
 
+@test "terraform reads the version from a binary that prints many lines" {
+  local build="${BATS_TEST_TMPDIR}/tf-build"
+  mkdir -p "${build}"
+  printf '#!/bin/bash\necho "Terraform v%s"\nfor i in $(seq 1 20000); do echo "provider line ${i}"; done\n' "${TF_VERSION}" > "${build}/terraform"
+  chmod +x "${build}/terraform"
+  (cd "${build}" && zip -q "${FIXTURES}/terraform_${TF_VERSION}_linux_amd64.zip" terraform)
+  echo "$(sha256_of "${FIXTURES}/terraform_${TF_VERSION}_linux_amd64.zip")  terraform_${TF_VERSION}_linux_amd64.zip" \
+    > "${GITHUB_ACTION_PATH}/terraform.sha256"
+  run "${SETUP}" terraform "${TF_VERSION}"
+  [ "${status}" -eq 0 ]
+  [ "$(output_value terraform-version)" = "${TF_VERSION}" ]
+}
+
 @test "terraform uses the arm64 archive on ARM64 runners" {
   terraform_release
   RUNNER_ARCH=ARM64 run "${SETUP}" terraform "${TF_VERSION}"
@@ -253,6 +272,26 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   [ ! -e "${RUNNER_TEMP}/iltero-tools/bin/opa" ]
 }
 
+@test "cli asks the CLI for the evaluator pin of the runner's platform" {
+  cli_release
+  run "${SETUP}" cli
+  [ "${status}" -eq 0 ]
+  grep -q "^iltero evaluator pin --platform linux-x86_64 " "${STUB_LOG}"
+}
+
+@test "cli refuses an evaluator pin with a field too many, or one the CLI cannot report" {
+  cli_release
+  PIN_LINE="v1.20.2 opa_linux_amd64_static ${OPA_SHA} extra" run "${SETUP}" cli
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The evaluator pin the Iltero CLI reports is malformed."* ]]
+  PIN_LINE="$(printf 'v1.20.2 opa_linux_amd64_static %s\nmore' "${OPA_SHA}")" run "${SETUP}" cli
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The evaluator pin the Iltero CLI reports is malformed."* ]]
+  PIN_EXIT=9 run "${SETUP}" cli
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The Iltero CLI could not report the evaluator pin for linux-x86_64."* ]]
+}
+
 @test "cli fails when the CLI reports it is not ready" {
   cli_release
   DOCTOR_EXIT=4 run "${SETUP}" cli
@@ -278,6 +317,86 @@ chmod +x "$3/bin/python" "$3/bin/iltero"'
   [ "${status}" -eq 1 ]
   [ "${#lines[@]}" -eq 1 ]
   [[ "${output}" == "::error::Invalid Terraform version '1.0.0%0A::warning::injected 100%25'. Use X.Y.Z." ]]
+}
+
+@test "an error can exit with the status it is given" {
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; exit_with_error 7 'stopped'"
+  [ "${status}" -eq 7 ]
+  [ "${output}" = "::error::stopped" ]
+}
+
+@test "a one-line check refuses an input with a tab or other control character" {
+  local value
+  for value in $'prod\tx' $'prod\rx' $'prod\nx'; do
+    run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; require_one_line environment \"\$1\"" _ "${value}"
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "::error::The environment input must be one line, with no tab or other control character." ]
+  done
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; require_one_line environment production"
+  [ "${status}" -eq 0 ]
+}
+
+@test "a true-or-false input refuses any other value" {
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; require_true_or_false store-records yes"
+  [ "${status}" -eq 1 ]
+  [ "${output}" = "::error::The store-records input must be true or false, not 'yes'." ]
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; require_true_or_false store-records true && require_true_or_false store-records false"
+  [ "${status}" -eq 0 ]
+}
+
+@test "output too long for the job summary is replaced by a pointer to the log" {
+  local details="${BATS_TEST_TMPDIR}/details.md" big="${BATS_TEST_TMPDIR}/big.txt" small="${BATS_TEST_TMPDIR}/small.txt"
+  head -c 900000 /dev/zero | tr '\0' 'x' > "${big}"
+  echo "small output" > "${small}"
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; append_details_block '${details}' network '${small}'; append_details_block '${details}' compute '${big}'"
+  [ "${status}" -eq 0 ]
+  grep -q "small output" "${details}"
+  grep -q "The output of compute is too long for the job summary. It is in the log." "${details}"
+  [ "$(wc -c < "${details}")" -lt 800000 ]
+}
+
+@test "the summary size limit counts the output as escaped" {
+  local details="${BATS_TEST_TMPDIR}/details.md" angled="${BATS_TEST_TMPDIR}/angled.txt"
+  head -c 300000 /dev/zero | tr '\0' '<' > "${angled}"
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; append_details_block '${details}' network '${angled}'"
+  [ "${status}" -eq 0 ]
+  grep -q "The output of network is too long for the job summary." "${details}"
+  [ "$(wc -c < "${details}")" -lt 800000 ]
+}
+
+@test "a summary section escapes its title" {
+  local small="${BATS_TEST_TMPDIR}/small.txt"
+  echo "output" > "${small}"
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; details_block '<b>@t&</b>' '${small}'"
+  [[ "${output}" == *"<summary>&lt;b&gt;&#64;t&amp;&lt;/b&gt;</summary>"* ]]
+}
+
+@test "the summary section's working file is removed after each section" {
+  local details="${BATS_TEST_TMPDIR}/details.md" small="${BATS_TEST_TMPDIR}/small.txt"
+  echo "a <b> & c@d" > "${small}"
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; append_details_block '${details}' network '${small}'"
+  [ ! -e "${details}.block" ]
+  grep -qx "a &lt;b&gt; &amp; c&#64;d" "${details}"
+}
+
+@test "escaping a large output takes time in proportion to its size" {
+  local angled="${BATS_TEST_TMPDIR}/angled.txt"
+  head -c 2000000 /dev/zero | tr '\0' '<' > "${angled}"
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; SECONDS=0; html_escape_file '${angled}' > /dev/null; echo \"\${SECONDS}\""
+  [ "${status}" -eq 0 ]
+  [ "${output}" -lt 10 ]
+}
+
+# --- escaping ----------------------------------------------------------------
+
+@test "text that looks like an echo option is printed as written" {
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; html_escape -n; html_escape -e"
+  [ "${output}" = $'-n\n-e' ]
+}
+
+@test "a line break cannot end a line of Markdown" {
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; markdown_escape \$'production\n# heading'"
+  [ "${#lines[@]}" -eq 1 ]
 }
 
 # --- outputs -----------------------------------------------------------------

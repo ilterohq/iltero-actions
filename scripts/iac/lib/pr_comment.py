@@ -44,6 +44,7 @@ def env(name: str) -> str:
 
 
 def call(method: str, url: str, token: str, body: dict | None = None):
+    """Send one request to GitHub's API and return its JSON answer. Stop on any error."""
     data = None if body is None else json.dumps(body).encode()
     headers = {
         "Accept": "application/vnd.github+json",
@@ -66,6 +67,7 @@ def call(method: str, url: str, token: str, body: dict | None = None):
 
 
 def find_comment(comments_url: str, token: str, marker: str) -> int | None:
+    """Return the id of this action's comment that starts with MARKER, or None when there is none."""
     page = 1
     while True:
         comments = call("GET", f"{comments_url}?per_page={PAGE_SIZE}&page={page}", token)

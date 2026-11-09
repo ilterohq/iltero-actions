@@ -6,14 +6,10 @@
 # The files `iltero record report --format FORMAT --out DIR` writes in DIR.
 readonly REPORT_HTML_FILE="record-report.html"
 readonly REPORT_MARKDOWN_FILE="record-report.md"
-# The most bytes of details a report may bring the job summary to. GitHub
-# drops a step's whole summary above 1 MiB; this leaves room for the rest.
-readonly REPORT_SUMMARY_MAX_BYTES=800000
 
 # Prints WRITE_REPORT. Stops the job unless it is true or false.
 report_enabled() {
-  [[ "${WRITE_REPORT:-}" == true || "${WRITE_REPORT:-}" == false ]] \
-    || die "The write-report input must be true or false, not '${WRITE_REPORT:-}'."
+  require_true_or_false write-report "${WRITE_REPORT:-}"
   echo "${WRITE_REPORT}"
 }
 
@@ -49,7 +45,7 @@ write_report() {
   touch "${details}"
   local size
   size=$(($(wc -c < "${details}") + $(wc -c < "${dir}/${REPORT_MARKDOWN_FILE}")))
-  if [[ "${size}" -gt "${REPORT_SUMMARY_MAX_BYTES}" ]]; then
+  if [[ "${size}" -gt "${SUMMARY_DETAILS_MAX_BYTES}" ]]; then
     printf '\nThe report of unit %s is too long for the job summary. It is in the report artifact.\n' "${name}" >> "${details}"
     return 0
   fi
