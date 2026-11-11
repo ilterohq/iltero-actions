@@ -71,8 +71,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
-        with:
-          install-terraform: false # closing a run runs no Terraform
       - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
         with:
           environment: staging
@@ -119,8 +117,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
-        with:
-          install-terraform: false # closing a run runs no Terraform
       - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
         with:
           environment: production

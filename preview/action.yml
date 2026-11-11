@@ -36,8 +36,19 @@ inputs:
       with -comment added.
     required: false
     default: iltero-preview
+  terraform-version:
+    description: >-
+      The Terraform version to install and run. Only versions listed in scripts/iac/terraform.sha256 are accepted.
+    required: false
+    default: "1.16.5"
 
 outputs:
+  terraform-version:
+    description: The Terraform version installed.
+    value: ${{ steps.terraform.outputs.terraform-version }}
+  terraform-path:
+    description: Absolute path of the Terraform binary.
+    value: ${{ steps.terraform.outputs.terraform-path }}
   environment:
     description: The environment the change is checked against.
     value: ${{ steps.environment.outputs.environment }}
@@ -60,6 +71,13 @@ runs:
         REGISTRY_HOST: ${{ inputs.registry-host }}
         UPLOAD_RECORDS: ${{ inputs.upload-records }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/preview.sh" check "${ARTIFACT_NAME}"'
+
+    - name: Install Terraform
+      id: terraform
+      shell: bash
+      env:
+        TERRAFORM_VERSION: ${{ inputs.terraform-version }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/install-terraform.sh" "${TERRAFORM_VERSION}"'
 
     - name: Find the environment
       id: environment

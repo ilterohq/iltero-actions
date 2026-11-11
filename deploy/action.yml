@@ -42,8 +42,19 @@ inputs:
       pipeline run (on GitHub, one workflow run) that deploy the same environment need different names.
     required: false
     default: ""
+  terraform-version:
+    description: >-
+      The Terraform version to install and run. Only versions listed in scripts/iac/terraform.sha256 are accepted.
+    required: false
+    default: "1.16.5"
 
 outputs:
+  terraform-version:
+    description: The Terraform version installed.
+    value: ${{ steps.terraform.outputs.terraform-version }}
+  terraform-path:
+    description: Absolute path of the Terraform binary.
+    value: ${{ steps.terraform.outputs.terraform-path }}
   records-directory:
     description: The directory that holds the records.
     value: ${{ steps.deploy.outputs.records-directory }}
@@ -69,6 +80,13 @@ runs:
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/deploy.sh" check'
+
+    - name: Install Terraform
+      id: terraform
+      shell: bash
+      env:
+        TERRAFORM_VERSION: ${{ inputs.terraform-version }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/install-terraform.sh" "${TERRAFORM_VERSION}"'
 
     - name: Deploy each unit
       id: deploy

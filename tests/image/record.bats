@@ -185,6 +185,13 @@ check_call() {
   check_call | grep -qx -- "iltero image check --stage=plan --build-metadata=metadata.json --image-index=index.json --attestation=provenance.sigstore.json --test-report=junit.xml --scanner=trivy --scanner-report=trivy.json --scanner=grype --scanner-report=grype.json --image=${IMAGE} --unit=root --out=${RECORDS} --application=api --upload"
 }
 
+@test "a report of one scanner for each architecture is passed to the check, in the order given" {
+  echo '{}' > trivy-linux-arm64.json
+  SCAN_REPORTS=$'trivy trivy.json\ntrivy trivy-linux-arm64.json' run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  check_call | grep -q -- " --scanner=trivy --scanner-report=trivy.json --scanner=trivy --scanner-report=trivy-linux-arm64.json "
+}
+
 @test "blank lines and spaces around each line of the report lists are skipped" {
   TEST_REPORTS=$'\n  junit.xml \n\n' SCAN_REPORTS=$'  trivy   trivy.json  \n\n' run "${RECORD}" run plan
   [ "${status}" -eq 0 ]
@@ -357,22 +364,68 @@ STUB
 
 # --- deployment stages -------------------------------------------------------
 
-@test "pre_deploy checks the image to deploy locally, in the given environment, with no identity token" {
+@test "in an unlinked project, pre_deploy checks the image to deploy locally, in the given environment, with no identity token" {
   unset ACTIONS_ID_TOKEN_REQUEST_URL
-  IMAGE="${DEPLOYED}" APPLICATION="" ENVIRONMENT=production run "${RECORD}" run pre_deploy
+  LINKED=false IMAGE="${DEPLOYED}" APPLICATION="" ENVIRONMENT=production run "${RECORD}" run pre_deploy
   [ "${status}" -eq 0 ]
   check_call | grep -qx -- "iltero image check --stage=pre_deploy --image=${DEPLOYED} --environment=production --unit=root --out=${DEPLOYMENTS}"
-  ! grep -q "config show" "${STUB_LOG}" || false
 }
 
 @test "post_deploy reports the deployed image, into the same records directory" {
-  ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" run "${RECORD}" run post_deploy
+  LINKED=false ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" run "${RECORD}" run post_deploy
   [ "${status}" -eq 0 ]
   check_call | grep -qx -- "iltero image check --stage=post_deploy --image=${DEPLOYED} --environment=production --unit=root --out=${DEPLOYMENTS}"
 }
 
+@test "in a linked project, each deployment stage runs in the image deploy run of its application and environment, and is sent" {
+  IMAGE="${DEPLOYED}" ENVIRONMENT=production run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 0 ]
+  check_call | grep -qx -- "iltero image check --stage=pre_deploy --image=${DEPLOYED} --environment=production --unit=root --out=${DEPLOYMENTS} --application=api --upload"
+  : > "${STUB_LOG}"
+  IMAGE="${DEPLOYED}" ENVIRONMENT=production run "${RECORD}" run post_deploy
+  [ "${status}" -eq 0 ]
+  check_call | grep -qx -- "iltero image check --stage=post_deploy --image=${DEPLOYED} --environment=production --unit=root --out=${DEPLOYMENTS} --application=api --upload"
+  : > "${STUB_LOG}"
+  IMAGE="" CLUSTER_ID="${CLUSTER}" WORKLOAD_BEFORE_PODS_LISTING=before.json PODS=pods.json \
+    ENVIRONMENT=production WORKLOAD_AFTER_PODS_LISTING=after.json run "${RECORD}" run post_verify
+  [ "${status}" -eq 0 ]
+  check_call | grep -q -- " --environment=production --unit=root --out=${DEPLOYMENTS} --application=api --upload$"
+}
+
+@test "in a linked project, a deployment stage needs the job's identity token" {
+  unset ACTIONS_ID_TOKEN_REQUEST_URL
+  local stage
+  for stage in pre_deploy post_deploy; do
+    IMAGE="${DEPLOYED}" ENVIRONMENT=production run "${RECORD}" run "${stage}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"id-token: write"* ]]
+  done
+  IMAGE="" CLUSTER_ID="${CLUSTER}" WORKLOAD_BEFORE_PODS_LISTING=before.json PODS=pods.json \
+    ENVIRONMENT=production WORKLOAD_AFTER_PODS_LISTING=after.json run "${RECORD}" run post_verify
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"id-token: write"* ]]
+  ! check_call || false
+}
+
+@test "with store-records true, a linked project's deployment records are kept in the run's artifact store" {
+  local stage
+  for stage in pre_deploy post_deploy; do
+    STORE_RECORDS=true IMAGE="${DEPLOYED}" ENVIRONMENT=production run "${RECORD}" run "${stage}"
+    [ "${status}" -eq 0 ]
+  done
+  STORE_RECORDS=true IMAGE="" CLUSTER_ID="${CLUSTER}" WORKLOAD_BEFORE_PODS_LISTING=before.json PODS=pods.json \
+    ENVIRONMENT=production WORKLOAD_AFTER_PODS_LISTING=after.json run "${RECORD}" run post_verify
+  [ "${status}" -eq 0 ]
+  [ "$(check_call | grep -c -- " --application=api --upload --store$")" -eq 3 ]
+}
+
+@test "in a linked project, advisory is passed on at a deployment stage, for the CLI to refuse" {
+  ADVISORY=true IMAGE="${DEPLOYED}" ENVIRONMENT=production run "${RECORD}" run pre_deploy
+  check_call | grep -q -- " --application=api --advisory --upload$"
+}
+
 @test "post_verify passes the cluster and the four readings of the workload" {
-  IMAGE="" APPLICATION="" CLUSTER_ID="${CLUSTER}" WORKLOAD_BEFORE_PODS_LISTING=before.json PODS=pods.json \
+  LINKED=false IMAGE="" APPLICATION="" CLUSTER_ID="${CLUSTER}" WORKLOAD_BEFORE_PODS_LISTING=before.json PODS=pods.json \
     ENVIRONMENT=production POD_OWNERS=owners.json WORKLOAD_AFTER_PODS_LISTING=after.json run "${RECORD}" run post_verify
   [ "${status}" -eq 0 ]
   check_call | grep -qx -- "iltero image check --stage=post_verify --workload-before-pods-listing=before.json --pods=pods.json --pod-owners=owners.json --workload-after-pods-listing=after.json --cluster-id=${CLUSTER} --environment=production --unit=root --out=${DEPLOYMENTS}"
@@ -428,7 +481,7 @@ STUB
 }
 
 @test "inputs a deployment stage does not take are passed on for the CLI to refuse" {
-  ENVIRONMENT=production IMAGE="${DEPLOYED}" BUILD_METADATA=metadata.json STORE_RECORDS=true run "${RECORD}" run pre_deploy
+  LINKED=false ENVIRONMENT=production IMAGE="${DEPLOYED}" BUILD_METADATA=metadata.json STORE_RECORDS=true run "${RECORD}" run pre_deploy
   check_call | grep -q -- "--build-metadata=metadata.json "
   check_call | grep -q -- " --application=api --store$"
   ! check_call | grep -q -- "--upload" || false
@@ -442,9 +495,16 @@ STUB
 }
 
 @test "with advisory true, pre_deploy checks as advice" {
-  ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" ADVISORY=true run "${RECORD}" run pre_deploy
+  LINKED=false ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" ADVISORY=true run "${RECORD}" run pre_deploy
   [ "${status}" -eq 0 ]
   check_call | grep -q -- "--out=${DEPLOYMENTS} --advisory$"
+}
+
+@test "with advisory true, plan in a project that is not linked checks as advice, and sends nothing" {
+  LINKED=false APPLICATION="" ADVISORY=true run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  check_call | grep -q -- " --advisory$"
+  ! check_call | grep -qE -- '--upload|--store|--application' || false
 }
 
 @test "advisory is passed on at every stage, for the CLI to refuse where it does not apply" {

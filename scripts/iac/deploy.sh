@@ -62,7 +62,6 @@ cmd_check() {
   [[ -z "${ARTIFACT_NAME:-}" ]] || check_artifact_name "${ARTIFACT_NAME}"
   [[ -z "${REGISTRY_HOST:-}" ]] || registry_token_variable "${REGISTRY_HOST}" > /dev/null
   cli_path > /dev/null
-  terraform_path > /dev/null
 }
 
 # Stops unless the registry is used only by a linked project. In a linked

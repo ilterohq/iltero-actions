@@ -56,7 +56,6 @@ cmd_check() {
   check_artifact_name "${artifact_name}"
   require_true_or_false upload-records "${UPLOAD_RECORDS:-}"
   cli_path > /dev/null
-  terraform_path > /dev/null
   if [[ -n "${REGISTRY_HOST:-}" ]]; then
     registry_token_variable "${REGISTRY_HOST}" > /dev/null
     [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]] \

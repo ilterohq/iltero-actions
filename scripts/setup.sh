@@ -1,16 +1,14 @@
 #!/bin/bash
 #
-# Installs the tools the other actions use: Terraform, the Iltero CLI and its
-# evaluator, the policy engine that runs the assertions.
+# Installs the tools the other actions use: the Iltero CLI and its evaluator,
+# the policy engine that runs the assertions. The deploy and preview actions
+# install the Terraform they run themselves.
 #
 # Usage:
-#   setup.sh check                Refuse untrusted events, unsupported runners and an
-#                                 INSTALL_TERRAFORM other than true or false.
-#   setup.sh terraform VERSION    Install Terraform VERSION, checked against the pinned checksums.
-#   setup.sh cli                  Install the Iltero CLI and its evaluator at the pinned versions.
+#   setup.sh check    Refuse untrusted events and unsupported runners.
+#   setup.sh cli      Install the Iltero CLI and its evaluator at the pinned versions.
 #
 # GITHUB_ACTION_PATH is the `setup/` folder. It holds the pins:
-#   terraform.sha256          SHA-256 of each pinned Terraform archive.
 #   cli-sources.txt           The commits of iltero-schemas and iltero-cli to install.
 #   cli-requirements.txt      Every other package the CLI needs, with hashes.
 #                             Written by scripts/lock-cli.py.
@@ -18,84 +16,13 @@
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/install.sh"
 
-readonly TERRAFORM_RELEASES_URL="https://releases.hashicorp.com/terraform"
 readonly OPA_RELEASES_URL="https://github.com/open-policy-agent/opa/releases/download"
 readonly GITHUB_URL="https://github.com"
-readonly CURL_OPTIONS=(-fsSL --proto "=https" --tlsv1.2 --retry 3 --retry-all-errors --retry-delay 2)
-
-# Downloads a file and keeps it only if its SHA-256 matches the pinned value.
-download_checked() {
-  local url="$1"
-  local sha="$2"
-  local destination="$3"
-  local partial="${destination}.part"
-  curl "${CURL_OPTIONS[@]}" -o "${partial}" "${url}" || die "Download failed: ${url}"
-  if ! echo "${sha}  ${partial}" | sha256sum -c --quiet - > /dev/null 2>&1; then
-    rm -f "${partial}"
-    die "The download from ${url} does not match its pinned checksum."
-  fi
-  mv "${partial}" "${destination}"
-}
-
-# Prints the Terraform platform name of this runner, or stops on an
-# unsupported runner. Only Linux runners on x64 or ARM64 are supported.
-runner_platform() {
-  [[ "${RUNNER_OS:-}" == "Linux" ]] || die "Unsupported runner OS '${RUNNER_OS:-}'. Use a Linux runner."
-  case "${RUNNER_ARCH:-}" in
-    X64) echo "linux_amd64" ;;
-    ARM64) echo "linux_arm64" ;;
-    *) die "Unsupported runner architecture '${RUNNER_ARCH:-}'. Use an X64 or ARM64 runner." ;;
-  esac
-}
-
 cmd_check() {
   refuse_untrusted_event
   runner_platform > /dev/null
-  require_true_or_false install-terraform "${INSTALL_TERRAFORM:-}"
-}
-
-# Prints the pinned SHA-256 of a Terraform archive, or stops if the archive is
-# not pinned.
-pinned_terraform_sha256() {
-  local archive="$1"
-  local sums="${GITHUB_ACTION_PATH}/terraform.sha256"
-  local sha name
-  [[ -f "${sums}" ]] || die "The pinned Terraform checksums are missing: ${sums}"
-  while read -r sha name; do
-    if [[ "${name}" == "${archive}" ]]; then
-      echo "${sha}"
-      return 0
-    fi
-  done < "${sums}"
-  die "Terraform archive '${archive}' is not pinned. Pinned archives: $(cut -d' ' -f3 "${sums}" | tr '\n' ' ')"
-}
-
-cmd_terraform() {
-  local version="${1:-}"
-  [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Invalid Terraform version '${version}'. Use X.Y.Z."
-
-  local platform archive sha dir
-  platform="$(runner_platform)"
-  archive="terraform_${version}_${platform}.zip"
-  sha="$(pinned_terraform_sha256 "${archive}")"
-  dir="$(tools_dir)"
-  mkdir -p "${dir}/bin"
-
-  download_checked "${TERRAFORM_RELEASES_URL}/${version}/${archive}" "${sha}" "${dir}/${archive}"
-  unzip -o -q "${dir}/${archive}" terraform -d "${dir}/bin"
-  rm -f "${dir}/${archive}"
-  chmod 0755 "${dir}/bin/terraform"
-
-  local reported
-  # The whole output is read before its first line is kept: a pipe into head
-  # could stop Terraform part way and fail the step under pipefail.
-  reported="$("${dir}/bin/terraform" version)" || die "The installed Terraform did not run."
-  reported="${reported%%$'\n'*}"
-  [[ "${reported}" == "Terraform v${version}" ]] \
-    || die "The installed Terraform reports '${reported}', not 'Terraform v${version}'."
-  write_output terraform-version "${version}"
-  write_output terraform-path "${dir}/bin/terraform"
 }
 
 # Prints the commit pinned for a source package in cli-sources.txt.
@@ -200,9 +127,8 @@ main() {
   shift || true
   case "${command}" in
     check) cmd_check ;;
-    terraform) cmd_terraform "$@" ;;
     cli) cmd_cli ;;
-    *) die "Unknown command '${command}'. Use: check | terraform VERSION | cli" ;;
+    *) die "Unknown command '${command}'. Use: check | cli" ;;
   esac
 }
 
