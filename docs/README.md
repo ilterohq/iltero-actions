@@ -7,9 +7,10 @@
    Git gives each commit. Use the SHA of the iltero-actions commit you use. Pin every action to the same commit.
 3. Replace the example values: branches, environments, deploy role and region.
 
-Run `setup` first in every job that uses an Iltero action, except `comment`. `setup` installs Terraform for `deploy`
-and `preview`, which run it. In a job that runs no `deploy` or `preview`, set `install-terraform: false`: a job that
-uses `record-iac` installs and runs its own Terraform, and a job that uses `record-image` or `close` runs none.
+Run `setup` first in every job that uses an Iltero action, except `comment`. `setup` installs the Iltero CLI and its
+evaluator. `deploy` and `preview` install Terraform themselves, at the version that their `terraform-version` input
+names. A job that uses `record-iac` installs and runs its own Terraform, and a job that uses `record-image` or
+`close` runs none.
 
 ## Records artifacts
 
@@ -80,7 +81,7 @@ exit code. Later units are not deployed, and the post-verify stage does not run.
 
 In a job that runs Terraform itself, give `record-iac` the input `state-unreadable: true` at `post_deploy`, and leave
 `state` empty. The CLI then records the apply from the apply log alone, and the step fails. The job summary's result
-reads `exit N, state not read`. `examples/record-iac.yml` shows how.
+reads `exit N, state not read`. `examples/iac/governed-own-terraform.yml` shows how.
 
 ## Post-verify readings of a Terraform unit
 
@@ -102,16 +103,31 @@ upload them, and they are not meant to be kept: the record holds only each readi
 ## Image deployment
 
 `record-image` records a deployment of an image in three stages, into one record: `pre_deploy` before the deployment,
-`post_deploy` after it, and `post_verify` after the rollout. It records a deployment only in a project with no
-`platform` section, and sends nothing to Iltero.
+`post_deploy` after it, and `post_verify` after the rollout.
 
 Every stage of a deployment takes `environment`. At `post_deploy` and `post_verify`, it must match the environment in
 the record.
 
-- **`pre_deploy`** checks the image to deploy, named by its digest with no tag. A check on the runner alone reads no
-  approvals, so an assertion that reads them is always undecided at this stage. With `advisory: true`, failed and
-  undecided assertions do not fail the step, and the record still shows them. At `post_deploy` and `post_verify`,
-  the CLI refuses `advisory: true`.
+In a project linked to Iltero Platform, each stage runs in an image deploy run: a governed run that deploys one
+application's image to one environment. Each stage takes `application`, and Iltero Platform finds or opens the image
+deploy run of the pipeline run for that application and environment. Each stage sends its record. The run's settings
+on Iltero Platform say which stages the record expects: `pre_deploy` and `post_deploy` always, and `post_verify` when
+the environment's policy requires it. The run's settings also decide whether a failed or undecided assertion fails
+`pre_deploy`, so the CLI refuses `advisory: true` at every stage of an image deploy run. The `close` action closes the
+run when it is given both `application` and `environment`.
+
+In a project with no `platform` section, `record-image` records the deployment on the runner alone and sends nothing
+to Iltero Platform. A check on the runner alone reads no approvals and does not know whether each commit was
+reviewed, so an assertion that reads either is always undecided at `pre_deploy`. `post_deploy` and `post_verify`
+refuse `advisory: true`.
+
+- **`pre_deploy`** checks the image to deploy, named by its digest with no tag. It always checks that Iltero Platform
+  accepted a build of the image for the environment.
+  - In a linked project, record and send the build first, with the `plan` stage of `record-image`. Let that step
+    finish before the deployment's `pre_deploy` starts.
+  - In a project with no `platform` section, the build check is always undecided, because only Iltero Platform accepts
+    a build. `pre_deploy` therefore fails unless `advisory: true` is set. With `advisory: true`, failed and undecided
+    assertions do not fail the step, and the record still shows them.
 - **`post_deploy`** reports the image the deployment says it deployed.
 - **`post_verify`** checks that every pod of the workload runs the deployed image. The job reads the workload, its pods,
   a Deployment's ReplicaSets, and the workload again, in that order, with `kubectl get --raw`. It passes the files as
@@ -130,8 +146,9 @@ The readings of the workload can hold secret values, such as a container's envir
 - **`permissions: {}`** at the workflow level, and per-job permissions that grant only what the job needs.
 - **`contents: read`** in a job that checks out the repository. The `close` job checks it out too, because `close`
   reads the project's `.iltero/config.yml`.
-- **`id-token: write`** in a job that calls Iltero Platform: `close`, and `deploy`, `record-iac` or the plan stage of
-  `record-image` for a linked project.
+- **`id-token: write`** in a job that calls Iltero Platform: `close`, and `deploy`, `record-iac` or `record-image` at
+  any stage, in a linked project. On `pull_request` events, `record-iac` and `record-image` check locally and need
+  none.
   The Iltero CLI requests the job's GitHub identity token itself. The examples also grant it for the deploy role.
 - **`ILTERO_API_URL`**, the address of Iltero Platform, in a workflow that calls it. It is the only Iltero setting.
   The job holds no Iltero secret.
@@ -143,7 +160,6 @@ The readings of the workload can hold secret values, such as a container's envir
 
   | Permission | On |
   | --- | --- |
-  | `s3:ListBucket` | The bucket, for example `arn:aws:s3:::BUCKET` |
   | `s3:PutObject`, `s3:PutObjectRetention`, `s3:GetObjectRetention` | `arn:aws:s3:::BUCKET/<prefix>artifacts/<organization id>/*` |
   | `kms:GenerateDataKey` | The bucket's Key Management Service (KMS) key, restricted with the `kms:ViaService` condition to S3 in the bucket's region |
 
@@ -177,8 +193,8 @@ Before opening a pull request, run the checks that continuous integration (CI) r
 ```bash
 { find scripts -name '*.sh' -type f; echo tests/test_helper.bash; } | xargs shellcheck --severity=style
 actionlint
-actionlint examples/*.yml
-zizmor . examples/*.yml
+actionlint examples/*/*.yml
+zizmor . examples/*/*.yml
 yamllint -c .yamllint.yml .
 git ls-files -z -- '*.py' | xargs -0 -r python3 -I -m py_compile
 git ls-files -z | python3 -I scripts/find-nul-bytes.py

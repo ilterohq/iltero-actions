@@ -177,10 +177,10 @@ deploy() {
   done
 }
 
-@test "check requires the CLI and Terraform" {
+@test "check requires the CLI" {
   run "${DEPLOY}" check
   [ "${status}" -eq 0 ]
-  rm "${TOOLS}/bin/terraform"
+  rm "${TOOLS}/venv/bin/iltero"
   run "${DEPLOY}" check
   [ "${status}" -eq 1 ]
 }

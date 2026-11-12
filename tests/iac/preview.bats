@@ -143,11 +143,11 @@ aws_unit() {
   [[ "${output}" == *"Invalid artifact name"* ]]
 }
 
-@test "check requires Terraform and the CLI from setup" {
-  rm "${TOOLS}/bin/terraform"
+@test "check requires the CLI from setup" {
+  rm "${TOOLS}/venv/bin/iltero"
   run "${PREVIEW}" check iltero-preview
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Terraform is not installed"* ]]
+  [[ "${output}" == *"Run the setup action first"* ]]
 }
 
 @test "check refuses an upload-records value other than true or false" {

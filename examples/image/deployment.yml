@@ -68,8 +68,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
-        with:
-          install-terraform: false # a deployment of an image runs no Terraform
 
       - uses: ilterohq/iltero-actions/record-image@0000000000000000000000000000000000000000 # v0.3.0
         with:

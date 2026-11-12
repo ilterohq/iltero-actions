@@ -1,7 +1,8 @@
 name: Iltero Close Run
 description: >-
-  Close the governed run of this pipeline run: the change run of a stack and environment, or the build run of an
-  application. List what the run expected and did not get.
+  Close the governed run of this pipeline run: the change run of a stack and environment, the build run of an
+  application, or the image deploy run of an application and environment. List what the run expected and did not
+  get.
 author: Iltero
 
 branding:
@@ -11,14 +12,14 @@ branding:
 inputs:
   environment:
     description: >-
-      The environment the change run deploys to, as given to the deploy or record-iac action. Give exactly one of
-      environment and application.
+      The environment the run deploys to, as given to the deploy, record-iac or record-image action. Alone, it closes
+      the stack's change run. With application, it closes the image deploy run.
     required: false
     default: ""
   application:
     description: >-
-      The application a build run is about, as given to the record-image action. Give exactly one of environment
-      and application.
+      The application the run is about, as given to the record-image action. Alone, it closes the build run. With
+      environment, it closes the image deploy run.
     required: false
     default: ""
   working-directory:

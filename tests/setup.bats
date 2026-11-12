@@ -8,7 +8,6 @@
 
 load test_helper
 
-readonly TF_VERSION="9.8.7"
 readonly CLI_COMMIT="1111111111111111111111111111111111111111"
 readonly SCHEMAS_COMMIT="2222222222222222222222222222222222222222"
 
@@ -16,22 +15,8 @@ setup() {
   make_runner
   stub_curl
   export GITHUB_ACTION_PATH="${BATS_TEST_TMPDIR}/setup"
-  export INSTALL_TERRAFORM="true"
   mkdir -p "${GITHUB_ACTION_PATH}"
   SETUP="${REPO_ROOT}/scripts/setup.sh"
-}
-
-# A Terraform release archive whose binary reports REPORTED_VERSION, pinned
-# under the archive name for this runner.
-terraform_release() {
-  local reported="${1:-${TF_VERSION}}"
-  local build="${BATS_TEST_TMPDIR}/tf-build"
-  mkdir -p "${build}"
-  printf '#!/bin/bash\necho "Terraform v%s"\necho "on linux_amd64"\n' "${reported}" > "${build}/terraform"
-  chmod +x "${build}/terraform"
-  (cd "${build}" && zip -q "${FIXTURES}/terraform_${TF_VERSION}_linux_amd64.zip" terraform)
-  echo "$(sha256_of "${FIXTURES}/terraform_${TF_VERSION}_linux_amd64.zip")  terraform_${TF_VERSION}_linux_amd64.zip" \
-    > "${GITHUB_ACTION_PATH}/terraform.sha256"
 }
 
 # Pins and stubs for the CLI install. The python3 stub creates a virtual
@@ -111,96 +96,15 @@ chmod +x "$4/bin/python" "$4/bin/iltero"'
   [ "${status}" -eq 0 ]
 }
 
-@test "check refuses an install-terraform value other than true or false" {
-  INSTALL_TERRAFORM="yes" run "${SETUP}" check
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The install-terraform input must be true or false, not 'yes'."* ]]
-  INSTALL_TERRAFORM="false" run "${SETUP}" check
-  [ "${status}" -eq 0 ]
-}
-
-@test "the action installs Terraform only when install-terraform is true" {
-  run awk '/^    - name: Install Terraform$/ { inside = 1; next } inside && /^    - / { exit } inside && /^      if: / { print }' \
-    "${REPO_ROOT}/setup/action.yml"
-  [ "${output}" = "      if: inputs.install-terraform == 'true'" ]
-}
-
 @test "an unknown command is refused" {
   run "${SETUP}" install
   [ "${status}" -eq 1 ]
-}
-
-# --- terraform ---------------------------------------------------------------
-
-@test "terraform rejects a malformed version" {
-  terraform_release
-  run "${SETUP}" terraform "1.16"
-  [ "${status}" -eq 1 ]
-  run "${SETUP}" terraform "1.16.5; rm -rf /"
+  run "${SETUP}" terraform 1.16.5
   [ "${status}" -eq 1 ]
 }
 
-@test "terraform refuses a version that is not pinned" {
-  terraform_release
-  run "${SETUP}" terraform "1.2.3"
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"is not pinned"* ]]
-  ! grep -q curl "${STUB_LOG}" || false
-}
-
-@test "terraform installs a pinned version and writes its outputs" {
-  terraform_release
-  run "${SETUP}" terraform "${TF_VERSION}"
-  [ "${status}" -eq 0 ]
-  grep -q "curl https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip" "${STUB_LOG}"
-  [ "$(output_value terraform-version)" = "${TF_VERSION}" ]
-  [ "$(output_value terraform-path)" = "${RUNNER_TEMP}/iltero-tools/bin/terraform" ]
-  [ -x "${RUNNER_TEMP}/iltero-tools/bin/terraform" ]
-}
-
-@test "terraform refuses a download that does not match its checksum" {
-  terraform_release
-  echo "tampered" >> "${FIXTURES}/terraform_${TF_VERSION}_linux_amd64.zip"
-  run "${SETUP}" terraform "${TF_VERSION}"
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"does not match its pinned checksum"* ]]
-  [ ! -e "${RUNNER_TEMP}/iltero-tools/bin/terraform" ]
-  [ -z "$(output_value terraform-path)" ]
-}
-
-@test "terraform fails when the download fails" {
-  terraform_release
-  rm "${FIXTURES}/terraform_${TF_VERSION}_linux_amd64.zip"
-  run "${SETUP}" terraform "${TF_VERSION}"
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Download failed"* ]]
-}
-
-@test "terraform refuses a binary that reports another version" {
-  terraform_release "1.0.0"
-  run "${SETUP}" terraform "${TF_VERSION}"
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"not 'Terraform v${TF_VERSION}'"* ]]
-}
-
-@test "terraform reads the version from a binary that prints many lines" {
-  local build="${BATS_TEST_TMPDIR}/tf-build"
-  mkdir -p "${build}"
-  printf '#!/bin/bash\necho "Terraform v%s"\nfor i in $(seq 1 20000); do echo "provider line ${i}"; done\n' "${TF_VERSION}" > "${build}/terraform"
-  chmod +x "${build}/terraform"
-  (cd "${build}" && zip -q "${FIXTURES}/terraform_${TF_VERSION}_linux_amd64.zip" terraform)
-  echo "$(sha256_of "${FIXTURES}/terraform_${TF_VERSION}_linux_amd64.zip")  terraform_${TF_VERSION}_linux_amd64.zip" \
-    > "${GITHUB_ACTION_PATH}/terraform.sha256"
-  run "${SETUP}" terraform "${TF_VERSION}"
-  [ "${status}" -eq 0 ]
-  [ "$(output_value terraform-version)" = "${TF_VERSION}" ]
-}
-
-@test "terraform uses the arm64 archive on ARM64 runners" {
-  terraform_release
-  RUNNER_ARCH=ARM64 run "${SETUP}" terraform "${TF_VERSION}"
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"terraform_${TF_VERSION}_linux_arm64.zip' is not pinned"* ]]
+@test "the setup action installs no Terraform" {
+  ! grep -qi terraform "${REPO_ROOT}/setup/action.yml" || false
 }
 
 # --- cli ---------------------------------------------------------------------
@@ -311,13 +215,6 @@ chmod +x "$4/bin/python" "$4/bin/iltero"'
 }
 
 # --- errors ------------------------------------------------------------------
-
-@test "an error message cannot start another workflow command" {
-  run "${SETUP}" terraform $'1.0.0\n::warning::injected 100%'
-  [ "${status}" -eq 1 ]
-  [ "${#lines[@]}" -eq 1 ]
-  [[ "${output}" == "::error::Invalid Terraform version '1.0.0%0A::warning::injected 100%25'. Use X.Y.Z." ]]
-}
 
 @test "an error can exit with the status it is given" {
   run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; exit_with_error 7 'stopped'"

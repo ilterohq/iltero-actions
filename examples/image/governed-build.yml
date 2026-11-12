@@ -3,33 +3,39 @@
 # .github/workflows/ and replaces the example values.
 #
 # A push to main runs three jobs, each with only the rights it needs:
-#   build  builds the image for two CPU architectures (linux/amd64 and
-#          linux/arm64) and pushes it to the GitHub container registry.
+#   build  checks the CPU architectures in IMAGE_PLATFORMS, then builds
+#          the image for each one and pushes it to the GitHub container
+#          registry.
 #          The build reads the source from the Git repository at the pushed
 #          commit, not from the checked-out folder, so the build's metadata
-#          names the commit the image was built from.
+#          names the commit the image was built from. In a private
+#          repository, the build reads the source with the job's token.
 #          The job then reads the image's index back from the registry,
 #          exactly as the registry holds it.
-#   scan   scans the pushed image, read by its digest. A scan of the local
-#          image before the push names no pushed digest. The scanner runs
-#          with read access to the registry only, and cannot get the job's
-#          identity token.
+#   scan   scans the pushed image, read by its digest, once for each
+#          architecture, because one scan reads only one of the image's
+#          architectures. A scan of the local image before the push names
+#          no pushed digest. The scanner runs with read access to the
+#          registry only, and cannot get the job's identity token.
 #   record checks the image and the files of the other two jobs with the
 #          record-image step, which opens the build run of the application on
 #          Iltero Platform and sends the image's record. It then closes the
 #          build run. Record the image before any deployment uses it.
 #
 # The build and scan jobs pass their files to the record job as artifacts,
-# kept for one day. In a public repository, anyone can download them in that
-# day, including the scan report, which lists the image's vulnerabilities.
+# kept for one day. The record-image step keeps each file it is given in the
+# image's record, byte for byte, and uploads the record as an artifact. The
+# repository's artifact retention setting decides how long GitHub keeps that
+# artifact. In a public repository, anyone can download these artifacts while
+# GitHub keeps them, including the scan reports, which list the image's
+# vulnerabilities.
 #
-# Each file the step is given is kept in the record byte for byte. The CLI
-# refuses a file that holds a value the redaction policy would hide, such as
-# a secret a scanner found.
+# The CLI refuses a file that holds a value the redaction policy would hide,
+# such as a secret a scanner found.
 #
 # Values the owner replaces:
-#   the actions commit (40 hex characters), the application key, the CPU
-#   architectures, and ILTERO_API_URL. The image name comes from the
+#   the actions commit (40 hex characters), the application key,
+#   IMAGE_PLATFORMS and ILTERO_API_URL. The image name comes from the
 #   repository.
 
 name: Iltero image
@@ -44,6 +50,9 @@ permissions: {}
 env:
   ILTERO_API_URL: https://api.iltero.io/v1
   APPLICATION: api
+  # The CPU architectures the image is built for, separated by commas with no
+  # spaces. The scan job scans each one.
+  IMAGE_PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
   build:
@@ -56,6 +65,12 @@ jobs:
       image: ${{ steps.build.outputs.image }}
       pushed: ${{ steps.build.outputs.pushed }}
     steps:
+      # A space or an empty entry in the list would make the build or the scans miss an architecture it names.
+      - name: Check the architectures to build
+        run: |
+          platform='[a-z0-9]+/[a-z0-9]+(/v[0-9]+)?'
+          [[ "${IMAGE_PLATFORMS}" =~ ^${platform}(,${platform})*$ ]] \
+            || { echo "::error::IMAGE_PLATFORMS must list one or more platforms, such as linux/amd64, separated by commas with no spaces."; exit 1; }
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -68,13 +83,16 @@ jobs:
         env:
           REPOSITORY: ghcr.io/${{ github.repository }}
           TAG: ${{ github.sha }}
-          GIT_AUTH_TOKEN: ${{ github.token }} # lets the build read a private repository
+          # Only a private repository needs the job's token to read its source.
+          GIT_AUTH_TOKEN: ${{ github.event.repository.private && github.token || '' }}
         run: |
           repository="${REPOSITORY,,}"
+          source_access=()
+          [[ -z "${GIT_AUTH_TOKEN}" ]] || source_access=(--secret "id=GIT_AUTH_TOKEN,env=GIT_AUTH_TOKEN")
           mkdir -p "${RUNNER_TEMP}/build"
-          docker buildx build --platform linux/amd64,linux/arm64 --push \
+          docker buildx build --platform "${IMAGE_PLATFORMS}" --push \
             --tag "${repository}:${TAG}" --metadata-file "${RUNNER_TEMP}/build/metadata.json" \
-            --secret id=GIT_AUTH_TOKEN,env=GIT_AUTH_TOKEN \
+            "${source_access[@]}" \
             "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git#${GITHUB_SHA}"
           digest="$(jq -r '."containerimage.digest"' "${RUNNER_TEMP}/build/metadata.json")"
           [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::The build metadata names no image digest."; exit 1; }
@@ -103,18 +121,25 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
-          image-ref: ${{ needs.build.outputs.pushed }}
-          format: json
-          output: ${{ runner.temp }}/trivy.json
-          version: v0.70.0 # the Trivy release the action installs
-          exit-code: "0" # Iltero's assertions decide whether the scan passes
+          version: v0.70.0 # the Trivy release to install
+      - name: Scan each architecture
+        env:
+          PUSHED: ${{ needs.build.outputs.pushed }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/scan"
+          IFS=, read -ra platforms <<< "${IMAGE_PLATFORMS}"
+          # Iltero's assertions decide whether the scan passes.
+          for platform in "${platforms[@]}"; do
+            trivy image --platform "${platform}" --format json \
+              --output "${RUNNER_TEMP}/scan/trivy-${platform//\//-}.json" "${PUSHED}"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-scan
-          path: ${{ runner.temp }}/trivy.json
-          retention-days: 1 # the record keeps the report; the artifact only carries it to the record job
+          path: ${{ runner.temp }}/scan
+          retention-days: 1 # the record keeps the reports; the artifact only carries them to the record job
           if-no-files-found: error
 
   record:
@@ -136,9 +161,19 @@ jobs:
         with:
           name: image-scan
           path: ${{ runner.temp }}/scan
+      - id: scan-reports
+        name: List the scan report of each architecture
+        run: |
+          delimiter="$(openssl rand -hex 16)"
+          IFS=, read -ra platforms <<< "${IMAGE_PLATFORMS}"
+          {
+            echo "lines<<${delimiter}"
+            for platform in "${platforms[@]}"; do
+              echo "trivy ${RUNNER_TEMP}/scan/trivy-${platform//\//-}.json"
+            done
+            echo "${delimiter}"
+          } >> "${GITHUB_OUTPUT}"
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
-        with:
-          install-terraform: false # a build runs no Terraform
 
       - uses: ilterohq/iltero-actions/record-image@0000000000000000000000000000000000000000 # v0.3.0
         with:
@@ -147,7 +182,7 @@ jobs:
           application: ${{ env.APPLICATION }}
           build-metadata: ${{ runner.temp }}/build/metadata.json
           image-index: ${{ runner.temp }}/build/index.json
-          scan-reports: trivy ${{ runner.temp }}/scan/trivy.json
+          scan-reports: ${{ steps.scan-reports.outputs.lines }}
       - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
         with:
           application: ${{ env.APPLICATION }}

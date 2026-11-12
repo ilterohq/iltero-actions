@@ -9,10 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `setup` action. Installs Terraform, the Iltero CLI and its evaluator at pinned, checksum-verified versions.
+- `setup` action. Installs the Iltero CLI and its evaluator at pinned, checksum-verified versions.
 - `close` action. Closes the governed run of this pipeline run on Iltero Platform: the change run of the stack in
-  `.iltero/config.yml` and an environment, or the build run of an application. It takes exactly one of `environment`
-  and `application`, and `working-directory` (`.` by default).
+  `.iltero/config.yml` and an environment, the build run of an application, or the image deploy run of an application
+  and an environment. The inputs given decide which run it closes:
+
+  | Inputs given | Run closed |
+  | --- | --- |
+  | `environment` | The change run of the stack and that environment |
+  | `application` | The build run of that application |
+  | `application` and `environment` | The image deploy run of that application and environment |
+
+  With neither, the step stops with "Give the environment input, the application input, or both." It also takes
+  `working-directory` (`.` by default).
 - `preview` action. Plans each unit of a pull request with no credentials and checks each plan locally. When a unit
   fails, the step fails with the CLI's exit code for the first failing unit. A unit that `preview` could not plan
   counts as exit code 1.
@@ -27,12 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `preview`, `deploy`, `verify` and `record-iac` stop before any unit runs when the CLI lists no units: "The CLI lists
   no units in this stack, so there is nothing to check." They also stop when two units share a name: "Two units are
   named '...'. Give each unit its own name."
-- Reference workflows `examples/greenfield.yml` and `examples/preview.yml`.
+- Reference workflows `examples/iac/governed-deploy.yml` and `examples/iac/preview.yml`.
 - `verify` action. Builds each unit's record bundle with `iltero record build` and verifies it with
   `iltero record verify`: the CLI checks that the record and the files it cites are unchanged. When a unit fails, the
   step fails with the CLI's exit code for the first failing unit. A unit with no record bundle, or whose report the
   CLI did not write, counts as exit code 1. The action accepts a `records-directory` relative to `working-directory`.
-- Example `examples/deploy.yml` for a project with no Iltero account.
+- Example `examples/iac/deploy.yml` for a project with no Iltero account.
 - `comment` action. Posts the preview's result as a comment on the pull request, and updates it on each push. The
   `preview` action writes the comment and outputs its artifact name as `comment-artifact`. When `preview` stops
   before it checks every unit, the comment reads "The preview stopped before it checked every unit. See the job
@@ -50,9 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `environment` input on `preview`, empty by default. When it is empty, the Iltero CLI finds the environment from the
   pull request's target branch. Set it when the target branch deploys to several environments, for example `main` to
   `staging` and then `production`. The action then checks the change against the named environment. The `setup` action
-  installs an Iltero CLI that lets one branch deploy to several environments. `examples/preview.yml` shows the input.
-  When the input is empty and the CLI cannot choose an environment (exit code 2), the step adds the notice "When the
-  target branch deploys to several environments, name one with the preview action's environment input." The step
+  installs an Iltero CLI that lets one branch deploy to several environments. `examples/iac/preview.yml` shows the
+  input. When the input is empty and the CLI cannot choose an environment (exit code 2), the step adds the notice "When
+  the target branch deploys to several environments, name one with the preview action's environment input." The step
   keeps the CLI's exit code.
 - `deploy`, `preview`, `record-iac`, `verify` and `record-image` at its deployment stages refuse an environment that
   cannot name a directory or a file. Such a name contains `/`, or is `.` or `..`. The step stops with "The environment
@@ -65,26 +74,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings for each unit, read from the unit's own `config/` folder. For an environment, `deploy` passes
   `config/backend/<environment>.hcl` to `terraform init` as `-backend-config`, and `deploy` and `preview` pass
   `config/<environment>.tfvars.json` to `terraform plan` as `-var-file`. Both files are optional.
-- `record-iac` action, and the example `examples/record-iac.yml`. In a job that runs Terraform itself, the action
-  records one stage of one unit's change from the files that Terraform wrote: `plan`, `pre_deploy` (before the apply),
-  `post_deploy` (after the apply) or `post_verify` (after `post_deploy`). It runs no Terraform. At `plan`, it first
-  runs `iltero state check`, and the step fails unless Terraform keeps the unit's state outside its working directory.
-  `pre_deploy` reads the `plan` stage's record from `records-directory`. `post_verify` checks that the deployed
-  resources still match what the apply left. It takes the input `refresh-plans`: two readings of the deployed
+- `record-iac` action, and the example `examples/iac/governed-own-terraform.yml`. In a job that runs Terraform itself,
+  the action records one stage of one unit's change from the files that Terraform wrote: `plan`, `pre_deploy` (before
+  the apply), `post_deploy` (after the apply) or `post_verify` (after `post_deploy`). It runs no Terraform. At `plan`,
+  it first runs `iltero state check`, and the step fails unless Terraform keeps the unit's state outside its working
+  directory. `pre_deploy` reads the `plan` stage's record from `records-directory`. `post_verify` checks that the
+  deployed resources still match what the apply left. It takes the input `refresh-plans`: two readings of the deployed
   resources, one path per line, in the order they were taken. Each reading is a refresh-only plan, from
-  `terraform plan -refresh-only -out=FILE` then `terraform show -json FILE`, and the second is taken at least 60
-  seconds after the first. Any other number of readings stops the step: "The refresh-plans input must name two
-  readings, one per line, in the order they were taken. It names N." The example takes both readings after
-  `post_deploy`. On `pull_request` events, the action records only `plan`, and stops
-  at any other stage with "On pull request events, record-iac records only the plan stage, checked locally." It refuses
-  `pull_request_target` and `workflow_run` events, and `pull_request_review` and `pull_request_review_comment` events:
-  "record-iac does not run on '...' events. Run it on pull_request events, where it checks the plan locally." A
-  unit name is 1 to 64 characters of lowercase letters, digits, `_` and `-`, and does not start with `-`. Any other
-  `unit` stops the step before anything runs, with "Unit name '...' does not follow the unit-name rule."
-- `install-terraform` input on `setup`, `true` by default. When it is `false`, `setup` does not install Terraform, for a
-  job that runs no Terraform or runs its own. The outputs `terraform-version` and `terraform-path` are then empty. Any
-  value other than `true` or `false` stops the step: "The install-terraform input must be true or false, not '...'." The
-  examples set it to `false` in every such job.
+  `terraform plan -refresh-only -out=FILE` then `terraform show -json FILE`, and the second is taken at least 60 seconds
+  after the first. Any other number of readings stops the step: "The refresh-plans input must name two readings, one per
+  line, in the order they were taken. It names N." The example takes both readings after `post_deploy`. On
+  `pull_request` events, the action records only `plan`, and stops at any other stage with "On pull request events,
+  record-iac records only the plan stage, checked locally." It refuses `pull_request_target` and `workflow_run` events,
+  and `pull_request_review` and `pull_request_review_comment` events: "record-iac does not run on '...' events. Run it
+  on pull_request events, where it checks the plan locally." A unit name is 1 to 64 characters of lowercase letters,
+  digits, `_` and `-`, and does not start with `-`. Any other `unit` stops the step before anything runs, with "Unit
+  name '...' does not follow the unit-name rule."
+- `deploy` and `preview` install the Terraform they run, in a step of their own before they run it, at a pinned,
+  checksum-verified version. Each time the action runs, it downloads the archive again and checks it against its
+  pinned checksum. Both actions take this input and give these outputs:
+
+  | Name | Kind | Meaning |
+  | --- | --- | --- |
+  | `terraform-version` | Input | The Terraform version to install and run, `1.16.5` by default. Only versions listed in `scripts/iac/terraform.sha256` are accepted. |
+  | `terraform-version` | Output | The Terraform version installed. |
+  | `terraform-path` | Output | The absolute path of the Terraform binary. |
+
+  `setup` installs no Terraform. A job that uses `record-image` or `close` downloads none, and a job that uses
+  `record-iac` installs its own.
 - Post-verify stage in `deploy`. When every unit deployed, `deploy` checks that the deployed resources of each unit
   whose record expects the post-verify stage still match what the apply left. It reads each such unit back twice with
   `terraform plan -refresh-only`, with the same variable files as the plan, and never applies a reading. The second
@@ -100,45 +117,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `readings-directory` output on `deploy`. It names the directory that holds each unit's two readings, as
   `<unit>/first.json` and `<unit>/second.json`. The readings can hold secret values. The action does not upload them,
   and they are not meant to be kept: the record keeps only their digests.
-- `record-image` action, and the example `examples/record-image.yml`. Its required `stage` input names the stage to
-  record: `plan`, `pre_deploy`, `post_deploy` or `post_verify`. Any other value stops the step: "The stage input must
-  be one of: plan pre_deploy post_deploy post_verify. It is '...'." At `plan`, in the pipeline run that built and
-  pushed a container image, the action records the image with `iltero image check --stage=plan`, from the files the
-  build and scanners wrote: `build-metadata`, `image-index`, `attestation`, `test-reports` and `scan-reports` (Trivy
-  or Grype). It runs no build or scan. In a project linked to Iltero Platform, the check opens or joins the build run
-  of the pipeline run for `application` and sends the record, and the job needs `id-token: write`. On `pull_request`
-  events it checks the image locally and as advice: failed or undecided assertions do not fail the step. It refuses
-  `pull_request_review` and `pull_request_review_comment` events. Its records go to a directory of their own unless
-  `records-directory` is set.
-  The example runs three jobs. The first builds the image from the Git repository at the pushed commit and pushes it
-  to the GitHub container registry. The second scans the pushed image by its digest, with read access to the registry
-  only. The third records the image and closes the build run.
-- Deployment stages in `record-image`, and the example `examples/record-image-deployment.yml`. In a project with no
-  `platform` section, the action records a deployment of an image with `iltero image check`, in three stages, into one
-  record. `pre_deploy` checks the image to deploy, before the deployment. `post_deploy` reports the image the deployment
-  says it deployed. `post_verify` checks, after the rollout, that every pod of the workload runs that image. Every
-  deployment stage takes `environment`. `pre_deploy` and `post_deploy` also take `image`, by its digest with no tag. At
-  `post_deploy` and `post_verify`, the CLI refuses an `environment` that differs from the record's. `post_verify` takes
-  `cluster-id` and the readings `workload-before-pods-listing`, `pods`, `pod-owners` (for a Deployment) and
-  `workload-after-pods-listing`. A missing input stops the step, for example "The environment input is required for
-  stage post_verify." The CLI refuses a deployment stage in a project linked to Iltero Platform. On `pull_request`
-  events, the action records only `plan`, and stops at any other stage with "On pull request events, record-image
-  records only the plan stage, checked locally." A deployment's records go to a directory for its environment unless
+- `record-image` action, and the example `examples/image/governed-build.yml`. Its required `stage` input names the stage
+  to record: `plan`, `pre_deploy`, `post_deploy` or `post_verify`. Any other value stops the step: "The stage input must
+  be one of: plan pre_deploy post_deploy post_verify. It is '...'." At `plan`, in the pipeline run that built and pushed
+  a container image, the action records the image with `iltero image check --stage=plan`, from the files the build and
+  scanners wrote: `build-metadata`, `image-index`, `attestation`, `test-reports` and `scan-reports` (Trivy or Grype). It
+  runs no build or scan. In a project linked to Iltero Platform, the check opens or joins the build run of the pipeline
+  run for `application` and sends the record, and the job needs `id-token: write`. On `pull_request` events it checks
+  the image locally and as advice: failed or undecided assertions do not fail the step. It refuses `pull_request_review`
+  and `pull_request_review_comment` events. Its records go to a directory of their own unless `records-directory` is
+  set. For an image built for several CPU architectures, `scan-reports` takes one report for each architecture. The
+  example runs three jobs, in a governed build run on Iltero Platform. The first builds the image from the Git
+  repository at the pushed commit, for each CPU architecture in `IMAGE_PLATFORMS` (`linux/amd64,linux/arm64` by
+  default), and pushes it to the GitHub container registry. In a private repository, the build reads the source with the
+  job's token. The build job stops unless `IMAGE_PLATFORMS` lists one or more platforms, such as `linux/amd64`,
+  separated by commas with no spaces: "IMAGE_PLATFORMS must list one or more platforms, such as linux/amd64, separated
+  by commas with no spaces." The second scans the pushed image by its digest, once for each architecture, with read
+  access to the registry only, and keeps one Trivy report for each. The third records the image with every report and
+  closes the build run.
+- Example `examples/image/build.yml` for a project with no Iltero account. It builds and scans an image in three jobs,
+  as `examples/image/governed-build.yml` does. The scan job keeps a full report for each architecture, then scans
+  each one again and fails the workflow when any of them has a vulnerability at one of the severities in
+  `FAIL_ON_SCAN_SEVERITIES`, `CRITICAL,HIGH` by default. When it is empty, the scan never fails the workflow. The scan
+  job stops unless `FAIL_ON_SCAN_SEVERITIES` is empty or lists `UNKNOWN`, `LOW`, `MEDIUM`, `HIGH` or `CRITICAL`,
+  separated by commas: "FAIL_ON_SCAN_SEVERITIES must be empty or list UNKNOWN, LOW, MEDIUM, HIGH or CRITICAL, separated
+  by commas." The third job also runs when the scan failed the workflow after it kept the reports, so the record lists
+  the findings. It checks the image as advice, records it on the runner and uploads the record as a workflow artifact.
+  It sends nothing to Iltero Platform, so it needs no `application`, no `close` step and no `id-token: write`.
+- Deployment stages in `record-image`, and the example `examples/image/deployment.yml`. The action records a
+  deployment of an image with `iltero image check`, in three stages, into one record. `pre_deploy` checks the image to
+  deploy, before the deployment. `post_deploy` reports the image the deployment says it deployed. `post_verify` checks,
+  after the rollout, that every pod of the workload runs that image. Every deployment stage takes `environment`.
+  `pre_deploy` and `post_deploy` also take `image`, by its digest with no tag. At `post_deploy` and `post_verify`, the
+  CLI refuses an `environment` that differs from the record's. `post_verify` takes `cluster-id` and the readings
+  `workload-before-pods-listing`, `pods`, `pod-owners` (for a Deployment) and `workload-after-pods-listing`. A missing
+  input stops the step, for example "The environment input is required for stage post_verify." On `pull_request` events,
+  the action records only `plan`, and stops at any other stage with "On pull request events, record-image records only
+  the plan stage, checked locally." A deployment's records go to a directory for its environment unless
   `records-directory` is set. Each stage after `pre_deploy` reads the record from `records-directory`. The example
   deploys an image to Kubernetes with `kubectl`, in one job, with no Iltero account. It also records `post_deploy` when
   `kubectl set image` fails.
+- Deployment stages of `record-image` in a project linked to Iltero Platform. Each stage runs in an image deploy run: a
+  governed run that deploys one application's image to one environment. Each stage takes `application`, and Iltero
+  Platform finds or opens the image deploy run of the pipeline run for that application and environment. Each stage
+  sends its record, and the job needs `id-token: write`. With `store-records: true`, each stage also keeps its record in
+  the run's artifact store. The run's settings on Iltero Platform decide whether a failed or undecided assertion fails
+  `pre_deploy`, so the CLI refuses `advisory: true` at every stage of an image deploy run. The CLI refuses
+  `application` in a project that is not linked.
+- The example `examples/image/governed-deployment.yml`. It deploys an image to Kubernetes with `kubectl`, in a
+  governed image deploy run on Iltero Platform, after `examples/image/governed-build.yml` recorded and sent the
+  image's build. The deploy job runs in the GitHub deployment environment `production`. Each `record-image` step sets
+  `store-records: true`. A second job closes the run when the deploy job succeeded.
 - `advisory` input on `record-image`, `false` by default. When it is `true`, failed or undecided assertions do not fail
-  the step, and the record still shows them. It applies to `pre_deploy`, and to `plan` in a project with no `platform`
-  section. At `pre_deploy`, an assertion that reads approvals is always undecided, because a check on the runner alone
-  reads no approvals. Any value other than `true` or `false` stops the step: "The advisory input must be true or false,
-  not '...'." `examples/record-image-deployment.yml` sets it to `true` at `pre_deploy`.
-- `store-records` input on `deploy`, `record-iac` and `record-image`, `false` by default. When it is `true` in a
-  project linked to Iltero Platform, the CLI also keeps each record and every file it cites in the run's artifact
-  store: the bucket that Iltero Platform names for the run. The CLI writes there with the job's own cloud
-  credentials. A failed store fails the step. The CLI refuses `true` in a project that is not linked. Any value other
-  than `true` or `false` stops the step: "The store-records input must be true or false, not '...'." On
-  `pull_request` events, `record-iac` and `record-image` do not use it. The example `examples/record-iac.yml` sets it
-  to `true` on every `record-iac` step.
+  the step, and the record still shows them. It applies to `plan` and `pre_deploy`, in a project with no `platform`
+  section only. At `plan`, the assertion that the image was built from the verified commit is always undecided, because
+  on the runner alone no server verifies the commit. At `pre_deploy`, an assertion that reads approvals, or whether
+  each commit the change ships was reviewed, is always undecided, because a check on the runner alone reads neither.
+  `pre_deploy` always checks that Iltero Platform accepted a build of the image for the environment. Only Iltero
+  Platform accepts a build, so in a project with no `platform` section, `pre_deploy` fails unless `advisory` is
+  `true`. Any value other than `true` or `false` stops the step: "The advisory input must be true or false, not
+  '...'." `examples/image/build.yml` sets it to `true` at `plan`, and `examples/image/deployment.yml` at `pre_deploy`.
+- `store-records` input on `deploy`, `record-iac` and `record-image`, `false` by default. When it is `true` in a project
+  linked to Iltero Platform, the CLI also keeps each record and every file it cites in the run's artifact store: the
+  bucket that Iltero Platform names for the run. The CLI writes there with the job's own cloud credentials. A failed
+  store fails the step. The CLI refuses `true` in a project that is not linked. Any value other than `true` or `false`
+  stops the step: "The store-records input must be true or false, not '...'." On `pull_request` events, `record-iac` and
+  `record-image` do not use it. The example `examples/iac/governed-own-terraform.yml` sets it to `true` on every
+  `record-iac` step.
 - `setup` installs the Iltero CLI's AWS client packages, which the CLI uses to keep records in an artifact store on
   AWS.
 - The actions run their Python helpers isolated from the working directory, so a Python file in the checked-out
@@ -150,8 +195,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The check never contacts Iltero Platform, and its record is not evidence of the change. It checks the project's own
   assertions, while the checks after the merge use the assertions that Iltero Platform sets. A linked project's
   `preview` needs no `ILTERO_API_URL` and, unless `registry-host` is set, no `id-token: write`.
-- `deploy` and `preview` stop when Terraform is missing: "Terraform is not installed. Run the setup action first in
-  this job, with install-terraform true."
 - Pre-deploy stage in a project with no `platform` section. In such a project, list `pre_deploy` under
   `stages.out_of_scope` in `.iltero/config.yml`. `deploy` and `record-iac` do not run the pre-deploy stage there,
   because it checks facts that only Iltero Platform holds. They ask the CLI instead whether the unit's record from the
@@ -186,9 +229,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the repository's or organization's artifact retention setting. `preview` keeps its records artifact for 30 days and
   its comment artifact for 1 day.
 - `record-iac` and `record-image` warn when the records directory they upload is empty.
-- The `close` jobs of `examples/greenfield.yml` and `examples/record-iac.yml` close the run when the deploy job
-  succeeded. A run whose deploy failed or was cancelled stays open, so a re-run of the failed job joins it. The close
-  jobs set `install-terraform: false`.
+- The `close` jobs of `examples/iac/governed-deploy.yml` and `examples/iac/governed-own-terraform.yml` close the run
+  when the deploy job succeeded. A run whose deploy failed or was cancelled stays open, so a re-run of the failed job
+  joins it.
 - The job summaries of `deploy`, `preview`, `verify`, `record-iac` and `record-image` stay within GitHub's size
   limit. When the CLI's output for a unit or stage would push a summary past it, the summary reads "The output of
   ... is too long for the job summary. It is in the log." in its place, where `...` names the unit or stage. The limit
@@ -212,7 +255,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When `record-image` checks a stage as advice, on `pull_request` events or with `advisory: true`, and the CLI exits
   with code 0, its job summary reads "Result: exit 0, checked as advice: failed or undecided assertions do not fail the
   step." A non-zero exit code shows alone: "Result: exit N."
-- `setup` reads Terraform's whole version output before it checks the version, so the check does not fail at random.
+- `deploy` and `preview` read Terraform's whole version output before they check the version, so the check does not
+  fail at random.
   When the installed Terraform does not run, the step stops with "The installed Terraform did not run."
 - `preview` and `verify` clear each unit's work directory before the unit runs, so no output of an earlier step in
   the same job shows in the summary.
@@ -241,5 +285,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `post_deploy` unless `state-unreadable` is `true`. When both are given, the step stops with "Give either the state
   input or state-unreadable: true, not both." At any other stage, `true` stops the step with "The state-unreadable
   input applies only to the post_deploy stage." Any value other than `true` or `false` stops it with "The
-  state-unreadable input must be true or false, not '...'." In `examples/record-iac.yml`, the `post_deploy` step
-  passes `state` when the step that reads the state succeeded, and sets `state-unreadable` when that step failed.
+  state-unreadable input must be true or false, not '...'." In `examples/iac/governed-own-terraform.yml`, the
+  `post_deploy` step passes `state` when the step that reads the state succeeded, and sets `state-unreadable` when that
+  step failed.

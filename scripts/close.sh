@@ -6,8 +6,8 @@
 #   close.sh check  Refuse untrusted and pull request events; check that the job can request
 #                   its identity token and run the CLI.
 #   close.sh close  Close the run of this pipeline run: the change run for the stack in
-#                   .iltero/config.yml and ENVIRONMENT, or the build run for APPLICATION.
-#                   Exactly one of the two is set.
+#                   .iltero/config.yml and ENVIRONMENT, the build run for APPLICATION, or,
+#                   with both set, the image deploy run for APPLICATION and ENVIRONMENT.
 #
 # The CLI's exit code is the step's exit code.
 
@@ -23,20 +23,16 @@ cmd_check() {
 }
 
 cmd_close() {
-  local option
   require_one_line environment "${ENVIRONMENT:-}"
   require_one_line application "${APPLICATION:-}"
   local environment="${ENVIRONMENT:-}" application="${APPLICATION:-}"
-  if [[ -n "${environment//[[:space:]]/}" && -z "${application//[[:space:]]/}" ]]; then
-    option="--environment=${ENVIRONMENT}"
-  elif [[ -n "${application//[[:space:]]/}" && -z "${environment//[[:space:]]/}" ]]; then
-    option="--application=${APPLICATION}"
-  else
-    die "Give exactly one of the environment and application inputs."
-  fi
+  local options=()
+  [[ -z "${application//[[:space:]]/}" ]] || options+=("--application=${APPLICATION}")
+  [[ -z "${environment//[[:space:]]/}" ]] || options+=("--environment=${ENVIRONMENT}")
+  [[ ${#options[@]} -gt 0 ]] || die "Give the environment input, the application input, or both."
   local cli
   cli="$(cli_path)"
-  "${cli}" run close "${option}"
+  "${cli}" run close "${options[@]}"
 }
 
 main() {
