@@ -1,2 +1,2 @@
 iltero-schemas 937746137a6b5d0d06b20ca5868844d27ce706dd
-iltero-cli f14110458f0508ebc256669093d0cf8262a81cc1
+iltero-cli 5fd8ea04cd51a2997a6fde20abafb8f00c66a5c3
