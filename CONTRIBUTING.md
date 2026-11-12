@@ -2,30 +2,34 @@
 
 ## Code of Conduct
 
-This project adheres to a Code of Conduct. By participating, you are expected to uphold this code.
-Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before contributing.
+This project follows a Code of Conduct. Everyone who takes part is expected to uphold it. Read
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before contributing.
 
-## Making Changes
+## Making changes
 
 1. Fork the repository and create a branch from `main`.
 2. Make the change, with tests for every rule it adds.
-3. Run the checks CI runs: `actionlint`, `yamllint .`, `shellcheck --severity=style` over every `.sh` file under
-   `scripts/`, `zizmor .` and `bats tests/`.
-4. Open a pull request against `main`.
+3. Run the checks that continuous integration (CI) runs, as listed under "Contribute" in
+   [docs/README.md](docs/README.md#contribute).
+4. Add an entry under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) for every change a user sees.
+5. Open a pull request against `main`.
 
-### Commit Messages
+### Commit messages
 
-Use `<type>: <subject>`, where type is one of `feat`, `fix`, `docs`, `refactor`, `test` or `chore`.
+Use `<type>(<scope>): <subject>`, where type is one of `feat`, `fix`, `docs`, `refactor`, `test`, `ci` or `chore`.
+The scope, such as `deploy`, is optional: `<type>: <subject>` is valid too. The subject says what changed in plain
+words. Pull request titles use the same format.
 
 ### GitHub Actions rules
 
-- Pin every `uses:` to a full commit SHA, with a `# vX.Y.Z` comment.
+- Pin every `uses:` to a full commit SHA (the commit's 40-character ID), with a `# vX.Y.Z` comment.
 - Never use `${{ }}` inside a `run:` block. Pass values through `env:`.
 - Grant permissions per job, and only what the job needs.
 
 ## Developer Certificate of Origin
 
-By contributing to this project, you certify that:
+Each contribution is made under the Developer Certificate of Origin (DCO). By contributing to this project, you
+certify that:
 
 1. The contribution was created in whole or in part by you and you have the right
    to submit it under the Apache 2.0 license.
@@ -37,10 +41,9 @@ By contributing to this project, you certify that:
 4. You understand and agree that this project and the contribution are public and
    that a record of the contribution is maintained indefinitely.
 
-### Sign Your Commits
+### Sign your commits
 
-All commits must be signed off using the Developer Certificate of Origin (DCO).
-This is done by adding a `Signed-off-by` line to your commit messages:
+Sign off every commit with a `Signed-off-by` line in its message:
 
 ```bash
 git commit -s -m "feat: add new feature"
@@ -59,10 +62,9 @@ git config user.name "Your Name"
 git config user.email "your.email@example.com"
 ```
 
-**Note:** We use DCO instead of a Contributor License Agreement (CLA) to reduce
-friction for contributors while maintaining legal clarity.
+The project uses the DCO instead of a Contributor License Agreement (CLA).
 
-## Releases & Signing
+## Releases and signing
 
 Two policies are enforced by repository rulesets.
 
@@ -98,6 +100,7 @@ show as "Unverified".
 - Published tags are immutable. A ruleset blocks moving or deleting a tag, so a version always points at the same
   commit.
 
-### Cutting a release
+### Publishing a release
 
-Publish a signed `vX.Y.Z` tag. CI runs automatically on publish.
+A release is a GitHub release on a signed `vX.Y.Z` tag. When the release is published, the Release workflow checks
+that the tag has the `vX.Y.Z` format and runs CI on the tagged commit.

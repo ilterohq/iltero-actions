@@ -5,8 +5,8 @@
 #   1. Validates the tag follows semantic versioning
 #   2. Runs the full CI suite to ensure quality
 #
-# Pinning: there are no moving major tags. Pin to an exact version or commit SHA:
-#     uses: ilterohq/iltero-actions/<action>@v0.3.0
+# Pinning: there are no moving major tags. Pin to the release's full commit SHA,
+# with its version as a comment:
 #     uses: ilterohq/iltero-actions/<action>@<commit-sha>  # v0.3.0
 #
 # Published tags are immutable (a repository ruleset blocks moving/deleting them).
@@ -35,8 +35,7 @@ jobs:
     name: Validate Tag
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      contents: read
+    permissions: {}
 
     steps:
       - name: Parse and validate semver tag

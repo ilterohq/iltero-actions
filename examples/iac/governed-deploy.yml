@@ -1,0 +1,122 @@
+# Reference workflow for a stack linked to Iltero Platform. A repository owner
+# copies it into .github/workflows/ and replaces the example values.
+#
+# A push to an environment's branch deploys that environment in a governed run:
+# the deploy job plans, checks, applies and records each unit in order. For
+# each unit whose record expects the post-verify stage, it then checks that
+# the deployed resources still match what the apply left. The plan stage's
+# check opens the run on Iltero Platform, and each later stage joins it.
+# The close job closes the run when the deploy job succeeded. A run whose
+# deploy failed or was cancelled stays open, so a re-run of the failed job
+# joins it.
+#
+# Values the owner replaces:
+#   the actions commit (40 hex characters), each environment's name, branch,
+#   GitHub deployment environment, deploy role's Amazon Resource Name (ARN)
+#   and region, and ILTERO_API_URL. The stack comes from the platform
+#   section of .iltero/config.yml.
+
+name: Iltero
+
+on:
+  push:
+    branches: [staging, main]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  ILTERO_API_URL: https://api.iltero.io/v1
+
+jobs:
+  deploy-staging:
+    name: Deploy staging
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-24.04
+    environment: staging
+    concurrency:
+      group: iltero-staging
+      cancel-in-progress: false
+    permissions:
+      contents: read # check out the stack
+      id-token: write # the job's identity token, for Iltero and the deploy role
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/iltero-deploy-staging
+          aws-region: eu-west-1
+      - uses: ilterohq/iltero-actions/deploy@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: staging
+          # Set when the stack uses private modules from Iltero Platform's module registry. The registry accepts the
+          # job's GitHub identity token from a repository bound to an Iltero organization.
+          # registry-host: registry.example.com
+
+  close-staging:
+    name: Close staging
+    needs: deploy-staging
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: iltero-close-staging
+      cancel-in-progress: false
+    permissions:
+      contents: read # read the stack's .iltero/config.yml
+      id-token: write # the job's identity token, for Iltero
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: staging
+
+  deploy-production:
+    name: Deploy production
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: iltero-production
+      cancel-in-progress: false
+    permissions:
+      contents: read # check out the stack
+      id-token: write # the job's identity token, for Iltero and the deploy role
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/iltero-deploy-production
+          aws-region: eu-west-1
+      - uses: ilterohq/iltero-actions/deploy@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: production
+          # Set when the stack uses private modules from Iltero Platform's module registry. The registry accepts the
+          # job's GitHub identity token from a repository bound to an Iltero organization.
+          # registry-host: registry.example.com
+
+  close-production:
+    name: Close production
+    needs: deploy-production
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: iltero-close-production
+      cancel-in-progress: false
+    permissions:
+      contents: read # read the stack's .iltero/config.yml
+      id-token: write # the job's identity token, for Iltero
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: production

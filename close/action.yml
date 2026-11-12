@@ -1,5 +1,8 @@
 name: Iltero Close Run
-description: Close the Iltero run of this pipeline run for a stack and environment, and list every check it owed and never got.
+description: >-
+  Close the governed run of this pipeline run: the change run of a stack and environment, the build run of an
+  application, or the image deploy run of an application and environment. List what the run expected and did not
+  get.
 author: Iltero
 
 branding:
@@ -8,10 +11,21 @@ branding:
 
 inputs:
   environment:
-    description: The environment the run deploys to, as given to the deploy or record-iac action.
-    required: true
+    description: >-
+      The environment the run deploys to, as given to the deploy, record-iac or record-image action. Alone, it closes
+      the stack's change run. With application, it closes the image deploy run.
+    required: false
+    default: ""
+  application:
+    description: >-
+      The application the run is about, as given to the record-image action. Alone, it closes the build run. With
+      environment, it closes the image deploy run.
+    required: false
+    default: ""
   working-directory:
-    description: The stack's directory, relative to the repository root. Its .iltero/config.yml names the stack.
+    description: >-
+      The project's directory, relative to the repository root. Its .iltero/config.yml links the project to Iltero
+      Platform and names the stack.
     required: false
     default: "."
 
@@ -20,11 +34,12 @@ runs:
   steps:
     - name: Check the event and the job
       shell: bash
-      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" check'
+      run: '"${GITHUB_ACTION_PATH}/../scripts/close.sh" check'
 
     - name: Close the run
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
         ENVIRONMENT: ${{ inputs.environment }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/run.sh" close "${ENVIRONMENT}"'
+        APPLICATION: ${{ inputs.application }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/close.sh" close'

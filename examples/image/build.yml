@@ -1,0 +1,221 @@
+# Reference workflow for a team that builds a container image and records
+# its build with no Iltero account: .iltero/config.yml has no platform
+# section. A repository owner copies it into .github/workflows/ and replaces
+# the example values.
+#
+# A push to main runs three jobs, each with only the rights it needs:
+#   build  checks the CPU architectures in IMAGE_PLATFORMS, then builds
+#          the image for each one and pushes it to the GitHub container
+#          registry.
+#          The build reads the source from the Git repository at the pushed
+#          commit, not from the checked-out folder, so the build's metadata
+#          names the commit the image was built from. In a private
+#          repository, the build reads the source with the job's token.
+#          The job then reads the image's index back from the registry,
+#          exactly as the registry holds it.
+#   scan   scans the pushed image, read by its digest, once for each
+#          architecture, because one scan reads only one of the image's
+#          architectures. A scan of the local image before the push names
+#          no pushed digest. The scanner runs with read access to the
+#          registry only. The job first checks FAIL_ON_SCAN_SEVERITIES, then
+#          keeps a full report of each architecture for the record. Its last
+#          step scans each architecture again and fails the job, and so the
+#          workflow, when it finds a vulnerability at one of those severities
+#          in any of them.
+#   record checks the image and the files of the other two jobs with the
+#          record-image step. It also runs when the scan failed the workflow
+#          after it kept the reports, so the record lists the findings. The
+#          CLI records the image on the runner and sends nothing to Iltero.
+#          On the runner alone, no server verifies the commit the image was
+#          built from, so the assertion that reads that commit is undecided.
+#          The step sets advisory, so failed or undecided assertions, such
+#          as those on the scan's findings, do not stop the job: the record
+#          shows them.
+#          The step uploads the record as a workflow artifact.
+#
+# The build and scan jobs pass their files to the record job as artifacts,
+# kept for one day. The record-image step keeps each file it is given in the
+# image's record, byte for byte, and uploads the record as an artifact. The
+# repository's artifact retention setting decides how long GitHub keeps that
+# artifact. In a public repository, anyone can download these artifacts while
+# GitHub keeps them, including the scan reports, which list the image's
+# vulnerabilities.
+#
+# The CLI refuses a file that holds a value the redaction policy would hide,
+# such as a secret a scanner found.
+#
+# Values the owner replaces:
+#   the actions commit (40 hex characters), IMAGE_PLATFORMS and
+#   FAIL_ON_SCAN_SEVERITIES. The image name comes from the repository.
+
+name: Iltero image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # The CPU architectures the image is built for, separated by commas with no
+  # spaces. The scan job scans each one.
+  IMAGE_PLATFORMS: linux/amd64,linux/arm64
+  # The vulnerability severities that stop the workflow: UNKNOWN, LOW, MEDIUM,
+  # HIGH or CRITICAL, separated by commas with no spaces. Empty: the scan never
+  # stops it, and the record still lists every finding.
+  FAIL_ON_SCAN_SEVERITIES: CRITICAL,HIGH
+
+jobs:
+  build:
+    name: Build the image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # build the source
+      packages: write # push the image to the GitHub container registry
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      pushed: ${{ steps.build.outputs.pushed }}
+    steps:
+      # A space or an empty entry in the list would make the build or the scans miss an architecture it names.
+      - name: Check the architectures to build
+        run: |
+          platform='[a-z0-9]+/[a-z0-9]+(/v[0-9]+)?'
+          [[ "${IMAGE_PLATFORMS}" =~ ^${platform}(,${platform})*$ ]] \
+            || { echo "::error::IMAGE_PLATFORMS must list one or more platforms, such as linux/amd64, separated by commas with no spaces."; exit 1; }
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        name: Build and push
+        env:
+          REPOSITORY: ghcr.io/${{ github.repository }}
+          TAG: ${{ github.sha }}
+          # Only a private repository needs the job's token to read its source.
+          GIT_AUTH_TOKEN: ${{ github.event.repository.private && github.token || '' }}
+        run: |
+          repository="${REPOSITORY,,}"
+          source_access=()
+          [[ -z "${GIT_AUTH_TOKEN}" ]] || source_access=(--secret "id=GIT_AUTH_TOKEN,env=GIT_AUTH_TOKEN")
+          mkdir -p "${RUNNER_TEMP}/build"
+          docker buildx build --platform "${IMAGE_PLATFORMS}" --push \
+            --tag "${repository}:${TAG}" --metadata-file "${RUNNER_TEMP}/build/metadata.json" \
+            "${source_access[@]}" \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git#${GITHUB_SHA}"
+          digest="$(jq -r '."containerimage.digest"' "${RUNNER_TEMP}/build/metadata.json")"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::The build metadata names no image digest."; exit 1; }
+          echo "image=${repository}:${TAG}@${digest}" >> "${GITHUB_OUTPUT}"
+          echo "pushed=${repository}@${digest}" >> "${GITHUB_OUTPUT}"
+      - name: Read the image's index from the registry
+        env:
+          PUSHED: ${{ steps.build.outputs.pushed }}
+        run: docker buildx imagetools inspect --raw "${PUSHED}" > "${RUNNER_TEMP}/build/index.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-build
+          path: ${{ runner.temp }}/build
+          retention-days: 1 # the record keeps each file; the artifact only carries it to the record job
+          if-no-files-found: error
+
+  scan:
+    name: Scan the pushed image
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: read # pull the image from the GitHub container registry
+    outputs:
+      report-kept: ${{ steps.report.outcome == 'success' }}
+    steps:
+      # Trivy skips a severity it does not know, so a misspelt list would stop nothing.
+      - name: Check the severities that stop the workflow
+        run: |
+          severity='(UNKNOWN|LOW|MEDIUM|HIGH|CRITICAL)'
+          [[ -z "${FAIL_ON_SCAN_SEVERITIES}" || "${FAIL_ON_SCAN_SEVERITIES}" =~ ^${severity}(,${severity})*$ ]] \
+            || { echo "::error::FAIL_ON_SCAN_SEVERITIES must be empty or list UNKNOWN, LOW, MEDIUM, HIGH or CRITICAL, separated by commas."; exit 1; }
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.70.0 # the Trivy release to install
+      - name: Scan each architecture
+        env:
+          PUSHED: ${{ needs.build.outputs.pushed }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/scan"
+          IFS=, read -ra platforms <<< "${IMAGE_PLATFORMS}"
+          # The report lists every finding; the last step decides whether the workflow stops.
+          for platform in "${platforms[@]}"; do
+            trivy image --platform "${platform}" --format json \
+              --output "${RUNNER_TEMP}/scan/trivy-${platform//\//-}.json" "${PUSHED}"
+          done
+      - id: report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-scan
+          path: ${{ runner.temp }}/scan
+          retention-days: 1 # the record keeps the reports; the artifact only carries them to the record job
+          if-no-files-found: error
+      - name: Stop on vulnerabilities at the chosen severities
+        if: ${{ env.FAIL_ON_SCAN_SEVERITIES != '' }}
+        env:
+          PUSHED: ${{ needs.build.outputs.pushed }}
+        run: |
+          IFS=, read -ra platforms <<< "${IMAGE_PLATFORMS}"
+          status=0
+          # Vulnerabilities only, read with the databases the reports were read with, never newer ones.
+          for platform in "${platforms[@]}"; do
+            trivy image --platform "${platform}" --scanners vuln --severity "${FAIL_ON_SCAN_SEVERITIES}" \
+              --exit-code 1 --skip-db-update --skip-java-db-update "${PUSHED}" || status=1
+          done
+          exit "${status}"
+
+  record:
+    name: Record the image
+    needs: [build, scan]
+    # Also when the scan stopped the workflow after it kept the reports, so the
+    # record lists the findings.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.scan.outputs.report-kept == 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # read .iltero/config.yml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-build
+          path: ${{ runner.temp }}/build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-scan
+          path: ${{ runner.temp }}/scan
+      - id: scan-reports
+        name: List the scan report of each architecture
+        run: |
+          delimiter="$(openssl rand -hex 16)"
+          IFS=, read -ra platforms <<< "${IMAGE_PLATFORMS}"
+          {
+            echo "lines<<${delimiter}"
+            for platform in "${platforms[@]}"; do
+              echo "trivy ${RUNNER_TEMP}/scan/trivy-${platform//\//-}.json"
+            done
+            echo "${delimiter}"
+          } >> "${GITHUB_OUTPUT}"
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+
+      - uses: ilterohq/iltero-actions/record-image@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: plan
+          image: ${{ needs.build.outputs.image }}
+          build-metadata: ${{ runner.temp }}/build/metadata.json
+          image-index: ${{ runner.temp }}/build/index.json
+          scan-reports: ${{ steps.scan-reports.outputs.lines }}
+          advisory: true

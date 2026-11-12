@@ -1,7 +1,18 @@
 version: 2
 updates:
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # The workflows ("/") and each composite action pin the actions they use
+    # in their own files, so each folder is listed.
+    directories:
+      - "/"
+      - "/setup"
+      - "/deploy"
+      - "/preview"
+      - "/comment"
+      - "/record-iac"
+      - "/record-image"
+      - "/verify"
+      - "/close"
     schedule:
       interval: "weekly"
     # A cooldown holds an update back for a few days after publication. That
@@ -25,3 +36,14 @@ updates:
         patterns:
           - "actions/*"
           - "github/*"
+  # The hash-locked Python tools CI installs.
+  - package-ecosystem: "pip"
+    directory: "/.github/requirements"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"

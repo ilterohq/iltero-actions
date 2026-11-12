@@ -1,18 +1,21 @@
 # =============================================================================
 # Iltero Actions - CI Pipeline
 # =============================================================================
-# Quality checks for the iltero-actions repository. Each line states what the
-# check actually covers, because a check that reads less than its name suggests
-# is worse than no check — it reports success over the part it never looked at:
+# Quality checks for the iltero-actions repository, and what each one covers:
 #   - Workflow linting (actionlint) — .github/workflows and the reference
-#     workflows in examples/. It cannot parse composite action files; those
-#     are covered by yamllint.
+#     workflows in examples/. It does not read composite action files; yamllint
+#     and zizmor check them.
 #   - YAML linting (yamllint) — every YAML file in the repository.
-#   - Shell script analysis (shellcheck) — scripts/, at style severity, which is
-#     the severity the repository's own rules require.
+#   - Shell script analysis (shellcheck) — scripts/ and tests/test_helper.bash,
+#     at style severity.
 #   - Shell syntax (bash -n) — scripts/.
+#   - Python syntax (py_compile) — every tracked Python file.
+#   - NUL bytes — no tracked file holds one.
 #   - Behaviour and structure tests (BATS) — tests/.
-#   - Secret scanning (TruffleHog) and workflow security analysis (zizmor).
+#   - Secret scanning (TruffleHog) — the whole repository and its history,
+#     verified secrets only.
+#   - Workflow security analysis (zizmor) — the workflows, the composite
+#     actions and the reference workflows.
 #   - Markdown linting — the documents named in the job.
 #
 # =============================================================================
@@ -26,23 +29,24 @@ on:
     branches: [main]
   workflow_call:
 
-# Least privilege
-permissions:
-  contents: read
+# Least privilege: each job grants only what it needs.
+permissions: {}
 
-# Cancel in-progress runs for PRs
+# A newer run for the same branch or pull request cancels the older one.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # ===========================================================================
-  # Lint: YAML, Actions, Shell, Markdown
+  # Lint: YAML, workflows, shell, Python syntax, NUL bytes, Markdown
   # ===========================================================================
   lint:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -51,13 +55,10 @@ jobs:
           persist-credentials: false
 
       # -----------------------------------------------------------------------
-      # Action & YAML Linting
+      # Workflow and YAML linting
       # -----------------------------------------------------------------------
-      # Pinned to an exact release and checksum-verified: the upstream installer
-      # script lives on a moving branch, and `curl` without `-f` turns a fetch
-      # failure into an empty script that `bash` exits 0 on.
-      # VERSION and SHA256 are a pair — bump both together, or the build fails
-      # closed on a checksum mismatch. Dependabot cannot see either of them.
+      # Pinned to an exact release and checked against its SHA-256 digest.
+      # Update VERSION and SHA256 together. Dependabot does not update them.
       - name: Install actionlint
         env:
           ACTIONLINT_VERSION: 1.7.12
@@ -72,24 +73,18 @@ jobs:
           rm -f "${archive}"
           echo "${RUNNER_TEMP}/actionlint-bin" >> "${GITHUB_PATH}"
 
-      # Lints .github/workflows only. Composite action.yml files are not a
-      # supported input — actionlint parses them as workflows and reports
-      # spurious errors — so their run: bodies remain unlinted.
-      # Deliberately ungrouped: a collapsed group would hide the findings.
-      # -verbose records the tool version and the files actually linted, so a
-      # passing run is distinguishable in the log from one that linted nothing.
+      # Lints .github/workflows and examples/. Not in a log group, so the
+      # findings show. -verbose prints the version and the files linted.
       - name: Lint GitHub Actions workflows
         run: |
-          # actionlint shells out to shellcheck to analyse run: blocks, and
-          # silently skips that analysis — still exiting 0 — when the binary is
-          # missing. Assert it is present rather than inheriting it from the
-          # runner image. (pyflakes is also optional; no workflow here uses
-          # shell: python, so its absence is not asserted.)
+          # actionlint checks run: blocks with shellcheck, and skips that check
+          # without failing when shellcheck is missing, so the step first
+          # checks that shellcheck is installed.
           command -v shellcheck > /dev/null \
             || { echo "::error::shellcheck not found; actionlint would skip run: block analysis"; exit 1; }
           actionlint -version
           actionlint -color -verbose
-          actionlint -color -verbose examples/*.yml
+          actionlint -color -verbose examples/*/*.yml
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -97,7 +92,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install yamllint
-        run: pip install yamllint
+        run: 'pip install --require-hashes --only-binary :all: -r .github/requirements/yamllint.txt'
 
       - name: Lint YAML files
         run: |
@@ -106,22 +101,25 @@ jobs:
       # -----------------------------------------------------------------------
       # Shell Script Linting
       # -----------------------------------------------------------------------
-      # --severity=style is required for .shellcheckrc's require-variable-braces
-      # (SC2250) to be reported at all — at --severity=warning it is filtered
-      # out, so the rule .shellcheckrc enables went unenforced.
-      # Deliberately ungrouped: a collapsed group would hide the findings.
-      # shellcheck comes from the runner image and is not pinned; the version
-      # and the file list are printed so a passing run records what it checked.
+      # --severity=style reports .shellcheckrc's require-variable-braces
+      # (SC2250). Not in a log group, so the findings show. shellcheck comes
+      # from the runner image; the log shows its version and the files checked.
       - name: Lint Shell Scripts
         run: |
           shellcheck --version
-          # An unrecognised name in .shellcheckrc's enable= is ignored silently,
-          # which would switch the brace rule back off with CI still green.
+          # An unknown name in .shellcheckrc's enable= is ignored without a
+          # failure, so the step checks that the brace rule exists.
           shellcheck --list-optional | grep -q 'require-variable-braces' \
             || { echo "::error::require-variable-braces unavailable in this shellcheck"; exit 1; }
-          find scripts -name '*.sh' -type f -print | sort
-          find scripts -name '*.sh' -type f -print0 | \
-            xargs -0 shellcheck --severity=style --format=gcc
+          { find scripts -name '*.sh' -type f; echo tests/test_helper.bash; } | sort
+          { find scripts -name '*.sh' -type f; echo tests/test_helper.bash; } | \
+            xargs shellcheck --severity=style --format=gcc
+
+      - name: Check Python syntax
+        run: git ls-files -z -- '*.py' | xargs -0 -r python -I -m py_compile
+
+      - name: Check that no file holds a NUL byte
+        run: git ls-files -z | python -I scripts/find-nul-bytes.py
 
       # -----------------------------------------------------------------------
       # Markdown Linting
@@ -137,9 +135,10 @@ jobs:
             CODE_OF_CONDUCT.md
             docs/*.md
             examples/*.md
+            .github/*.md
 
   # ===========================================================================
-  # Security: Secrets detection, dependency review
+  # Security: secret scanning and workflow security analysis
   # ===========================================================================
   security:
     name: Security
@@ -156,31 +155,28 @@ jobs:
           persist-credentials: false
           fetch-depth: 0  # Full history for secret scanning
 
-      # TruffleHog - Free, open source secret scanner
-      # Supports 800+ credential detectors, verification, and entropy analysis
+      # Scans the repository and its history for secrets, reporting only
+      # verified ones.
       - name: Scan for secrets (trufflehog)
         uses: trufflesecurity/trufflehog@e63326d6545de8f425d93ce24078c6e68d83f70e # v3.99.3
         with:
           extra_args: --only-verified
 
-      # Dedicated GitHub Actions security linter
-      # Catches: injection, pwn requests, excessive permissions, credential exposure
+      # Checks the workflows, the composite actions and the reference workflows
+      # for security issues, such as untrusted input reaching a command, broad
+      # permissions and exposed credentials.
       - name: Scan workflows for security issues
-        env:
-          ZIZMOR_VERSION: 1.29.0
         run: |
-          pip install "zizmor==${ZIZMOR_VERSION}"
+          pip install --require-hashes --only-binary :all: -r .github/requirements/zizmor.txt
 
-          # Print the findings before writing the machine-readable copy. Only
-          # the SARIF file was produced before, and its upload is allowed to
-          # fail — so a failing scan could leave nothing a reader could act on
-          # in either place.
+          # The findings are printed first: the SARIF upload may fail, and the
+          # log must still show them.
           rc=0
           echo "::group::zizmor findings"
-          zizmor --format plain . || rc=$?
+          zizmor --format plain . examples/*/*.yml || rc=$?
           echo "::endgroup::"
 
-          zizmor --format sarif . > results.sarif || true
+          zizmor --format sarif . examples/*/*.yml > results.sarif || true
           exit "${rc}"
 
       - name: Upload SARIF results
@@ -197,6 +193,8 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -219,4 +217,4 @@ jobs:
           sudo apt-get install -y bats
 
       - name: Run the BATS tests
-        run: bats --tap tests/
+        run: bats --tap -r tests/

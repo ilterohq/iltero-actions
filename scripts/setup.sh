@@ -1,15 +1,14 @@
 #!/bin/bash
 #
-# Installs the tools the other actions use: Terraform and the Iltero CLI.
+# Installs the tools the other actions use: the Iltero CLI and its evaluator,
+# the policy engine that runs the assertions. The deploy and preview actions
+# install the Terraform they run themselves.
 #
 # Usage:
-#   setup.sh check                Refuse untrusted events, unsupported runners and an
-#                                 INSTALL_TERRAFORM other than true or false.
-#   setup.sh terraform VERSION    Install Terraform VERSION, checked against the pinned checksums.
-#   setup.sh cli                  Install the Iltero CLI and its evaluator at the pinned versions.
+#   setup.sh check    Refuse untrusted events and unsupported runners.
+#   setup.sh cli      Install the Iltero CLI and its evaluator at the pinned versions.
 #
 # GITHUB_ACTION_PATH is the `setup/` folder. It holds the pins:
-#   terraform.sha256          SHA-256 of each pinned Terraform archive.
 #   cli-sources.txt           The commits of iltero-schemas and iltero-cli to install.
 #   cli-requirements.txt      Every other package the CLI needs, with hashes.
 #                             Written by scripts/lock-cli.py.
@@ -17,82 +16,13 @@
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/install.sh"
 
-readonly TERRAFORM_RELEASES_URL="https://releases.hashicorp.com/terraform"
 readonly OPA_RELEASES_URL="https://github.com/open-policy-agent/opa/releases/download"
 readonly GITHUB_URL="https://github.com"
-readonly CURL_OPTIONS=(-fsSL --proto "=https" --tlsv1.2 --retry 3 --retry-all-errors --retry-delay 2)
-
-# Downloads a file and keeps it only if its SHA-256 matches the pinned value.
-download_checked() {
-  local url="$1"
-  local sha="$2"
-  local destination="$3"
-  local partial="${destination}.part"
-  curl "${CURL_OPTIONS[@]}" -o "${partial}" "${url}" || die "Download failed: ${url}"
-  if ! echo "${sha}  ${partial}" | sha256sum -c --quiet - > /dev/null 2>&1; then
-    rm -f "${partial}"
-    die "The download from ${url} does not match its pinned checksum."
-  fi
-  mv "${partial}" "${destination}"
-}
-
-# Prints the Terraform platform name of this runner, or stops on an
-# unsupported runner. Only Linux runners on x64 or ARM64 are supported.
-runner_platform() {
-  [[ "${RUNNER_OS:-}" == "Linux" ]] || die "Unsupported runner OS '${RUNNER_OS:-}'. Use a Linux runner."
-  case "${RUNNER_ARCH:-}" in
-    X64) echo "linux_amd64" ;;
-    ARM64) echo "linux_arm64" ;;
-    *) die "Unsupported runner architecture '${RUNNER_ARCH:-}'. Use an X64 or ARM64 runner." ;;
-  esac
-}
-
 cmd_check() {
   refuse_untrusted_event
   runner_platform > /dev/null
-  [[ "${INSTALL_TERRAFORM:-}" == true || "${INSTALL_TERRAFORM:-}" == false ]] \
-    || die "The install-terraform input must be true or false, not '${INSTALL_TERRAFORM:-}'."
-}
-
-# Prints the pinned SHA-256 of a Terraform archive, or stops if the archive is
-# not pinned.
-pinned_terraform_sha256() {
-  local archive="$1"
-  local sums="${GITHUB_ACTION_PATH}/terraform.sha256"
-  local sha name
-  [[ -f "${sums}" ]] || die "The pinned Terraform checksums are missing: ${sums}"
-  while read -r sha name; do
-    if [[ "${name}" == "${archive}" ]]; then
-      echo "${sha}"
-      return 0
-    fi
-  done < "${sums}"
-  die "Terraform archive '${archive}' is not pinned. Pinned archives: $(cut -d' ' -f3 "${sums}" | tr '\n' ' ')"
-}
-
-cmd_terraform() {
-  local version="${1:-}"
-  [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Invalid Terraform version '${version}'. Use X.Y.Z."
-
-  local platform archive sha dir
-  platform="$(runner_platform)"
-  archive="terraform_${version}_${platform}.zip"
-  sha="$(pinned_terraform_sha256 "${archive}")"
-  dir="$(tools_dir)"
-  mkdir -p "${dir}/bin"
-
-  download_checked "${TERRAFORM_RELEASES_URL}/${version}/${archive}" "${sha}" "${dir}/${archive}"
-  unzip -o -q "${dir}/${archive}" terraform -d "${dir}/bin"
-  rm -f "${dir}/${archive}"
-  chmod 0755 "${dir}/bin/terraform"
-
-  local reported
-  reported="$("${dir}/bin/terraform" version | head -n 1)"
-  [[ "${reported}" == "Terraform v${version}" ]] \
-    || die "The installed Terraform reports '${reported}', not 'Terraform v${version}'."
-  write_output terraform-version "${version}"
-  write_output terraform-path "${dir}/bin/terraform"
 }
 
 # Prints the commit pinned for a source package in cli-sources.txt.
@@ -116,32 +46,28 @@ pip_install() {
   local venv="$1"
   shift
   local log="${venv}.pip.log"
-  if ! "${venv}/bin/python" -m pip install --no-input --disable-pip-version-check "$@" > "${log}" 2>&1; then
+  if ! "${venv}/bin/python" -I -m pip install --no-input --disable-pip-version-check "$@" > "${log}" 2>&1; then
     cat "${log}" >&2
     die "Installing the Iltero CLI failed."
   fi
 }
 
-# Downloads the evaluator release that the installed iltero-schemas pins, and
-# checks it against the pinned digest.
+# Downloads the evaluator release that the installed iltero-schemas pins, as
+# the CLI reports it, and checks it against the pinned digest.
 install_evaluator() {
   local venv="$1"
   local dir="$2"
-  local key pin version asset sha
+  local platform pin version asset sha extra
   case "$(runner_platform)" in
-    linux_amd64) key="linux-x86_64" ;;
-    linux_arm64) key="linux-aarch64" ;;
+    linux_amd64) platform="linux-x86_64" ;;
+    linux_arm64) platform="linux-aarch64" ;;
     *) die "No evaluator for this runner." ;;
   esac
-  pin="$("${venv}/bin/python" -c '
-import sys
-from iltero_schemas.opa.pin import OPA_RELEASE_PIN
-binary = OPA_RELEASE_PIN.binaries[sys.argv[1]]
-print(OPA_RELEASE_PIN.release_tag, binary.asset, binary.sha256)
-' "${key}")" || die "Cannot read the evaluator pin from iltero-schemas."
-  read -r version asset sha <<< "${pin}"
-  [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "${asset}" =~ ^[${LOWER}0-9_]+$ && "${sha}" =~ ${SHA256_PATTERN} ]] \
-    || die "The evaluator pin from iltero-schemas is malformed."
+  pin="$("${venv}/bin/iltero" evaluator pin --platform "${platform}")" \
+    || die "The Iltero CLI could not report the evaluator pin for ${platform}."
+  read -r version asset sha extra <<< "${pin}"
+  [[ "${pin}" != *$'\n'* && -z "${extra}" && "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "${asset}" =~ ^[${LOWER}0-9_]+$ && "${sha}" =~ ${SHA256_PATTERN} ]] \
+    || die "The evaluator pin the Iltero CLI reports is malformed."
 
   download_checked "${OPA_RELEASES_URL}/${version}/${asset}" "${sha}" "${dir}/bin/opa"
   chmod 0755 "${dir}/bin/opa"
@@ -155,7 +81,7 @@ check_installed_commit() {
   local commit="$3"
   local label="$4"
   local installed
-  installed="$("${venv}/bin/python" -c '
+  installed="$("${venv}/bin/python" -I -c '
 import json, sys
 from importlib.metadata import distribution
 print(json.loads(distribution(sys.argv[1]).read_text("direct_url.json"))["vcs_info"]["commit_id"])
@@ -175,10 +101,10 @@ cmd_cli() {
   venv="${dir}/venv"
   mkdir -p "${dir}/bin"
 
-  python3 -m venv "${venv}"
+  python3 -I -m venv "${venv}"
   # Every dependency comes from the lock, as a wheel, with a matching hash.
   pip_install "${venv}" --require-hashes --no-deps --only-binary ":all:" -r "${requirements}"
-  # The CLI and the contract are built from their pinned commits, with the
+  # The CLI and iltero-schemas are built from their pinned commits, with the
   # locked build backend.
   pip_install "${venv}" --no-deps --no-build-isolation \
     "git+${GITHUB_URL}/ilterohq/iltero-schemas.git@${schemas_commit}" \
@@ -201,9 +127,8 @@ main() {
   shift || true
   case "${command}" in
     check) cmd_check ;;
-    terraform) cmd_terraform "$@" ;;
     cli) cmd_cli ;;
-    *) die "Unknown command '${command}'. Use: check | terraform VERSION | cli" ;;
+    *) die "Unknown command '${command}'. Use: check | cli" ;;
   esac
 }
 

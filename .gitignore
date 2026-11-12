@@ -5,6 +5,11 @@ implementation-docs/
 implementation_docs/
 
 # =========================
+# Python caches
+# =========================
+__pycache__/
+
+# =========================
 # OS Generated Files
 # =========================
 .DS_Store

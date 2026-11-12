@@ -1,0 +1,3 @@
+# The workflow security linter CI runs. To update zizmor.txt, run this in this folder with Python 3.12:
+#   pip-compile --generate-hashes --strip-extras --allow-unsafe zizmor.in
+zizmor==1.29.0

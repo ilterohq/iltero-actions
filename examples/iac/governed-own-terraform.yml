@@ -1,0 +1,165 @@
+# Reference workflow for a team that runs Terraform itself, in a governed run
+# on Iltero Platform. A repository owner copies it into .github/workflows/
+# and replaces the example values.
+#
+# A push to main deploys one unit to production. The job runs its own
+# terraform plan and apply. Iltero steps between them record each stage:
+#   plan         after terraform plan, from the saved plan;
+#   pre_deploy   before terraform apply: stops the job when a blocking check
+#                fails, before anything is applied. Required in a governed
+#                run to a production environment;
+#   post_deploy  after terraform apply, also when the apply failed;
+#   post_verify  after post_deploy: checks that the deployed resources
+#                still match what the apply left. It reads two refresh-only
+#                plans, taken at least 60 seconds apart. Never apply a
+#                refresh-only plan: it writes what it reads into the
+#                state, so drift no longer shows.
+# The plan stage's check opens the run on Iltero Platform, and each later
+# stage joins it. The close job closes the run when the deploy job
+# succeeded. A run whose deploy failed or was cancelled stays open, so a
+# re-run of the failed job joins it.
+#
+# Plan, apply, state and reading files stay in the runner's temporary
+# directory, never in the checked-out repository. The readings can hold
+# secret values: never upload or keep them. The record keeps only their
+# digests. The pre_deploy step reads the plan stage's record from the records
+# directory. A pre_deploy step in another job must download the records
+# artifact and pass its directory as records-directory.
+#
+# Each record-iac step sets store-records, so the CLI also keeps the stage's
+# record and every file it cites in the run's artifact store: the Amazon
+# Simple Storage Service (S3) bucket that Iltero Platform names for the run,
+# in the deploy role's own account. The CLI uses the job's AWS credentials.
+# The deploy role needs s3:PutObject, s3:PutObjectRetention and
+# s3:GetObjectRetention on the objects
+# arn:aws:s3:::BUCKET/<prefix>artifacts/<organization id>/*, where <prefix>
+# is the storage location's base prefix. It needs kms:GenerateDataKey on the
+# bucket's Key Management Service (KMS) key, restricted with the
+# kms:ViaService condition to S3 in the bucket's region. The role, the bucket
+# and its key are in one AWS account.
+#
+# Values the owner replaces:
+#   the actions commit (40 hex characters), the environment's name and branch,
+#   the GitHub deployment environment, the deploy role's Amazon Resource
+#   Name (ARN) and region, the unit's name and directory, and
+#   ILTERO_API_URL. The stack comes from the platform section of
+#   .iltero/config.yml.
+
+name: Iltero
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  ILTERO_API_URL: https://api.iltero.io/v1
+
+jobs:
+  deploy:
+    name: Deploy production
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: iltero-production
+      cancel-in-progress: false
+    permissions:
+      contents: read # check out the stack
+      id-token: write # the job's identity token, for Iltero and the deploy role
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5 # the version deploy and preview install by default
+          terraform_wrapper: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/iltero-deploy-production
+          aws-region: eu-west-1
+      - name: Plan
+        working-directory: units/network
+        run: |
+          terraform init -input=false
+          terraform plan -input=false -out="${RUNNER_TEMP}/network.tfplan"
+          terraform show -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-plan.json"
+      - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: plan
+          environment: production
+          unit: network
+          store-records: true
+          plan: ${{ runner.temp }}/network-plan.json
+          saved-plan: ${{ runner.temp }}/network.tfplan
+      - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: pre_deploy
+          environment: production
+          unit: network
+          store-records: true
+
+      - id: apply
+        name: Apply
+        working-directory: units/network
+        run: terraform apply -input=false -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-apply.ndjson"
+      - id: state
+        name: Read the state
+        if: ${{ !cancelled() && steps.apply.outcome != 'skipped' }}
+        working-directory: units/network
+        run: terraform show -json > "${RUNNER_TEMP}/network-state.json"
+      - if: ${{ !cancelled() && steps.apply.outcome != 'skipped' }}
+        uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: post_deploy
+          environment: production
+          unit: network
+          store-records: true
+          plan: ${{ runner.temp }}/network-plan.json
+          saved-plan: ${{ runner.temp }}/network.tfplan
+          apply-log: ${{ runner.temp }}/network-apply.ndjson
+          # Pass the state when the step that reads it succeeded. When it
+          # failed, set state-unreadable instead: the CLI then records the
+          # apply from the apply log alone, and the step fails.
+          state: ${{ steps.state.outcome == 'success' && format('{0}/network-state.json', runner.temp) || '' }}
+          state-unreadable: ${{ steps.state.outcome == 'failure' }}
+
+      - name: Read the deployed resources back
+        working-directory: units/network
+        run: |
+          terraform plan -input=false -refresh-only -lock-timeout=5m -out="${RUNNER_TEMP}/network-first.tfplan"
+          terraform show -json "${RUNNER_TEMP}/network-first.tfplan" > "${RUNNER_TEMP}/network-first.json"
+          sleep 60
+          terraform plan -input=false -refresh-only -lock-timeout=5m -out="${RUNNER_TEMP}/network-second.tfplan"
+          terraform show -json "${RUNNER_TEMP}/network-second.tfplan" > "${RUNNER_TEMP}/network-second.json"
+      - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: post_verify
+          environment: production
+          unit: network
+          store-records: true
+          refresh-plans: |
+            ${{ runner.temp }}/network-first.json
+            ${{ runner.temp }}/network-second.json
+
+  close:
+    name: Close production
+    needs: deploy
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: iltero-close-production
+      cancel-in-progress: false
+    permissions:
+      contents: read # read the stack's .iltero/config.yml
+      id-token: write # the job's identity token, for Iltero
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          environment: production

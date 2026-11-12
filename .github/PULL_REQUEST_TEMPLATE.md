@@ -1,6 +1,6 @@
 ## Description
 
-<!-- Describe what this PR does and why. -->
+<!-- Describe what this pull request does and why. -->
 
 ## Related Issues
 
@@ -16,7 +16,7 @@
 
 ## Checklist
 
-- [ ] Scripts pass `shellcheck`; workflows pass `actionlint`; YAML passes `yamllint`
-- [ ] Tests pass
+- [ ] The checks listed under "Contribute" in `docs/README.md` pass
 - [ ] Documentation updated (if applicable)
-- [ ] All commits are signed off (DCO)
+- [ ] `CHANGELOG.md` has an entry under "Unreleased" for every change a user sees
+- [ ] All commits are signed off under the Developer Certificate of Origin (DCO)
