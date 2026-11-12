@@ -6,7 +6,7 @@ load test_helper
 
 # Prints every action, workflow and example workflow file, one per line.
 yaml_files() {
-  cd "${REPO_ROOT}" && git ls-files --cached --others --exclude-standard -- '*/action.yml' '.github/workflows/*.yml' 'examples/*.yml'
+  cd "${REPO_ROOT}" && git ls-files --cached --others --exclude-standard -- '*/action.yml' '.github/workflows/*.yml' 'examples/*/*.yml'
 }
 
 action_files() {
@@ -53,12 +53,16 @@ action_files() {
   [ "${status}" -eq 1 ] || { echo "${output}"; false; }
 }
 
-@test "the default Terraform version has a pinned checksum for each runner architecture" {
-  local version
-  version="$(awk '/^  terraform-version:$/ { inside = 1 } inside && /^    default: / { gsub(/"/, "", $2); print $2; exit }' "${REPO_ROOT}/setup/action.yml")"
-  [ -n "${version}" ]
-  grep -qE "^[0-9a-f]{64}  terraform_${version}_linux_amd64\.zip$" "${REPO_ROOT}/setup/terraform.sha256"
-  grep -qE "^[0-9a-f]{64}  terraform_${version}_linux_arm64\.zip$" "${REPO_ROOT}/setup/terraform.sha256"
+@test "deploy and preview default to the same Terraform version, with a pinned checksum for each runner architecture" {
+  local action version versions=()
+  for action in deploy preview; do
+    version="$(awk '/^  terraform-version:$/ { inside = 1 } inside && /^    default: / { gsub(/"/, "", $2); print $2; exit }' "${REPO_ROOT}/${action}/action.yml")"
+    [ -n "${version}" ]
+    versions+=("${version}")
+  done
+  [ "${versions[0]}" = "${versions[1]}" ]
+  grep -qE "^[0-9a-f]{64}  terraform_${versions[0]}_linux_amd64\.zip$" "${REPO_ROOT}/scripts/iac/terraform.sha256"
+  grep -qE "^[0-9a-f]{64}  terraform_${versions[0]}_linux_arm64\.zip$" "${REPO_ROOT}/scripts/iac/terraform.sha256"
 }
 
 @test "the locked requirements belong to the pinned CLI commit" {
@@ -115,7 +119,7 @@ action_files() {
 }
 
 @test "every pinned Terraform checksum is well formed" {
-  run grep -vcE '^[0-9a-f]{64}  terraform_[0-9]+\.[0-9]+\.[0-9]+_linux_(amd64|arm64)\.zip$' "${REPO_ROOT}/setup/terraform.sha256"
+  run grep -vcE '^[0-9a-f]{64}  terraform_[0-9]+\.[0-9]+\.[0-9]+_linux_(amd64|arm64)\.zip$' "${REPO_ROOT}/scripts/iac/terraform.sha256"
   [ "${output}" = "0" ]
 }
 

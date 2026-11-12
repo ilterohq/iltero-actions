@@ -8,7 +8,8 @@
 shopt -u patsub_replacement 2> /dev/null || true
 
 # The folder under the runner's temporary directory where `setup` installs the
-# tools. Every action finds the tools here, by absolute path.
+# CLI and its evaluator, and where deploy and preview install Terraform. Every
+# action finds the tools here, by absolute path.
 readonly ILTERO_TOOLS_DIRECTORY_NAME="iltero-tools"
 
 # Characters for patterns, listed one by one: a range such as a-z can also

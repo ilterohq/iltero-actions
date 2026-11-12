@@ -30,8 +30,8 @@
 # record and every file it cites in the run's artifact store: the Amazon
 # Simple Storage Service (S3) bucket that Iltero Platform names for the run,
 # in the deploy role's own account. The CLI uses the job's AWS credentials.
-# The deploy role needs s3:ListBucket on the bucket (arn:aws:s3:::BUCKET),
-# and s3:PutObject, s3:PutObjectRetention and s3:GetObjectRetention on
+# The deploy role needs s3:PutObject, s3:PutObjectRetention and
+# s3:GetObjectRetention on the objects
 # arn:aws:s3:::BUCKET/<prefix>artifacts/<organization id>/*, where <prefix>
 # is the storage location's base prefix. It needs kms:GenerateDataKey on the
 # bucket's Key Management Service (KMS) key, restricted with the
@@ -74,10 +74,9 @@ jobs:
           persist-credentials: false
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
+          terraform_version: 1.16.5 # the version deploy and preview install by default
           terraform_wrapper: false
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
-        with:
-          install-terraform: false # the job installs its own Terraform
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: arn:aws:iam::123456789012:role/iltero-deploy-production
@@ -161,8 +160,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
-        with:
-          install-terraform: false # closing a run runs no Terraform
       - uses: ilterohq/iltero-actions/close@0000000000000000000000000000000000000000 # v0.3.0
         with:
           environment: production

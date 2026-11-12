@@ -1,32 +1,13 @@
 name: Iltero Setup
 description: >-
-  Install the Iltero CLI, its evaluator and, unless install-terraform is false, Terraform, at pinned,
-  checksum-verified versions.
+  Install the Iltero CLI and its evaluator at pinned, checksum-verified versions.
 author: Iltero
 
 branding:
   icon: shield
   color: blue
 
-inputs:
-  install-terraform:
-    description: >-
-      true or false. True: install Terraform for the deploy and preview actions, which run it. False: skip it, in a
-      job that runs no deploy or preview.
-    required: false
-    default: "true"
-  terraform-version:
-    description: Terraform version to install when install-terraform is true. Only versions listed in setup/terraform.sha256 are accepted.
-    required: false
-    default: "1.16.5"
-
 outputs:
-  terraform-version:
-    description: The Terraform version installed. Empty when install-terraform is false.
-    value: ${{ steps.terraform.outputs.terraform-version }}
-  terraform-path:
-    description: Absolute path of the Terraform binary. Empty when install-terraform is false.
-    value: ${{ steps.terraform.outputs.terraform-path }}
   cli-commit:
     description: The Iltero CLI commit installed.
     value: ${{ steps.cli.outputs.cli-commit }}
@@ -42,22 +23,12 @@ runs:
   steps:
     - name: Check the event and the runner
       shell: bash
-      env:
-        INSTALL_TERRAFORM: ${{ inputs.install-terraform }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/setup.sh" check'
 
     - name: Set up Python
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: "3.12"
-
-    - name: Install Terraform
-      id: terraform
-      if: inputs.install-terraform == 'true'
-      shell: bash
-      env:
-        TERRAFORM_VERSION: ${{ inputs.terraform-version }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/setup.sh" terraform "${TERRAFORM_VERSION}"'
 
     - name: Install the Iltero CLI
       id: cli

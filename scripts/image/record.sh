@@ -15,11 +15,12 @@
 #
 # Run from the project's working directory. In a project linked to the
 # server, the plan stage's check opens or joins the build run of the pipeline
-# run for APPLICATION, and sends the image's record. A project with no
-# platform section in .iltero/config.yml records locally: no run, no upload.
-# On a pull request event, the plan stage runs locally, linked or not, as
-# advice: failed or undecided assertions exit 0. The CLI records a deployment
-# only in a project with no platform section, and always locally.
+# run for APPLICATION, and each deployment stage's check opens or joins the
+# image deploy run for APPLICATION and ENVIRONMENT. Each check sends the
+# stage's record. A project with no platform section in .iltero/config.yml
+# records locally: no run, no upload. On a pull request event, the plan stage
+# runs locally, linked or not, as advice: failed or undecided assertions
+# exit 0.
 #
 # The CLI keeps the deployment's record in RECORDS_DIRECTORY. Each deployment
 # stage after pre_deploy reads the record from it, so a later stage in a
@@ -46,7 +47,7 @@
 #   ARTIFACT_NAME                The records artifact's name. Empty: iltero-image-records-<unit> for
 #                                plan, iltero-image-deployment-records-<environment>-<unit> for a
 #                                deployment.
-#   STORE_RECORDS                true or false. True: keep the image's record in the run's artifact store.
+#   STORE_RECORDS                true or false. True: keep the stage's record in the run's artifact store.
 #   ADVISORY                     true or false. True: failed or undecided assertions exit 0.
 
 set -euo pipefail
@@ -170,10 +171,9 @@ cmd_run() {
   [[ -n "${UNIT:-}" ]] || die "The unit input is required."
   [[ "${UNIT}" =~ ${UNIT_NAME_PATTERN} ]] || die "Unit name '${UNIT}' does not follow the unit-name rule."
   local linked=false
-  # A deployment is recorded only locally; the CLI refuses it in a linked project.
-  if [[ "${STAGE}" == plan ]] && ! is_pull_request_event; then
+  if ! is_pull_request_event; then
     linked="$(project_linked)"
-    # The CLI opens or joins the build run on the server with the job's identity token.
+    # The CLI opens or joins the run on the server with the job's identity token.
     [[ "${linked}" == false ]] || require_id_token
   fi
   set_server_args "${linked}"

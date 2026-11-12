@@ -13,9 +13,10 @@ inputs:
     description: >-
       The stage to record: plan (after the build pushed the image, before any deployment uses it), pre_deploy
       (before the deployment), post_deploy (after the deployment) or post_verify (after the rollout, a check of
-      what the workload's pods run). The CLI records a deployment only in a project with no platform section in
-      .iltero/config.yml. On pull_request events, only plan, checked locally and as advice: failed or undecided
-      assertions do not fail the step. record-image refuses pull request review events.
+      what the workload's pods run). In a project linked to Iltero Platform, plan runs in the build run of the
+      application, and each deployment stage runs in the image deploy run of the application and the environment. On
+      pull_request events, only plan, checked locally and as advice: failed or undecided assertions do not fail the
+      step. record-image refuses pull request review events.
     required: true
   image:
     description: >-
@@ -26,8 +27,8 @@ inputs:
     default: ""
   application:
     description: >-
-      Plan only. The application key: the name Iltero Platform gives the application the image is of. Required in a
-      project linked to Iltero Platform, and empty in a project that is not. Not used on pull_request events.
+      The application key: the name Iltero Platform gives the application the image is of. Required at every stage in
+      a project linked to Iltero Platform, and empty in a project that is not. Not used on pull_request events.
     required: false
     default: ""
   environment:
@@ -72,7 +73,8 @@ inputs:
   scan-reports:
     description: >-
       Plan only. Scan reports of the pushed image, read from its registry by its digest. One per line: the scanner
-      (trivy or grype), a space, then the path of its JSON report.
+      (trivy or grype), a space, then the path of its JSON report. For an image built for several CPU architectures,
+      give one report for each architecture.
     required: false
     default: ""
   cluster-id:
@@ -110,9 +112,10 @@ inputs:
   advisory:
     description: >-
       true or false. When true, failed or undecided assertions do not fail the step; the record still shows them.
-      For pre_deploy, and for plan in a project with no platform section. A check on the runner alone reads no
-      approvals, so an assertion that reads them is always undecided at pre_deploy. pull_request events always
-      check as advice.
+      Applies to plan and pre_deploy, in a project with no platform section only. At pre_deploy, the CLI always checks
+      that Iltero Platform accepted a build of the image for the environment. Only Iltero Platform accepts a build, so
+      in a project with no platform section, pre_deploy fails unless advisory is true. In a project linked to Iltero
+      Platform, the run's settings on Iltero Platform decide instead. pull_request events always check as advice.
     required: false
     default: "false"
   records-directory:
@@ -126,17 +129,18 @@ inputs:
     default: ""
   store-records:
     description: >-
-      Plan only. true or false. When true, the CLI keeps the image's record and every file it cites in the run's
-      artifact store, the bucket that Iltero Platform names for the run, with the job's own cloud credentials. Only
-      in a project linked to Iltero Platform. Not used on pull_request events. A failed store fails the step.
+      true or false. When true, the CLI keeps the stage's record and every file it cites in the run's artifact store,
+      the bucket that Iltero Platform names for the run, with the job's own cloud credentials. At every stage, in a
+      project linked to Iltero Platform only. Not used on pull_request events. A failed store fails the step.
     required: false
     default: "false"
   artifact-name:
     description: >-
       Name of the artifact that holds the records. Empty: iltero-image-records-<unit> for plan, and
       iltero-image-deployment-records-<environment>-<unit> for a deployment stage. Each step replaces the artifact
-      with the records in records-directory. Image builds in the same pipeline run (on GitHub, the same workflow run) need different unit values or
-      different artifact names, and so do separate deployments of the same unit to the same environment.
+      with the records in records-directory. Image builds in the same pipeline run (on GitHub, the same workflow run)
+      need different unit values or different artifact names, and so do separate deployments of the same unit to the
+      same environment.
     required: false
     default: ""
 

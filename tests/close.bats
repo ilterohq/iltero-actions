@@ -2,6 +2,9 @@
 #
 # Tests for scripts/close.sh, the body of the `close` action.
 
+# The tests match the action's expressions as written.
+# shellcheck disable=SC2016
+
 load test_helper
 
 setup() {
@@ -82,13 +85,19 @@ EOF
   [ "${status}" -eq 9 ]
 }
 
-@test "close requires exactly one of the environment and the application" {
+@test "close closes the pipeline run's image deploy run for the application and the environment" {
+  ENVIRONMENT=production APPLICATION=api run "${RUN}" close
+  [ "${status}" -eq 0 ]
+  grep -qx "iltero run close --application=api --environment=production" "${STUB_LOG}"
+}
+
+@test "close requires the environment, the application or both" {
   run "${RUN}" close
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Give exactly one of the environment and application inputs."* ]]
-  ENVIRONMENT=production APPLICATION=api run "${RUN}" close
+  [[ "${output}" == *"Give the environment input, the application input, or both."* ]]
+  ENVIRONMENT=" " APPLICATION=" " run "${RUN}" close
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Give exactly one of the environment and application inputs."* ]]
+  [[ "${output}" == *"Give the environment input, the application input, or both."* ]]
   ! grep -q "^iltero" "${STUB_LOG}" || false
 }
 

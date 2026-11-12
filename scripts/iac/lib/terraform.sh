@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Finds the Terraform that setup installed, runs it with a scrubbed
+# Finds the Terraform that the action installed, runs it with a scrubbed
 # environment, and reads what a unit declares.
 # Source this file after common.sh.
 
@@ -9,11 +9,11 @@
 # upstream state. A preview sets it to false.
 readonly REMOTE_STATE_SWITCH="enable_remote_state_dependencies"
 
-# Prints the absolute path of the Terraform binary that `setup` installed.
+# Prints the absolute path of the Terraform binary that the action installed.
 terraform_path() {
   local terraform
   terraform="$(tools_dir)/bin/terraform"
-  [[ -x "${terraform}" ]] || die "Terraform is not installed. Run the setup action first in this job, with install-terraform true."
+  [[ -x "${terraform}" ]] || die "Terraform is not installed."
   echo "${terraform}"
 }
 

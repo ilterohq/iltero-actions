@@ -84,7 +84,7 @@ jobs:
             || { echo "::error::shellcheck not found; actionlint would skip run: block analysis"; exit 1; }
           actionlint -version
           actionlint -color -verbose
-          actionlint -color -verbose examples/*.yml
+          actionlint -color -verbose examples/*/*.yml
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -173,10 +173,10 @@ jobs:
           # log must still show them.
           rc=0
           echo "::group::zizmor findings"
-          zizmor --format plain . examples/*.yml || rc=$?
+          zizmor --format plain . examples/*/*.yml || rc=$?
           echo "::endgroup::"
 
-          zizmor --format sarif . examples/*.yml > results.sarif || true
+          zizmor --format sarif . examples/*/*.yml > results.sarif || true
           exit "${rc}"
 
       - name: Upload SARIF results
