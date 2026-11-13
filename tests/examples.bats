@@ -52,6 +52,7 @@ examples() {
   [ -f "${REPO_ROOT}/examples/iac/preview.yml" ]
   [ -f "${REPO_ROOT}/examples/iac/deploy.yml" ]
   [ -f "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" ]
+  [ -f "${REPO_ROOT}/examples/iac/own-terraform.yml" ]
   [ -f "${REPO_ROOT}/examples/image/build.yml" ]
   [ -f "${REPO_ROOT}/examples/image/governed-build.yml" ]
   [ -f "${REPO_ROOT}/examples/image/deployment.yml" ]
@@ -130,9 +131,9 @@ run_step() {
   done
 }
 
-@test "the governed deploy workflows grant only contents: read and id-token: write" {
+@test "the deploy workflows grant only contents: read and id-token: write" {
   local file
-  for file in iac/governed-deploy.yml iac/governed-own-terraform.yml image/governed-deployment.yml; do
+  for file in iac/deploy.yml iac/governed-deploy.yml iac/governed-own-terraform.yml iac/own-terraform.yml image/deployment.yml image/governed-deployment.yml; do
     run grep -E '^      [a-z-]+: (read|write)( #.*)?$' "${REPO_ROOT}/examples/${file}"
     [ "${status}" -eq 0 ]
     ! grep -E '^      [a-z-]+: (read|write)( #.*)?$' "${REPO_ROOT}/examples/${file}" | grep -vE '^      (contents: read|id-token: write)( #.*)?$' || false
@@ -141,8 +142,8 @@ run_step() {
 
 @test "the workflows that need no account never name a server, open or close a run, or pass a run" {
   local file
-  for file in iac/deploy.yml image/build.yml image/deployment.yml; do
-    ! grep -qE 'iltero-actions/(open|close)@|run-id:|run-settings-digest:|ILTERO_API_URL' "${REPO_ROOT}/examples/${file}" || false
+  for file in iac/deploy.yml iac/own-terraform.yml image/build.yml image/deployment.yml; do
+    ! grep -qE 'iltero-actions/(open|close)@|run-id:|run-settings-digest:|ILTERO_API_URL|store-records:' "${REPO_ROOT}/examples/${file}" || false
   done
   grep -q 'iltero-actions/verify@' "${REPO_ROOT}/examples/iac/deploy.yml"
 }
@@ -229,20 +230,42 @@ job_permissions() {
   [ "${jobs}" = "close deploy -" ]
 }
 
-# Prints the stage of each record-iac step of the own-Terraform example, in order.
+# The two own-Terraform examples: with no account, and in a governed run.
+own_terraform_examples() {
+  echo "${REPO_ROOT}/examples/iac/own-terraform.yml" "${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
+}
+
+# Prints the stage of each record-iac step of the example FILE, in order.
 record_iac_events() {
-  awk '/uses: ilterohq\/iltero-actions\/record-iac@/ { inside = 1; next } inside && /^          stage: / { print $2; inside = 0 }' \
-    "${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
+  awk '/uses: ilterohq\/iltero-actions\/record-iac@/ { inside = 1; next } inside && /^          stage: / { print $2; inside = 0 }' "$1"
 }
 
-@test "the own-Terraform example records plan, pre_deploy, post_deploy and post_verify, in that order, as production needs" {
-  [ "$(record_iac_events | tr '\n' ' ')" = "plan pre_deploy post_deploy post_verify " ]
+@test "the governed own-Terraform example records plan, pre_deploy, post_deploy and post_verify, in that order, as production needs" {
+  [ "$(record_iac_events "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" | tr '\n' ' ')" = "plan pre_deploy post_deploy post_verify " ]
 }
 
-@test "the own-Terraform example reads the deployed resources twice with refresh-only plans, a minute apart" {
-  local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
-  [ "$(grep -c 'terraform plan -input=false -refresh-only ' "${example}")" -eq 2 ]
-  grep -A3 'network-first.json"$' "${example}" | grep -qx '          sleep 60'
+@test "the own-Terraform example with no account records plan, pre_deploy, post_deploy and post_verify, in that order" {
+  [ "$(record_iac_events "${REPO_ROOT}/examples/iac/own-terraform.yml" | tr '\n' ' ')" = "plan pre_deploy post_deploy post_verify " ]
+}
+
+# Prints the header comment of the example FILE as one line, with the comment marks removed.
+header_text() {
+  sed -n '/^[^#]/q; s/^# \{0,1\}//p' "$1" | tr '\n' ' '
+}
+
+@test "the examples that deploy Terraform with no account tell the owner to list pre_deploy as out of scope" {
+  local file
+  for file in iac/deploy.yml iac/own-terraform.yml; do
+    header_text "${REPO_ROOT}/examples/${file}" | grep -qF 'list pre_deploy under stages.out_of_scope in .iltero/config.yml'
+  done
+}
+
+@test "each own-Terraform example reads the deployed resources twice with refresh-only plans, a minute apart" {
+  local example
+  for example in $(own_terraform_examples); do
+    [ "$(grep -c 'terraform plan -input=false -refresh-only ' "${example}")" -eq 2 ]
+    grep -A3 'network-first.json"$' "${example}" | grep -qx '          sleep 60'
+  done
 }
 
 @test "no example uploads or keeps the readings of the deployed resources" {
@@ -254,8 +277,11 @@ record_iac_events() {
   done
 }
 
-@test "the own-Terraform example never applies a refresh-only plan" {
-  ! grep -E 'terraform apply[^#]*-refresh-only' "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" || false
+@test "no own-Terraform example applies a refresh-only plan" {
+  local example
+  for example in $(own_terraform_examples); do
+    ! grep -E 'terraform apply[^#]*-refresh-only' "${example}" || false
+  done
 }
 
 @test "no example passes Terraform settings to setup, which installs no Terraform" {
@@ -286,35 +312,52 @@ deployment_examples() {
   done
 }
 
-@test "the own-Terraform example installs a Terraform version that the actions pin" {
-  local version
-  version="$(grep -A2 'hashicorp/setup-terraform@' "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" | awk '$1 == "terraform_version:" { print $2 }')"
-  [ -n "${version}" ]
-  grep -qE "^[0-9a-f]{64}  terraform_${version}_linux_amd64\.zip$" "${REPO_ROOT}/scripts/iac/terraform.sha256"
+@test "each own-Terraform example installs a Terraform version that the actions pin" {
+  local example version
+  for example in $(own_terraform_examples); do
+    version="$(grep -A2 'hashicorp/setup-terraform@' "${example}" | awk '$1 == "terraform_version:" { print $2 }')"
+    [ -n "${version}" ]
+    grep -qE "^[0-9a-f]{64}  terraform_${version}_linux_amd64\.zip$" "${REPO_ROOT}/scripts/iac/terraform.sha256"
+  done
 }
 
-@test "the own-Terraform example keeps every stage's record in the run's artifact store, after the cloud credentials are set" {
+@test "the governed own-Terraform example keeps every stage's record in the run's artifact store, after the cloud credentials are set" {
   local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
   [ "$(grep -c '^          store-records: true$' "${example}")" -eq "$(grep -c 'iltero-actions/record-iac@' "${example}")" ]
   [ "$(grep -n -m1 'configure-aws-credentials@' "${example}" | cut -d: -f1)" -lt "$(grep -n -m1 'store-records: true' "${example}" | cut -d: -f1)" ]
 }
 
-@test "the own-Terraform example records the apply also when the state could not be read" {
-  local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
-  grep -qF "state: \${{ steps.state.outcome == 'success' && format('{0}/network-state.json', runner.temp) || '' }}" "${example}"
-  grep -qxF "          state-unreadable: \${{ steps.state.outcome == 'failure' }}" "${example}"
-  grep -qx "      - id: state" "${example}"
+@test "each own-Terraform example records the apply also when the state could not be read" {
+  local example
+  for example in $(own_terraform_examples); do
+    grep -qF "state: \${{ steps.state.outcome == 'success' && format('{0}/network-state.json', runner.temp) || '' }}" "${example}"
+    grep -qxF "          state-unreadable: \${{ steps.state.outcome == 'failure' }}" "${example}"
+    grep -qx "      - id: state" "${example}"
+  done
 }
 
-@test "the own-Terraform example records post_deploy also after a failed apply" {
-  grep -B1 'iltero-actions/record-iac@' "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" | grep -qF "if: \${{ !cancelled() && steps.apply.outcome != 'skipped' }}"
+@test "each own-Terraform example records post_deploy also after a failed apply" {
+  local example condition
+  for example in $(own_terraform_examples); do
+    # The condition of the record-iac step whose stage is post_deploy.
+    condition="$(awk '
+      /^      - / { cond = "" }
+      /^      - if: / { cond = $0; sub(/^      - if: /, "", cond) }
+      /uses: ilterohq\/iltero-actions\/record-iac@/ { inside = 1; next }
+      inside && /^          stage: / { if ($2 == "post_deploy") print cond; inside = 0 }
+    ' "${example}")"
+    [ "${condition}" = "\${{ !cancelled() && steps.apply.outcome != 'skipped' }}" ]
+  done
 }
 
-@test "the own-Terraform example keeps Terraform's files out of the checked-out repository" {
-  ! grep -E -- '-out=|> ' "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" | grep -v RUNNER_TEMP || false
-  ! grep -E '^          (plan|saved-plan|apply-log|state): ' "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" | grep -v 'runner.temp' || false
-  grep -q '^          refresh-plans: |$' "${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
-  ! grep -A2 '^          refresh-plans: |$' "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" | tail -n +2 | grep -v 'runner.temp' || false
+@test "each own-Terraform example keeps Terraform's files out of the checked-out repository" {
+  local example
+  for example in $(own_terraform_examples); do
+    ! grep -E -- '-out=|> ' "${example}" | grep -v RUNNER_TEMP || false
+    ! grep -E '^          (plan|saved-plan|apply-log|state): ' "${example}" | grep -v 'runner.temp' || false
+    grep -q '^          refresh-plans: |$' "${example}"
+    ! grep -A2 '^          refresh-plans: |$' "${example}" | tail -n +2 | grep -v 'runner.temp' || false
+  done
 }
 
 # --- image/build and image/governed-build -----------------------------------
@@ -363,6 +406,12 @@ job_outputs() {
 
 @test "the governed image build example's record job may only read the repository and get its identity token" {
   [ "$(job_permissions "${REPO_ROOT}/examples/image/governed-build.yml" record)" = "$(printf '%s\n' 'contents: read' 'id-token: write')" ]
+}
+
+@test "the governed image build example keeps the image's record in the build run's artifact store, after the cloud credentials are set" {
+  local example="${REPO_ROOT}/examples/image/governed-build.yml"
+  [ "$(grep -c '^          store-records: true$' "${example}")" -eq 1 ]
+  [ "$(job_actions "${example}" record | grep -v '^actions/' | tr '\n' ' ')" = "ilterohq/iltero-actions/setup aws-actions/configure-aws-credentials ilterohq/iltero-actions/record-image ilterohq/iltero-actions/close " ]
 }
 
 @test "in the image build example with no account, the record job may only read the repository, and gets no identity token" {

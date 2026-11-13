@@ -1,0 +1,137 @@
+# Reference workflow for a team that runs Terraform itself, with no Iltero
+# account: .iltero/config.yml has no platform section. A repository owner
+# copies it into .github/workflows/ and replaces the example values.
+#
+# A push to main deploys one unit to production. The job runs its own
+# terraform plan and apply. Iltero steps between them record each stage:
+#   plan         after terraform plan, from the saved plan: stops the job
+#                when a check fails, before anything is applied;
+#   pre_deploy   before terraform apply: runs no check here, and only warns
+#                when the unit's record still expects the stage;
+#   post_deploy  after terraform apply, also when the apply failed;
+#   post_verify  after post_deploy: checks that the deployed resources
+#                still match what the apply left. It reads two refresh-only
+#                plans, taken at least 60 seconds apart. Never apply a
+#                refresh-only plan: it writes what it reads into the
+#                state, so drift no longer shows.
+#
+# The job runs in the production deployment environment of GitHub, whose
+# protection rules, such as required reviewers, apply to it. Limit the
+# production environment's deployment branches to the default branch, and
+# let the deploy role's trust policy accept only jobs that run in that
+# environment (the identity token's subject
+# repo:<owner>/<repository>:environment:production).
+#
+# The CLI records each stage on the runner and sends nothing to Iltero. Each
+# record-iac step uploads the unit's records as a workflow artifact.
+#
+# In a project with no platform section, list pre_deploy under
+# stages.out_of_scope in .iltero/config.yml. The pre-deploy stage checks
+# facts that only Iltero Platform holds, so the pre_deploy step runs no
+# check and only warns.
+#
+# Keep post_verify in scope, since this workflow takes the two readings it
+# needs: run iltero init with --expect-post-verify, or remove post_verify
+# from stages.out_of_scope.
+#
+# Plan, apply, state and reading files stay in the runner's temporary
+# directory, never in the checked-out repository. The readings can hold
+# secret values: never upload or keep them. The record keeps only their
+# digests.
+#
+# Values the owner replaces:
+#   the actions commit (40 hex characters), the branch, the environment, the
+#   GitHub deployment environment, the deploy role's Amazon Resource Name
+#   (ARN) and region, and the unit's name and directory.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Deploy production
+    runs-on: ubuntu-24.04
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read # check out the project
+      id-token: write # the job's identity token, for the deploy role
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5 # the version deploy and preview install by default
+          terraform_wrapper: false
+      - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/deploy
+          aws-region: eu-west-1
+      - name: Plan
+        working-directory: units/network
+        run: |
+          terraform init -input=false
+          terraform plan -input=false -out="${RUNNER_TEMP}/network.tfplan"
+          terraform show -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-plan.json"
+      - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: plan
+          environment: production
+          unit: network
+          plan: ${{ runner.temp }}/network-plan.json
+          saved-plan: ${{ runner.temp }}/network.tfplan
+      - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: pre_deploy
+          environment: production
+          unit: network
+
+      - id: apply
+        name: Apply
+        working-directory: units/network
+        run: terraform apply -input=false -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-apply.ndjson"
+      - id: state
+        name: Read the state
+        if: ${{ !cancelled() && steps.apply.outcome != 'skipped' }}
+        working-directory: units/network
+        run: terraform show -json > "${RUNNER_TEMP}/network-state.json"
+      - if: ${{ !cancelled() && steps.apply.outcome != 'skipped' }}
+        uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: post_deploy
+          environment: production
+          unit: network
+          plan: ${{ runner.temp }}/network-plan.json
+          saved-plan: ${{ runner.temp }}/network.tfplan
+          apply-log: ${{ runner.temp }}/network-apply.ndjson
+          # Pass the state when the step that reads it succeeded. When it
+          # failed, set state-unreadable instead: the CLI then records the
+          # apply from the apply log alone, and the step fails.
+          state: ${{ steps.state.outcome == 'success' && format('{0}/network-state.json', runner.temp) || '' }}
+          state-unreadable: ${{ steps.state.outcome == 'failure' }}
+
+      - name: Read the deployed resources back
+        working-directory: units/network
+        run: |
+          terraform plan -input=false -refresh-only -lock-timeout=5m -out="${RUNNER_TEMP}/network-first.tfplan"
+          terraform show -json "${RUNNER_TEMP}/network-first.tfplan" > "${RUNNER_TEMP}/network-first.json"
+          sleep 60
+          terraform plan -input=false -refresh-only -lock-timeout=5m -out="${RUNNER_TEMP}/network-second.tfplan"
+          terraform show -json "${RUNNER_TEMP}/network-second.tfplan" > "${RUNNER_TEMP}/network-second.json"
+      - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
+        with:
+          stage: post_verify
+          environment: production
+          unit: network
+          refresh-plans: |
+            ${{ runner.temp }}/network-first.json
+            ${{ runner.temp }}/network-second.json

@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `setup` action. Installs the Iltero CLI and its evaluator at pinned, checksum-verified versions.
+- `setup` installs an Iltero CLI that shows whether every commit a change ships was reviewed. `iltero record verify`,
+  the `README.txt` of a record package and `iltero record report` show it on a "Commit review" line. When the log of
+  `terraform apply` ends with neither Terraform's counts of the changes nor an error, the CLI records the apply as cut
+  short. It then settles each change from the state, as applied, failed or unknown, and never records a change as not
+  attempted.
 - `close` action. Closes the governed run of this pipeline run on Iltero Platform: the change run of the stack in
   `.iltero/config.yml` and an environment, the build run of an application, or the image deploy run of an application
   and an environment. The inputs given decide which run it closes:
@@ -90,6 +95,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on pull_request events, where it checks the plan locally." A unit name is 1 to 64 characters of lowercase letters,
   digits, `_` and `-`, and does not start with `-`. Any other `unit` stops the step before anything runs, with "Unit
   name '...' does not follow the unit-name rule."
+- Example `examples/iac/own-terraform.yml` for a project with no Iltero account. Like
+  `examples/iac/governed-own-terraform.yml`, it runs Terraform itself and records each stage with `record-iac`, on the
+  runner. Its `pre_deploy` step runs no check, because that stage checks facts that only Iltero Platform holds. The
+  step warns when the unit's record still expects the stage.
 - `deploy` and `preview` install the Terraform they run, in a step of their own before they run it, at a pinned,
   checksum-verified version. Each time the action runs, it downloads the archive again and checks it against its
   pinned checksum. Both actions take this input and give these outputs:
@@ -133,8 +142,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   job's token. The build job stops unless `IMAGE_PLATFORMS` lists one or more platforms, such as `linux/amd64`,
   separated by commas with no spaces: "IMAGE_PLATFORMS must list one or more platforms, such as linux/amd64, separated
   by commas with no spaces." The second scans the pushed image by its digest, once for each architecture, with read
-  access to the registry only, and keeps one Trivy report for each. The third records the image with every report and
-  closes the build run.
+  access to the registry only, and keeps one Trivy report for each. The third signs in to AWS with a records role,
+  records the image with every report, keeps the record and every file it cites in the build run's artifact store
+  (`store-records: true`), and closes the build run.
 - Example `examples/image/build.yml` for a project with no Iltero account. It builds and scans an image in three jobs,
   as `examples/image/governed-build.yml` does. The scan job keeps a full report for each architecture, then scans
   each one again and fails the workflow when any of them has a vulnerability at one of the severities in
