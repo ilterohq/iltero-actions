@@ -8,9 +8,9 @@
 #                                        iltero record verify.
 #
 # Run from the stack's working directory, with the RECORDS_DIRECTORY the
-# deploy action wrote. Every unit is checked; the step fails when any unit
-# fails. When WRITE_REPORT is true, the CLI also writes a report of each
-# unit's record bundle.
+# deploy or record-iac action wrote. Every unit is checked, or only UNIT when
+# it is set; the step fails when any unit fails. When WRITE_REPORT is true, the
+# CLI also writes a report of each unit's record bundle.
 
 set -euo pipefail
 
@@ -28,29 +28,46 @@ cmd_check() {
 cmd_run() {
   local given="$1"
   local out="${given}"
-  [[ -n "${given}" ]] || die "The records directory is empty. Pass the deploy action's records-directory."
+  [[ -n "${given}" ]] || die "The records directory is empty. Pass the records-directory output of the deploy or record-iac action."
   # A relative path starts with ./, so no command reads it as an option.
   [[ "${out}" == /* ]] || out="./${out}"
-  [[ -d "${out}" ]] || die "The records directory '${given}' does not exist. Pass the deploy action's records-directory."
+  [[ -d "${out}" ]] || die "The records directory '${given}' does not exist. Pass the records-directory output of the deploy or record-iac action."
   require_environment_name "${ENVIRONMENT:-}"
+  local default_artifact="iltero-record-bundles-${ENVIRONMENT}"
+  # Each environment has its own work directory, and with UNIT each unit
+  # has its own, so their reports stay apart.
+  local work_root="${RUNNER_TEMP}/iltero-verify/${ENVIRONMENT}"
+  local bundled_units="*"
+  if [[ -n "${UNIT:-}" ]]; then
+    check_unit_name "${UNIT}"
+    default_artifact+="-${UNIT}"
+    work_root="${RUNNER_TEMP}/iltero-verify-unit/${ENVIRONMENT}/${UNIT}"
+    bundled_units="${UNIT}"
+  fi
   local artifact
-  artifact="$(artifact_name "${ARTIFACT_NAME:-}" "iltero-record-bundles-${ENVIRONMENT}")"
-  # Absolute, because the upload step resolves paths from the repository root.
-  out="$(cd "${out}" && pwd -P)"
-  write_output records-directory "${out}"
-  write_output artifact-name "${artifact}"
+  artifact="$(artifact_name "${ARTIFACT_NAME:-}" "${default_artifact}")"
   local report
   report="$(report_enabled)"
-  # Each environment has its own work directory, so its reports stay apart.
-  local work_root="${RUNNER_TEMP}/iltero-verify/${ENVIRONMENT}"
   local units="${work_root}/units.tsv"
   local reports="${work_root}/reports"
   mkdir -p "${work_root}"
+  # The units are checked before any output is written, so the upload steps
+  # run only when the units are known.
+  list_checked_units "${units}"
+  if [[ -n "${UNIT:-}" ]]; then
+    local unit_directory
+    unit_directory="$(unit_dir "${UNIT}" "${units}")"
+    printf '%s\t%s\n' "${UNIT}" "${unit_directory}" > "${units}"
+  fi
+  # Absolute, because the upload step resolves paths from the repository root.
+  out="$(cd "${out}" && pwd -P)"
+  # The upload takes only the bundles of the units this step checks.
+  write_output bundles-path "${out}/units/${bundled_units}/car-*/"
+  write_output artifact-name "${artifact}"
   if [[ "${report}" == true ]]; then
     mkdir -p "${reports}"
     write_output report-directory "${reports}"
   fi
-  list_checked_units "${units}"
 
   local summary="${work_root}/summary.md" details="${work_root}/details.md"
   {

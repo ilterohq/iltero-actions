@@ -25,7 +25,7 @@ for unit in units:
 check_unit() {
   local name="$1"
   local dir="$2"
-  [[ "${name}" =~ ${UNIT_NAME_PATTERN} ]] || die "Unit name '${name}' does not follow the unit-name rule."
+  check_unit_name "${name}"
   [[ "${dir}" != /* && "/${dir}/" != */../* ]] || die "Unit '${name}' has a directory outside the stack: '${dir}'."
   # Commands would read such a directory as one of their options.
   [[ "${dir}" != -* ]] || die "Unit '${name}' has a directory that starts with '-': '${dir}'. Rename the directory."
@@ -46,4 +46,19 @@ list_checked_units() {
     [[ "${seen}" != *" ${name} "* ]] || die "Two units are named '${name}'. Give each unit its own name."
     seen+="${name} "
   done < "${file}"
+}
+
+# Prints the directory of the unit named NAME, from the checked unit list in
+# FILE. Stops when no unit has it.
+unit_dir() {
+  local name="$1"
+  local file="$2"
+  local listed dir
+  while IFS=$'\t' read -r listed dir; do
+    if [[ "${listed}" == "${name}" ]]; then
+      echo "${dir}"
+      return 0
+    fi
+  done < "${file}"
+  die "The stack has no unit '${name}'. Use a name that 'iltero units list' prints."
 }

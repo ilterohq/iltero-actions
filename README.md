@@ -23,7 +23,7 @@ This repository has no release.
 | `record-iac` | Record one stage of one unit's Terraform change in a job that runs Terraform itself: after plan, before apply, after apply, or a check of the deployed resources after the apply |
 | `record-image` | Record one stage of a container image's change. The plan stage records the image a build pushed, in the same pipeline run as the build. The deployment stages record the image before and after its deployment to an environment, and check the workload's pods after the rollout |
 | `close` | Close the governed run of this pipeline run on Iltero Platform: the change run of a stack and environment, the build run of an application, or the image deploy run of an application and environment |
-| `verify` | Pack each unit's record and every file it cites into a record bundle, and check the bundle |
+| `verify` | Pack each unit's record, or one named unit's, and every file it cites into a record bundle, and check the bundle |
 | `preview` | Install Terraform, then plan and check each unit on a pull request, locally and with no cloud credential or Iltero secret, and write the pull request comment |
 | `comment` | Post the preview's comment on the pull request, and update it on each push |
 

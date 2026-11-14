@@ -169,7 +169,7 @@ cmd_run() {
   require_one_line cluster-id "${CLUSTER_ID:-}"
   require_true_or_false advisory "${ADVISORY:-}"
   [[ -n "${UNIT:-}" ]] || die "The unit input is required."
-  [[ "${UNIT}" =~ ${UNIT_NAME_PATTERN} ]] || die "Unit name '${UNIT}' does not follow the unit-name rule."
+  check_unit_name "${UNIT}"
   local linked=false
   if ! is_pull_request_event; then
     linked="$(project_linked)"

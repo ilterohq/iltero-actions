@@ -27,6 +27,12 @@ readonly SHA256_PATTERN="^[${HEX}]{64}$"
 # shellcheck disable=SC2034
 readonly UNIT_NAME_PATTERN="^[${LOWER}0-9_][${LOWER}0-9_-]{0,63}$"
 
+# Stops unless NAME follows the unit-name rule.
+check_unit_name() {
+  local name="$1"
+  [[ "${name}" =~ ${UNIT_NAME_PATTERN} ]] || die "Unit name '${name}' does not follow the unit-name rule."
+}
+
 # Prints an error annotation and exits with STATUS. The message is escaped,
 # so a value inside it cannot start another workflow command.
 exit_with_error() {
