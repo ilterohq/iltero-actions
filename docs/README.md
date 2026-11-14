@@ -22,6 +22,7 @@ default below. When the default is not a valid artifact name, the step stops. Se
 | --- | --- |
 | `deploy` | `iltero-deploy-<environment>` |
 | `verify` | `iltero-record-bundles-<environment>` |
+| `verify`, with `unit` set | `iltero-record-bundles-<environment>-<unit>` |
 | `record-iac` | `iltero-records-<environment>-<unit>` |
 | `record-image`, `plan` stage | `iltero-image-records-<unit>` |
 | `record-image`, deployment stages | `iltero-image-deployment-records-<environment>-<unit>` |
@@ -149,7 +150,8 @@ The readings of the workload can hold secret values, such as a container's envir
 - **`id-token: write`** in a job that calls Iltero Platform: `close`, and `deploy`, `record-iac` or `record-image` at
   any stage, in a linked project. On `pull_request` events, `record-iac` and `record-image` check locally and need
   none.
-  The Iltero CLI requests the job's GitHub identity token itself. The examples also grant it for the deploy role.
+  The Iltero CLI requests the job's GitHub identity token itself. The examples also grant it for the AWS role the job
+  signs in with.
 - **`ILTERO_API_URL`**, the address of Iltero Platform, in a workflow that calls it. It is the only Iltero setting.
   The job holds no Iltero secret.
 - **Cloud credentials** in a job that sets `store-records: true`. The CLI keeps each record in the run's artifact

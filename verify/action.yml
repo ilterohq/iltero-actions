@@ -1,6 +1,7 @@
 name: Iltero Verify
 description: >-
-  Pack each unit's Change Assurance Record and every file it cites into a record bundle, and check the bundle.
+  Pack each unit's Change Assurance Record, or one unit's, and every file it cites into a record bundle, and check the
+  bundle.
 author: Iltero
 
 branding:
@@ -9,11 +10,17 @@ branding:
 
 inputs:
   environment:
-    description: The environment the deploy action deployed. The default artifact name includes it.
+    description: The environment the deploy or record-iac action recorded. The default artifact name includes it.
     required: true
   records-directory:
-    description: The records directory, from the deploy action's records-directory output.
+    description: The records directory, from the records-directory output of the deploy or record-iac action.
     required: true
+  unit:
+    description: >-
+      The name of one unit to check, as `iltero units list` prints it. Empty: every unit. Use it after record-iac,
+      which records one unit.
+    required: false
+    default: ""
   working-directory:
     description: The stack's directory, relative to the repository root.
     required: false
@@ -27,7 +34,8 @@ inputs:
     default: "true"
   artifact-name:
     description: >-
-      Name of the artifact that holds the record bundles. Empty: iltero-record-bundles-<environment>.
+      Name of the artifact that holds the record bundles. Empty: iltero-record-bundles-<environment>, or
+      iltero-record-bundles-<environment>-<unit> when unit is set.
     required: false
     default: ""
 
@@ -55,16 +63,17 @@ runs:
       env:
         ENVIRONMENT: ${{ inputs.environment }}
         RECORDS_DIRECTORY: ${{ inputs.records-directory }}
+        UNIT: ${{ inputs.unit }}
         WRITE_REPORT: ${{ inputs.write-report }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/verify.sh" run "${RECORDS_DIRECTORY}"'
 
     - name: Upload the record bundles
-      if: always() && steps.verify.outputs.records-directory != ''
+      if: always() && steps.verify.outputs.bundles-path != ''
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ${{ steps.verify.outputs.artifact-name }}
-        path: ${{ steps.verify.outputs.records-directory }}/units/*/car-*/
+        path: ${{ steps.verify.outputs.bundles-path }}
         if-no-files-found: error
 
     - name: Upload the reports

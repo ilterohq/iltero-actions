@@ -87,8 +87,8 @@ STUB
 @test "an empty records directory is refused" {
   run "${VERIFY}" run ""
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The records directory is empty. Pass the deploy action's records-directory."* ]]
-  ! grep -q "^records-directory=" "${GITHUB_OUTPUT}" || false
+  [[ "${output}" == *"The records directory is empty. Pass the records-directory output of the deploy or record-iac action."* ]]
+  ! grep -q "^bundles-path=" "${GITHUB_OUTPUT}" || false
   ! grep -q "record build" "${STUB_LOG}" || false
 }
 
@@ -96,7 +96,7 @@ STUB
   run "${VERIFY}" run "nowhere"
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"The records directory 'nowhere' does not exist."* ]]
-  ! grep -q "^records-directory=" "${GITHUB_OUTPUT}" || false
+  ! grep -q "^bundles-path=" "${GITHUB_OUTPUT}" || false
   ! grep -q "record build" "${STUB_LOG}" || false
 }
 
@@ -167,14 +167,14 @@ STUB
 @test "a relative records directory is given to the upload as an absolute path" {
   mkdir -p records
   run "${VERIFY}" run records
-  [ "$(output_value records-directory)" = "${STACK}/records" ]
+  [ "$(output_value bundles-path)" = "${STACK}/records/units/*/car-*/" ]
 }
 
-@test "the bundles are uploaded from the directory the step checked, and only when it ran" {
-  grep -qF "if: always() && steps.verify.outputs.records-directory != ''" "${REPO_ROOT}/verify/action.yml"
+@test "the bundles are uploaded from the path the step checked, and only when it ran" {
+  grep -qF "if: always() && steps.verify.outputs.bundles-path != ''" "${REPO_ROOT}/verify/action.yml"
   # The action's own text is matched as written.
   # shellcheck disable=SC2016
-  grep -qF 'path: ${{ steps.verify.outputs.records-directory }}/units/*/car-*/' "${REPO_ROOT}/verify/action.yml"
+  grep -qF 'path: ${{ steps.verify.outputs.bundles-path }}' "${REPO_ROOT}/verify/action.yml"
 }
 
 @test "each unit starts with an empty work directory" {
@@ -307,6 +307,58 @@ STUB
     : > "${GITHUB_OUTPUT}"
     OLDPWD="${OUT}" run "${VERIFY}" run "${name}"
     [ "${status}" -eq 0 ]
-    grep -qx -- "records-directory=${project}/${name}" "${GITHUB_OUTPUT}"
+    grep -qxF -- "bundles-path=${project}/${name}/units/*/car-*/" "${GITHUB_OUTPUT}"
   done
+}
+
+@test "with a unit, only that unit's record is built and verified" {
+  UNIT=compute run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 0 ]
+  run bash -c "grep -oE '^iltero record (build|verify) [^ ]+ [^ ]+' '${STUB_LOG}' | tr '\n' ','"
+  [ "${output}" = "iltero record build --out=${OUT} --unit=compute,iltero record verify ${OUT}/units/compute/car-0001/ ILTERO_OPA_PATH=${TOOLS}/bin/opa," ]
+  grep -q "^| compute | exit 0 | exit 0 |$" "${GITHUB_STEP_SUMMARY}"
+  ! grep -q "^| network |" "${GITHUB_STEP_SUMMARY}" || false
+}
+
+@test "with a unit, the bundles artifact is named after the environment and the unit" {
+  UNIT=network run "${VERIFY}" run "${OUT}"
+  [ "$(output_value artifact-name)" = "iltero-record-bundles-production-network" ]
+  : > "${GITHUB_OUTPUT}"
+  UNIT=network ARTIFACT_NAME=network-bundles run "${VERIFY}" run "${OUT}"
+  [ "$(output_value artifact-name)" = "network-bundles" ]
+}
+
+@test "a unit the stack does not list is refused before anything is built" {
+  UNIT=storage run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The stack has no unit 'storage'. Use a name that 'iltero units list' prints."* ]]
+  ! grep -q "record build" "${STUB_LOG}" || false
+  # No output, so no upload step runs.
+  [ ! -s "${GITHUB_OUTPUT}" ]
+}
+
+@test "with a unit, the upload takes only that unit's bundles" {
+  UNIT=compute run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 0 ]
+  [ "$(output_value bundles-path)" = "${OUT}/units/compute/car-*/" ]
+}
+
+@test "with a unit, each unit has its own reports directory" {
+  UNIT=network run "${VERIFY}" run "${OUT}"
+  local network_reports
+  network_reports="$(output_value report-directory)"
+  : > "${GITHUB_OUTPUT}"
+  UNIT=compute run "${VERIFY}" run "${OUT}"
+  [ "$(output_value report-directory)" != "${network_reports}" ]
+  [ "$(output_value report-directory)" != "${RUNNER_TEMP}/iltero-verify/production/reports" ]
+  [ ! -e "$(output_value report-directory)/network" ]
+  [ -n "$(ls "${network_reports}")" ]
+}
+
+@test "a unit name that breaks the unit-name rule is refused before anything is written" {
+  UNIT="../network" run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Unit name '../network' does not follow the unit-name rule."* ]]
+  ! grep -q "^bundles-path=" "${GITHUB_OUTPUT}" || false
+  ! grep -q "units list" "${STUB_LOG}" || false
 }

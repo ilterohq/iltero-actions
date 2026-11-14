@@ -61,21 +61,6 @@ cmd_check() {
   cli_path > /dev/null
 }
 
-# Prints the directory of the unit named NAME, from the checked unit list in
-# FILE. Stops when no unit has it.
-unit_dir() {
-  local name="$1"
-  local file="$2"
-  local listed dir
-  while IFS=$'\t' read -r listed dir; do
-    if [[ "${listed}" == "${name}" ]]; then
-      echo "${dir}"
-      return 0
-    fi
-  done < "${file}"
-  die "The stack has no unit '${name}'. Use a name that 'iltero units list' prints."
-}
-
 # Stops unless the input INPUT, whose value is PATH_VALUE, names a file.
 require_file() {
   local input="$1"
@@ -147,7 +132,7 @@ cmd_run() {
   [[ "${STATE_UNREADABLE}" == false || "${STAGE}" == post_deploy ]] \
     || die "The state-unreadable input applies only to the post_deploy stage."
   [[ -n "${UNIT:-}" ]] || die "The unit input is required."
-  [[ "${UNIT}" =~ ${UNIT_NAME_PATTERN} ]] || die "Unit name '${UNIT}' does not follow the unit-name rule."
+  check_unit_name "${UNIT}"
   local artifact
   artifact="$(artifact_name "${ARTIFACT_NAME:-}" "iltero-records-${ENVIRONMENT}-${UNIT}")"
   local report linked=false
