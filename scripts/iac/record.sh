@@ -27,7 +27,8 @@
 #   PLAN                       The saved plan as JSON, from `terraform show -json`.
 #   SAVED_PLAN                 The saved plan file, from `terraform plan -out`.
 #   APPLY_LOG                  The output of `terraform apply -json`.
-#   STATE                      The state after the apply, from `terraform show -json`.
+#   STATE                      The state after the apply, from `terraform show -json`. Post-verify
+#                              takes the same file as post-deploy.
 #   STATE_UNREADABLE           true or false. True: Terraform could not read the state after the apply.
 #   REFRESH_PLANS              Two readings of the deployed resources, one path per line, in the
 #                              order they were taken. Each is a refresh-only plan as JSON.
@@ -117,8 +118,13 @@ record_event() {
         || die "The refresh-plans input must name two readings, one per line, in the order they were taken. It names ${#readings[@]}."
       require_file refresh-plans "${readings[0]}"
       require_file refresh-plans "${readings[1]}"
+      # The CLI checks that this is the state post-deploy read, and reads it
+      # only for the checks that the plan stage left until after the apply.
+      # The action cannot tell whether the plan left any, so it always
+      # requires the file.
+      require_file state "${STATE:-}"
       check_stage "${work}" post_verify --refresh-plan="${readings[0]}" --refresh-plan="${readings[1]}" \
-        "${run_args[@]}"
+        --state="${STATE}" "${run_args[@]}"
       ;;
     *) die "Unknown stage '${STAGE}'." ;;
   esac

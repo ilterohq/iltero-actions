@@ -94,8 +94,13 @@ for a unit, that unit's Post-verify cell reads `record does not verify` for exit
 any other code. `deploy` goes on with the other units, and the step then fails with the first failing code.
 
 For each such unit, `deploy` reads the deployed resources back twice with `terraform plan -refresh-only`. It saves each
-reading and never applies it. The second reading comes at least 61 seconds after the first. A unit that fails the
-stage does not stop the others. The step then fails with the first failing code.
+reading and never applies it. The second reading comes at least 61 seconds after the first. `deploy` gives the
+post-verify check both readings and the state file that the post-deploy check took. The CLI reads that state only to
+finish the checks the plan stage left until after the apply. A unit that fails the stage does not stop the others.
+The step then fails with the first failing code.
+
+In a job that runs Terraform itself, give `record-iac` the same state file at `post_verify` as at `post_deploy`, with
+the input `state`.
 
 The readings can hold secret values, because Terraform does not mark every secret as sensitive. `deploy` does not
 upload them, and they are not meant to be kept: the record holds only each reading's SHA-256 digest. The

@@ -629,17 +629,29 @@ deploy() {
   [[ "${output}" =~ ^terraform\ network\ apply,terraform\ compute\ apply,terraform\ network\ plan[^,]*,terraform\ compute\ plan[^,]*,sleep\ 6[01],terraform\ network\ plan[^,]*,iltero[^,]*network/,sleep\ 6[01],terraform\ compute\ plan[^,]*,iltero[^,]*compute/,$ ]]
 }
 
-@test "post-verify gets both readings in order, and joins the run" {
+@test "post-verify gets both readings in order and the post-deploy state, and joins the run" {
   touch "${MARKS}/expects-post-verify-network"
   deploy
   [ "${status}" -eq 0 ]
   local readings="${RUNNER_TEMP}/iltero-deploy/production/readings/network"
-  grep -qx "iltero iac check --stage=post_verify --refresh-plan=${readings}/first.json --refresh-plan=${readings}/second.json --minimum-interval-seconds=60 --unit=network --out=${RUNNER_TEMP}/iltero-deploy/production/out --environment=production --upload" "${STUB_LOG}"
+  grep -qx "iltero iac check --stage=post_verify --refresh-plan=${readings}/first.json --refresh-plan=${readings}/second.json --state=${RUNNER_TEMP}/iltero-deploy/production/units/network/state.json --minimum-interval-seconds=60 --unit=network --out=${RUNNER_TEMP}/iltero-deploy/production/out --environment=production --upload" "${STUB_LOG}"
   [ "$(cat "${readings}/first.json")" = '{}' ]
   [ "$(cat "${readings}/second.json")" = '{}' ]
   [ "$(output_value readings-directory)" = "${RUNNER_TEMP}/iltero-deploy/production/readings" ]
   grep -q "| network | exit 0 | exit 0 | exit 0 | exit 0 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
   grep -q "<summary>network: post-verify</summary>" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "post-verify gets the same state file that post-deploy got, unchanged by the readings" {
+  touch "${MARKS}/expects-post-verify-network"
+  deploy
+  [ "${status}" -eq 0 ]
+  local post_deploy_state post_verify_state
+  post_deploy_state="$(grep "^iltero iac check --stage=post_deploy .*--unit=network" "${STUB_LOG}" | grep -oE -- '--state=[^ ]+')"
+  post_verify_state="$(grep "^iltero iac check --stage=post_verify .*--unit=network" "${STUB_LOG}" | grep -oE -- '--state=[^ ]+')"
+  [ -n "${post_deploy_state}" ]
+  [ "${post_verify_state}" = "${post_deploy_state}" ]
+  [ "$(cat "${post_deploy_state#--state=}")" = '{}' ]
 }
 
 @test "a reading is a saved refresh-only plan with the plan's variables, and is never applied" {
@@ -725,7 +737,7 @@ deploy() {
   deploy
   [ "${status}" -eq 0 ]
   local readings="${RUNNER_TEMP}/iltero-deploy/production/readings/network"
-  grep -qx "iltero iac check --stage=post_verify --refresh-plan=${readings}/first.json --refresh-plan=${readings}/second.json --minimum-interval-seconds=60 --unit=network --out=${RUNNER_TEMP}/iltero-deploy/production/out --environment=production" "${STUB_LOG}"
+  grep -qx "iltero iac check --stage=post_verify --refresh-plan=${readings}/first.json --refresh-plan=${readings}/second.json --state=${RUNNER_TEMP}/iltero-deploy/production/units/network/state.json --minimum-interval-seconds=60 --unit=network --out=${RUNNER_TEMP}/iltero-deploy/production/out --environment=production" "${STUB_LOG}"
 }
 
 @test "the deploy says why it waits before a second reading" {

@@ -26,7 +26,8 @@
 #
 # When every unit deployed, the deploy reads back twice each unit whose record
 # expects the post-verify stage, with a refresh-only plan, then runs
-#   9. iltero iac check --stage post_verify, from the two readings.
+#   9. iltero iac check --stage post_verify, from the two readings and the
+#      state file that the post-deploy stage checked.
 # The deploy takes every unit's first reading before any second reading, so
 # the stack waits about one interval in all, not one interval per unit. A unit
 # that fails post-verify does not stop the others.
@@ -325,8 +326,11 @@ post_verify_units() {
       echo "::error::Terraform could not read back unit '${name}'."
     else
       local run_args=(--unit="${name}" --out="${out}" --environment="${environment}" ${SERVER_ARGS[@]+"${SERVER_ARGS[@]}"})
+      # Post-verify also gets the state file that the post-deploy stage checked.
+      # The CLI confirms it is the same file, and reads it only for the checks
+      # that the plan stage left until after the apply.
       check_stage "${work}" post_verify --refresh-plan="${readings}/${name}/first.json" \
-        --refresh-plan="${readings}/${name}/second.json" \
+        --refresh-plan="${readings}/${name}/second.json" --state="${work}/state.json" \
         --minimum-interval-seconds="${READING_INTERVAL_SECONDS}" "${run_args[@]}" || status=$?
       POST_VERIFY_RESULTS[i]="exit ${status}"
     fi

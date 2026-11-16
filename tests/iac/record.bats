@@ -350,10 +350,10 @@ stage_call() {
 
 # --- post_verify -------------------------------------------------------------
 
-@test "post_verify passes the two readings, in the order given" {
+@test "post_verify passes the two readings, in the order given, and the state" {
   run "${RECORD}" run post_verify
   [ "${status}" -eq 0 ]
-  stage_call post_verify | grep -qx "iltero iac check --stage=post_verify --refresh-plan=first.json --refresh-plan=second.json --unit=network --out=${RECORDS} --environment=production --upload"
+  stage_call post_verify | grep -qx "iltero iac check --stage=post_verify --refresh-plan=first.json --refresh-plan=second.json --state=state.json --unit=network --out=${RECORDS} --environment=production --upload"
 }
 
 @test "post_verify skips blank lines between the readings" {
@@ -369,6 +369,20 @@ stage_call() {
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"The refresh-plans input must name two readings, one per line, in the order they were taken."* ]]
   done
+  ! stage_call post_verify || false
+}
+
+@test "post_verify requires the state" {
+  STATE="" run "${RECORD}" run post_verify
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The state input is required for stage post_verify."* ]]
+  ! stage_call post_verify || false
+}
+
+@test "post_verify refuses a state that is not a file" {
+  STATE="nowhere.json" run "${RECORD}" run post_verify
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The state input names no file: 'nowhere.json'."* ]]
   ! stage_call post_verify || false
 }
 
