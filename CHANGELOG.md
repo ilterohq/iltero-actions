@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `setup` action. Installs the Iltero CLI and its evaluator at pinned, checksum-verified versions.
+- `setup` installs an Iltero CLI with a new file format. Every record the CLI writes, and every assertion file it reads,
+  starts with its format version, `apiVersion: iltero.com/v1`, and its type, `kind`. The configuration file keeps
+  `version: 1`. A project's own assertion file starts with `kind: TechnicalAssertion`. An assertion's identifier now has
+  five parts in a fixed order: who wrote it, the kind of change, what it is about, the provider and service, and the
+  check. For example, `ILT.AWS.S3.PUBLIC_ACCESS_BLOCKED` is now `ILT.IAC.RESOURCE.AWS.S3.PUBLIC_ACCESS_BLOCKED`. A
+  project's own identifiers follow the same order and must not start with `ILT`. The CLI stops with exit code 5 on an
+  assertion file that breaks either rule.
+- The project's configuration file, `.iltero/config.yml`, needs four new settings under `assertions`:
+  `scanner_bindings`, `required_scanners`, `local_exceptions` and `values_known_after_deployment`. `iltero init`
+  writes all four.
+- Some values in a plan are known only after the apply, such as an identifier the cloud assigns. With
+  `values_known_after_deployment: postpone`, which `iltero init` writes, the plan check leaves a check that reads such
+  a value to the post-verify stage, when the record expects that stage. The post-verify stage then decides it from the
+  state file that the post-deploy stage checked. With `block`, the plan check stops on it with exit code 3. A governed
+  run postpones nothing.
+- Starter assertions are the assertions shipped with Iltero. They apply only in a run Iltero Platform did not open,
+  such as a preview. With them on, the plan check exits with code 6, meaning something was not checked, when the plan
+  holds no resource for one of them. It also exits with code 6 when the plan holds a CloudTrail, AWS Config or IAM
+  policy resource and no scanner report decides it. Most plans do not hold a resource for every starter assertion, so
+  `preview` and `deploy` fail the step with that code for most plans.
 - `setup` installs an Iltero CLI that shows whether every commit a change ships was reviewed. `iltero record verify`,
   the `README.txt` of a record package and `iltero record report` show it on a "Commit review" line. When the log of
   `terraform apply` ends with neither Terraform's counts of the changes nor an error, the CLI records the apply as cut
@@ -94,8 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resources, one path per line, in the order they were taken. Each reading is a refresh-only plan, from
   `terraform plan -refresh-only -out=FILE` then `terraform show -json FILE`, and the second is taken at least 60 seconds
   after the first. Any other number of readings stops the step: "The refresh-plans input must name two readings, one per
-  line, in the order they were taken. It names N." The example takes both readings after `post_deploy`. On
-  `pull_request` events, the action records only `plan`, and stops at any other stage with "On pull request events,
+  line, in the order they were taken. It names N." `post_verify` also takes the input `state`, the same file that
+  `post_deploy` took, so the CLI can finish the checks the plan stage left until after the apply. Without it, the step
+  stops with "The state input is required for stage post_verify." The example takes both readings after `post_deploy`.
+  On `pull_request` events, the action records only `plan`, and stops at any other stage with "On pull request events,
   record-iac records only the plan stage, checked locally." It refuses `pull_request_target` and `workflow_run` events,
   and `pull_request_review` and `pull_request_review_comment` events: "record-iac does not run on '...' events. Run it
   on pull_request events, where it checks the plan locally." A unit name is 1 to 64 characters of lowercase letters,
@@ -123,7 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose record expects the post-verify stage still match what the apply left. It reads each such unit back twice with
   `terraform plan -refresh-only`, with the same variable files as the plan, and never applies a reading. The second
   reading comes at least 61 seconds after the first, and the log says how long the deploy waits. It then runs
-  `iltero iac check --stage post_verify` with `--minimum-interval-seconds 60`. A failed unit does not stop the others.
+  `iltero iac check --stage post_verify` with `--minimum-interval-seconds 60` and the state file that the post-deploy
+  stage checked. A failed unit does not stop the others.
   The step fails with the first failing code: "The post-verify stage failed for one or more units. See the job
   summary." A reading that fails reads "Terraform could not read back unit '...'." No unit is read
   back when a unit failed to deploy. Each unit's report is written after its post-verify stage. When the CLI cannot

@@ -144,6 +144,8 @@ jobs:
           refresh-plans: |
             ${{ runner.temp }}/network-first.json
             ${{ runner.temp }}/network-second.json
+          # The same state file that post_deploy took.
+          state: ${{ runner.temp }}/network-state.json
 
   close:
     name: Close production

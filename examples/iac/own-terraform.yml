@@ -139,6 +139,8 @@ jobs:
           refresh-plans: |
             ${{ runner.temp }}/network-first.json
             ${{ runner.temp }}/network-second.json
+          # The same state file that post_deploy took.
+          state: ${{ runner.temp }}/network-state.json
       # Runs when the plan stage wrote the records directory, also when a later step failed.
       - if: ${{ !cancelled() && steps.record-plan.outputs.records-directory != '' }}
         uses: ilterohq/iltero-actions/verify@0000000000000000000000000000000000000000 # v0.3.0

@@ -40,7 +40,8 @@ inputs:
   state:
     description: >-
       The state after the apply, from `terraform show -json`. Required for post_deploy, unless state-unreadable is
-      true.
+      true. Required for post_verify too: give the same file that post_deploy took, so the CLI can finish the checks
+      the plan stage left until after the apply.
     required: false
     default: ""
   state-unreadable:

@@ -1,2 +1,2 @@
-iltero-schemas 0e481391838fcc96a1920e0ebfae37e37955401e
-iltero-cli fc8f8e29da87668d34e7dee17f6447099189ab65
+iltero-schemas 8c8c6c4a72348adf06b93a94f0c50cdfb174e757
+iltero-cli 5ec1cf5c2810d7fc38e6af0c598ed1b584b494ac
