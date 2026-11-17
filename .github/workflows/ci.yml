@@ -19,7 +19,8 @@
 #   - Markdown linting — the documents named in the job.
 #   - End to end — the setup, preview and record-iac actions run on the test
 #     stack in tests/e2e/stack, with no cloud, in a project not linked to the
-#     server.
+#     server. The job runs only when the runner can download the Iltero CLI's
+#     repository.
 #
 # =============================================================================
 
@@ -230,13 +231,44 @@ jobs:
   # sets up Iltero and records the plan with record-iac. A pull request also
   # runs preview.
   #
-  # A failure of this job does not fail the workflow: setup cannot install the
-  # Iltero CLI on a GitHub-hosted runner while the CLI's repository is private.
+  # Setup installs the Iltero CLI from its repository. The cli-download job
+  # checks whether this runner can download that repository, and GitHub runs
+  # the end-to-end job only when it can.
+  cli-download:
+    name: Check whether the Iltero CLI can be downloaded
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check whether the Iltero CLI's repository can be downloaded
+        id: check
+        shell: bash
+        env:
+          # The repository that scripts/setup.sh installs the CLI from.
+          CLI_REPOSITORY: https://github.com/ilterohq/iltero-cli
+        run: |
+          status="$(curl --proto "=https" --tlsv1.2 --connect-timeout 10 --max-time 30 --silent --show-error --retry 3 --output /dev/null --write-out '%{http_code}' "${CLI_REPOSITORY}")" \
+            || { echo "::error::Could not reach ${CLI_REPOSITORY}."; exit 1; }
+          case "${status}" in
+            200) echo "available=true" >> "${GITHUB_OUTPUT}" ;;
+            404)
+              echo "::notice::This runner cannot download the Iltero CLI's repository, so the end-to-end job will not run."
+              echo "available=false" >> "${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo "::error::${CLI_REPOSITORY} answered with HTTP status ${status}, so this check cannot tell whether the CLI can be downloaded."
+              exit 1
+              ;;
+          esac
+
   end-to-end:
     name: End to end
+    needs: cli-download
+    if: needs.cli-download.outputs.available == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    continue-on-error: true
     permissions:
       contents: read
 

@@ -202,8 +202,17 @@ TERRAFORM_CHECKSUMS="${REPO_ROOT}/scripts/iac/tools/terraform/checksums.sha256"
   [ "$(grep -c 'persist-credentials: false' <<< "${job}")" -eq "$(grep -c 'actions/checkout@' <<< "${job}")" ]
 }
 
-@test "a failure of the end-to-end CI job does not fail the workflow while the CLI's repository is private" {
-  local ci="${REPO_ROOT}/.github/workflows/ci.yml" job
+@test "the end-to-end CI job runs only when the runner can download the Iltero CLI's repository, and the check fails on an unexpected answer" {
+  local ci="${REPO_ROOT}/.github/workflows/ci.yml" job check
   job="$(awk '/^  [a-z-]+:$/ { inside = ($1 == "end-to-end:") } inside' "${ci}")"
-  grep -qx '    continue-on-error: true' <<< "${job}"
+  check="$(awk '/^  [a-z-]+:$/ { inside = ($1 == "cli-download:") } inside' "${ci}")"
+  grep -qx '    if: needs.cli-download.outputs.available == .true.' <<< "${job}"
+  ! grep -q 'continue-on-error' <<< "${job}" || false
+  grep -qx '    permissions: {}' <<< "${check}"
+  grep -q "%{http_code}' \"\${CLI_REPOSITORY}\")\"" <<< "${check}"
+  grep -qx '            200) echo "available=true" >> "${GITHUB_OUTPUT}" ;;' <<< "${check}"
+  grep -qx '            404)' <<< "${check}"
+  grep -qx '              echo "available=false" >> "${GITHUB_OUTPUT}"' <<< "${check}"
+  grep -qx '              exit 1' <<< "${check}"
+  grep -q '|| { echo "::error::Could not reach ${CLI_REPOSITORY}."; exit 1; }' <<< "${check}"
 }
