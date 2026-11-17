@@ -76,7 +76,13 @@ lock() {
   lock
   [ "${status}" -eq 0 ]
   [ "$(cat "${TREE}/setup/cli-sources.txt")" = "$(printf 'iltero-schemas %s\niltero-cli %s' "${SCHEMAS_COMMIT}" "${CLI_COMMIT}")" ]
-  grep -qx "# Iltero CLI commit: ${CLI_COMMIT}" "${TREE}/setup/cli-requirements.txt"
+}
+
+@test "only the sources file names the pinned commits, never the requirements file" {
+  lock
+  [ "${status}" -eq 0 ]
+  ! grep -q "${CLI_COMMIT}" "${TREE}/setup/cli-requirements.txt" || false
+  ! grep -q "${SCHEMAS_COMMIT}" "${TREE}/setup/cli-requirements.txt" || false
 }
 
 @test "the requirements hold the default and cloud packages and the build backend, each with its hash" {
@@ -123,4 +129,111 @@ lock() {
   lock
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"the commit at HEAD has no pdm.lock"* ]]
+}
+
+@test "a lock file entry repeated for a package's extras, with the same version and files, is accepted once" {
+  cat >> "${CHECKOUT}/pdm.lock" << 'TOML'
+
+[[package]]
+name = "typer"
+version = "1.0.0"
+extras = ["all"]
+groups = ["default"]
+files = [{hash = "sha256:committed"}]
+TOML
+  git -C "${CHECKOUT}" commit -q -am "typer with extras"
+  lock
+  [ "${status}" -eq 0 ]
+  [ "$(grep -c '^typer==' "${TREE}/setup/cli-requirements.txt")" -eq 1 ]
+}
+
+@test "a lock file with two different entries for one package is refused, whatever the name's case or separators" {
+  local name
+  for name in typer Typer TYPER; do
+    write_lock "sha256:committed"
+    cat >> "${CHECKOUT}/pdm.lock" << TOML
+
+[[package]]
+name = "${name}"
+version = "2.0.0"
+groups = ["default"]
+files = [{hash = "sha256:other"}]
+TOML
+    git -C "${CHECKOUT}" commit -q -am "two ${name} entries"
+    lock
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"the lock file has two different entries for ${name}"* ]]
+  done
+}
+
+@test "the requirements come from the lock file of the commit the sources file pins" {
+  lock
+  [ "${status}" -eq 0 ]
+  grep -qx "iltero-cli ${CLI_COMMIT}" "${TREE}/setup/cli-sources.txt"
+  grep -q "sha256:committed" "${TREE}/setup/cli-requirements.txt"
+}
+
+@test "a lock entry in no group is left out of the requirements" {
+  cat >> "${CHECKOUT}/pdm.lock" << 'TOML'
+
+[[package]]
+name = "groupless"
+version = "1.0.0"
+files = [{hash = "sha256:groupless"}]
+TOML
+  git -C "${CHECKOUT}" commit -q -am "an entry in no group"
+  lock
+  [ "${status}" -eq 0 ]
+  ! grep -q "groupless" "${TREE}/setup/cli-requirements.txt" || false
+}
+
+@test "a CLI checkout that is not a git checkout is refused with a message, not a traceback" {
+  mkdir -p "${BATS_TEST_TMPDIR}/not-a-checkout"
+  run python3 -I "${LOCK_CLI}" "${BATS_TEST_TMPDIR}/not-a-checkout" "${SCHEMAS_COMMIT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"is not a git checkout with a commit at HEAD"* ]]
+  [[ "${output}" != *"Traceback"* ]]
+}
+
+@test "names that differ only by separator are one package" {
+  cat >> "${CHECKOUT}/pdm.lock" << 'TOML'
+
+[[package]]
+name = "ty-per"
+version = "1.0.0"
+groups = ["default"]
+files = [{hash = "sha256:a"}]
+
+[[package]]
+name = "ty_per"
+version = "2.0.0"
+groups = ["default"]
+files = [{hash = "sha256:b"}]
+TOML
+  git -C "${CHECKOUT}" commit -q -am "one package under two spellings"
+  lock
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"the lock file has two different entries for ty_per"* ]]
+}
+
+@test "a repeated entry adds its groups, so a package installed only with extras is still locked" {
+  cat >> "${CHECKOUT}/pdm.lock" << 'TOML'
+
+[[package]]
+name = "extra-only"
+version = "1.0.0"
+groups = ["dev"]
+files = [{hash = "sha256:extra"}]
+
+[[package]]
+name = "extra-only"
+version = "1.0.0"
+extras = ["fast"]
+groups = ["default"]
+files = [{hash = "sha256:extra"}]
+TOML
+  git -C "${CHECKOUT}" commit -q -am "a package in default only with extras"
+  lock
+  [ "${status}" -eq 0 ]
+  grep -q "^extra-only==1.0.0" "${TREE}/setup/cli-requirements.txt"
 }

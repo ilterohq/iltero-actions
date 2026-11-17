@@ -54,10 +54,19 @@ body:
       required: true
 
   - type: input
-    id: terraform-version
+    id: tool
     attributes:
-      label: Terraform Version
-      description: Output of `terraform version`.
+      label: IaC Tool
+      description: The infrastructure-as-code (IaC) tool your stack uses, as the `tool` input of `deploy` or `preview` names it.
+      placeholder: "terraform"
+    validations:
+      required: false
+
+  - type: input
+    id: tool-version
+    attributes:
+      label: IaC Tool Version
+      description: The `tool-version` output of `deploy` or `preview`, or the output of `terraform version`.
       placeholder: "1.16.5"
     validations:
       required: false

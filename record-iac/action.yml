@@ -9,11 +9,11 @@ branding:
 inputs:
   stage:
     description: >-
-      The stage to record: plan (after terraform plan), pre_deploy (before terraform apply), post_deploy
-      (after terraform apply, also when the apply failed) or post_verify (after post_deploy, a check that the
-      deployed resources still match what the apply left). A governed run to a production environment needs
-      pre_deploy before post_deploy. On pull_request events, only plan, checked locally. record-iac refuses pull
-      request review events.
+      The stage to record: plan (after terraform plan), pre_deploy (before terraform apply), post_deploy (after
+      terraform apply, also when the apply failed) or post_verify (after post_deploy, a check that the deployed
+      resources still match what the apply left). A governed run to a production environment needs pre_deploy before
+      post_deploy. On pull_request events, record-iac records only plan, and checks it locally. record-iac refuses
+      pull request review events.
     required: true
   environment:
     description: The environment the change deploys to.
@@ -26,22 +26,28 @@ inputs:
     required: false
     default: "."
   plan:
-    description: The saved plan as JSON, from `terraform show -json`. Required for plan and post_deploy.
+    description: >-
+      The saved plan as JSON, from `terraform show -json`. Required at plan and post_deploy. Leave it empty at the
+      other stages.
     required: false
     default: ""
   saved-plan:
-    description: The saved plan file, from `terraform plan -out`. Required for plan and post_deploy.
+    description: >-
+      The saved plan file, from `terraform plan -out`. Required at plan and post_deploy. Leave it empty at the other
+      stages.
     required: false
     default: ""
   apply-log:
-    description: The output of `terraform apply -json` of the saved plan. Required for post_deploy.
+    description: >-
+      The output of `terraform apply -json` of the saved plan. Required at post_deploy. Leave it empty at the other
+      stages.
     required: false
     default: ""
   state:
     description: >-
-      The state after the apply, from `terraform show -json`. Required for post_deploy, unless state-unreadable is
-      true. Required for post_verify too: give the same file that post_deploy took, so the CLI can finish the checks
-      the plan stage left until after the apply.
+      The state after the apply, from `terraform show -json`. Required at post_deploy, unless state-unreadable is
+      true. Required at post_verify too: give the same file that post_deploy took, so the CLI can finish the checks
+      the plan stage left until after the apply. Leave it empty at plan and pre_deploy.
     required: false
     default: ""
   state-unreadable:
@@ -51,20 +57,23 @@ inputs:
       step fails.
     required: false
     default: "false"
-  refresh-plans:
+  refresh-only-plans:
     description: >-
-      Two readings of the deployed resources, one path per line, in the order they were taken. Required for
-      post_verify. Take each reading with `terraform plan -refresh-only -out=FILE`, then
-      `terraform show -json FILE`. Take the second reading at least 60 seconds after the first. Never run
+      The two readings of the deployed resources, as JSON, one path per line, in the order they were taken. Required
+      at post_verify. Leave it empty at the other stages. A reading is a refresh-only plan: Terraform reads the
+      deployed resources and changes nothing. Make each with `terraform plan -refresh-only -out=FILE`, then
+      `terraform show -json FILE`. Take the second at least 60 seconds after the first. Drift is a difference between
+      a deployed resource and what the apply left. The second reading shows whether a difference lasts. Never run
       `terraform apply -refresh-only`: it writes what it reads into the state, so drift no longer shows.
     required: false
     default: ""
   records-directory:
     description: >-
-      Where the CLI keeps the records. Empty: a directory of its own for each environment, under the runner's
-      temporary directory. A relative path is relative to working-directory. pre_deploy reads the plan stage's record
-      from it. When pre_deploy runs in a different job from plan, download the plan job's records artifact and pass
-      its directory here.
+      Where the CLI keeps the records. When it is empty, the action uses a directory of its own for each environment
+      and stack (working-directory), under the runner's temporary directory. Every stage of that stack uses it, so
+      give every stage the same working-directory. A relative path is relative to working-directory. pre_deploy reads
+      the plan stage's record from it. When pre_deploy runs in a different job from plan, download the plan job's
+      records artifact and pass its directory here.
     required: false
     default: ""
   write-report:
@@ -77,15 +86,25 @@ inputs:
   store-records:
     description: >-
       true or false. When true, the CLI keeps the stage's record and every file it cites in the run's artifact store,
-      the bucket that Iltero Platform names for the run, with the job's own cloud credentials. Only in a project
-      linked to Iltero Platform. Not used on pull_request events. A failed store fails the step.
+      the bucket that Iltero Platform names for the run, with the job's own cloud credentials. Set it to true only in
+      a project linked to Iltero Platform. It has no effect on pull_request events. A failed store fails the
+      step.
     required: false
     default: "false"
   artifact-name:
     description: >-
-      Name of the artifact that holds the records. Empty: iltero-records-<environment>-<unit>. Each step replaces the
-      artifact with the records in records-directory, so two jobs that record the same environment and unit from
-      different records directories need different names.
+      Name of the artifact that holds the records. The action adds -attempt-<attempt> to the name, where <attempt> is
+      the pipeline run's attempt number, so a re-run keeps the records of earlier attempts. When the input is empty, the name
+      is iltero-records-<environment>-<unit>-attempt-<attempt>. The artifact-name output gives the full name. Each step replaces the artifact with the records in
+      records-directory, so two jobs that record the same environment and unit from different records directories need
+      different names.
+    required: false
+    default: ""
+
+  retention-days:
+    description: >-
+      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the input is empty, the
+      repository's own artifact retention setting applies.
     required: false
     default: ""
 
@@ -106,6 +125,7 @@ runs:
     - name: Check the event and the job
       shell: bash
       env:
+        RETENTION_DAYS: ${{ inputs.retention-days }}
         STAGE: ${{ inputs.stage }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/record.sh" check "${STAGE}"'
@@ -123,7 +143,7 @@ runs:
         APPLY_LOG: ${{ inputs.apply-log }}
         STATE: ${{ inputs.state }}
         STATE_UNREADABLE: ${{ inputs.state-unreadable }}
-        REFRESH_PLANS: ${{ inputs.refresh-plans }}
+        REFRESH_ONLY_PLANS: ${{ inputs.refresh-only-plans }}
         RECORDS_DIRECTORY: ${{ inputs.records-directory }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         WRITE_REPORT: ${{ inputs.write-report }}
@@ -136,6 +156,7 @@ runs:
       with:
         name: ${{ steps.record.outputs.artifact-name }}
         path: ${{ steps.record.outputs.records-directory }}
+        retention-days: ${{ inputs.retention-days }}
         if-no-files-found: warn
         overwrite: true
 
@@ -145,5 +166,6 @@ runs:
       with:
         name: ${{ steps.record.outputs.artifact-name }}-report
         path: ${{ steps.record.outputs.report-directory }}
+        retention-days: ${{ inputs.retention-days }}
         if-no-files-found: ignore
         overwrite: true

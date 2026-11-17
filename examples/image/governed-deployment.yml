@@ -39,17 +39,18 @@
 # the run when the deploy job succeeded. A run whose deploy failed or was
 # cancelled stays open, so a re-run of the failed job joins it.
 #
-# Each record-image step sets store-records, so the CLI also keeps the
-# stage's record and every file it cites in the run's artifact store: the
-# Amazon Simple Storage Service (S3) bucket that Iltero Platform names for
-# the run, in the deploy role's own account. The CLI uses the job's AWS
-# credentials, so the credentials step runs before pre_deploy. The deploy
-# role needs s3:PutObject, s3:PutObjectRetention and s3:GetObjectRetention on
-# arn:aws:s3:::BUCKET/<prefix>artifacts/<organization id>/*, where <prefix>
-# is the storage location's base prefix. It needs kms:GenerateDataKey on the
-# bucket's Key Management Service (KMS) key, restricted with the
-# kms:ViaService condition to S3 in the bucket's region. The role, the bucket
-# and its key are in one AWS account.
+# Each record-image step sets store-records, so the CLI also keeps the stage's
+# record and every file it cites in the run's artifact store: the Amazon
+# Simple Storage Service (S3) bucket that Iltero Platform names for the run,
+# in the deploy role's own account. The CLI uses the job's AWS credentials, so
+# the credentials step runs before pre_deploy. The deploy role needs
+# s3:PutObject, s3:PutObjectRetention and s3:GetObjectRetention on
+# arn:aws:s3:::BUCKET/<prefix>artifacts/<organization id>/*, where <prefix> is
+# the folder path inside the bucket that Iltero Platform gives for the run's
+# artifact store, or empty. It needs kms:GenerateDataKey on the bucket's Key
+# Management Service (KMS) key, restricted with the kms:ViaService condition
+# to S3 in the bucket's region. The role, the bucket and its key are in one
+# AWS account.
 #
 # The readings of the workload stay in the runner's temporary directory.
 # They can hold secret values, such as a container's environment: never
@@ -59,10 +60,13 @@
 # cluster, replace them with the steps that give kubectl its credentials.
 #
 # Values the owner replaces:
-#   the actions commit (40 hex characters), the application key, the GitHub
-#   deployment environment, the deploy role's Amazon Resource Name (ARN),
-#   region and cluster name, the workload's namespace, name, container and
-#   label selector, and ILTERO_API_URL.
+#   the actions commit (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character ID of the iltero-actions commit you use,
+#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   the application key, the GitHub deployment environment, the deploy role's
+#   Amazon Resource Name (ARN), region and cluster name, the workload's
+#   namespace, name, container and label selector, and ILTERO_API_URL, which
+#   must be the same address as platform.api_url in .iltero/config.yml.
 
 name: Deploy image
 
@@ -88,6 +92,8 @@ jobs:
   deploy:
     name: Deploy the image to production
     runs-on: ubuntu-24.04
+    # Set this above the time the slowest apply takes.
+    timeout-minutes: 180
     environment: production
     concurrency:
       group: deploy-image-production
@@ -99,6 +105,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The job deploys the image by its digest, which always names the same
+      # image. A tag can later point to another image.
+      - name: Check that the image is named by its digest
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          [[ "${IMAGE}" =~ ^([^/@[:space:]]+/)*[^/:@[:space:]]+@sha256:[0-9a-f]{64}$ ]] \
+            || { echo "::error::Name the image by its digest, as repository@sha256:<digest>, where the digest is 64 characters from 0-9 and a-f."; exit 1; }
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
 
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -175,6 +189,7 @@ jobs:
     name: Close the image deploy run
     needs: deploy
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     concurrency:
       group: deploy-image-production-close
       cancel-in-progress: false

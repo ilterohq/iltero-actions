@@ -1,21 +1,23 @@
-# Reference workflow for a team that runs Terraform itself, with no Iltero
-# account: .iltero/config.yml has no platform section. A repository owner
-# copies it into .github/workflows/ and replaces the example values.
+# Reference workflow for a team that runs Terraform itself, in a project not
+# linked to Iltero Platform: its .iltero/config.yml has no platform section. A
+# repository owner copies it into .github/workflows/ and replaces the example
+# values.
 #
 # A push to main deploys one unit to production. The job runs its own
 # terraform plan and apply. Iltero steps between them record each stage:
 #   plan         after terraform plan, from the saved plan: stops the job
 #                when a check fails, before anything is applied;
-#   pre_deploy   before terraform apply: runs no check here, and only warns
-#                when the unit's record still expects the stage;
+#   pre_deploy   before terraform apply: runs no check here, and stops the
+#                job when the unit's record still requires the stage;
 #   post_deploy  after terraform apply, also when the apply failed;
 #   post_verify  after post_deploy: checks that the deployed resources
-#                still match what the apply left. It reads two refresh-only
-#                plans, taken at least 60 seconds apart. Never apply a
-#                refresh-only plan: it writes what it reads into the
-#                state, so drift no longer shows.
-# A last step packs the unit's record and every file it cites into a record
-# bundle, and checks the bundle.
+#                still match what the apply left, from two readings of
+#                them taken at least 60 seconds apart. A reading is a
+#                refresh-only plan. Never apply one: it writes what it
+#                reads into the state, so drift no longer shows.
+# A last step builds the unit's record bundle, a folder that holds the record
+# and every file it cites, and checks that the record and its files are
+# unchanged.
 #
 # The job runs in the production deployment environment of GitHub, whose
 # protection rules, such as required reviewers, apply to it. Limit the
@@ -28,10 +30,10 @@
 # record-iac step uploads the unit's records as a workflow artifact, and the
 # verify step uploads the record bundle as another.
 #
-# In a project with no platform section, list pre_deploy under
-# stages.out_of_scope in .iltero/config.yml. The pre-deploy stage checks
-# facts that only Iltero Platform holds, so the pre_deploy step runs no
-# check and only warns.
+# List pre_deploy under stages.out_of_scope in .iltero/config.yml. The
+# pre-deploy stage checks facts that only Iltero Platform holds, so the
+# pre_deploy step runs no check, and fails when the unit's record still
+# requires the stage.
 #
 # Keep post_verify in scope, since this workflow takes the two readings it
 # needs: run iltero init with --expect-post-verify, or remove post_verify
@@ -42,10 +44,21 @@
 # secret values: never upload or keep them. The record keeps only their
 # digests.
 #
+# List the folders of the project's own assertions under assertions.paths in
+# .iltero/config.yml, and leave assertions.include_starter_assertions false.
+# The starter assertions are the ones shipped with Iltero.
+#
+# Commit each unit's Terraform lock file, .terraform.lock.hcl, which records
+# the provider versions the unit uses. terraform init uses the file as
+# committed and never changes it.
+#
 # Values the owner replaces:
-#   the actions commit (40 hex characters), the branch, the environment, the
-#   GitHub deployment environment, the deploy role's Amazon Resource Name
-#   (ARN) and region, and the unit's name and directory.
+#   the actions commit (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character ID of the iltero-actions commit you use,
+#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   the branch, the environment, the GitHub deployment environment, the deploy
+#   role's Amazon Resource Name (ARN) and region, and the unit's name and
+#   directory.
 
 name: Deploy
 
@@ -59,6 +72,8 @@ jobs:
   deploy:
     name: Deploy production
     runs-on: ubuntu-24.04
+    # Set this above the time the slowest apply takes.
+    timeout-minutes: 180
     environment: production
     concurrency:
       group: deploy-production
@@ -82,7 +97,7 @@ jobs:
       - name: Plan
         working-directory: units/network
         run: |
-          terraform init -input=false
+          terraform init -input=false -lockfile=readonly
           terraform plan -input=false -out="${RUNNER_TEMP}/network.tfplan"
           terraform show -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-plan.json"
       - id: record-plan
@@ -136,7 +151,7 @@ jobs:
           stage: post_verify
           environment: production
           unit: network
-          refresh-plans: |
+          refresh-only-plans: |
             ${{ runner.temp }}/network-first.json
             ${{ runner.temp }}/network-second.json
           # The same state file that post_deploy took.

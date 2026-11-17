@@ -14,23 +14,36 @@ readonly ILTERO_TOOLS_DIRECTORY_NAME="iltero-tools"
 
 # Characters for patterns, listed one by one: a range such as a-z can also
 # match capital letters, depending on the locale.
-readonly LOWER="abcdefghijklmnopqrstuvwxyz"
-readonly HEX="0123456789abcdef"
-# A full git commit: 40 lowercase hex characters. Used by the scripts that
-# source this file.
+readonly LOWERCASE_LETTERS="abcdefghijklmnopqrstuvwxyz"
+readonly UPPERCASE_LETTERS="ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+readonly DIGITS="0123456789"
+readonly LOWERCASE_HEX_DIGITS="0123456789abcdef"
+# A name that can name a directory, a file and an artifact: letters, digits,
+# ".", "_" and "-".
+readonly PORTABLE_NAME_PATTERN="^[${LOWERCASE_LETTERS}${UPPERCASE_LETTERS}${DIGITS}._-]+$"
+# A full git commit ID: 40 lowercase hexadecimal digits. Used by the scripts
+# that source this file.
 # shellcheck disable=SC2034
-readonly COMMIT_PATTERN="^[${HEX}]{40}$"
-# A SHA-256 digest: 64 lowercase hex characters.
+readonly COMMIT_PATTERN="^[${LOWERCASE_HEX_DIGITS}]{40}$"
+# A SHA-256 digest: 64 lowercase hexadecimal digits.
 # shellcheck disable=SC2034
-readonly SHA256_PATTERN="^[${HEX}]{64}$"
-# The unit-name rule the CLI applies.
+readonly SHA256_PATTERN="^[${LOWERCASE_HEX_DIGITS}]{64}$"
+# The unit-name rule the CLI applies: 1 to 64 lowercase letters, digits, "_"
+# or "-", not starting with "-".
 # shellcheck disable=SC2034
-readonly UNIT_NAME_PATTERN="^[${LOWER}0-9_][${LOWER}0-9_-]{0,63}$"
+readonly UNIT_NAME_PATTERN="^[${LOWERCASE_LETTERS}0-9_][${LOWERCASE_LETTERS}0-9_-]{0,63}$"
 
 # Stops unless NAME follows the unit-name rule.
 check_unit_name() {
   local name="$1"
-  [[ "${name}" =~ ${UNIT_NAME_PATTERN} ]] || die "Unit name '${name}' does not follow the unit-name rule."
+  [[ "${name}" =~ ${UNIT_NAME_PATTERN} ]] || die "The unit name '${name}' is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."
+}
+
+# Prints LINE without the spaces at its start and end.
+trim() {
+  local line="$1"
+  line="${line#"${line%%[![:space:]]*}"}"
+  printf '%s\n' "${line%"${line##*[![:space:]]}"}"
 }
 
 # Prints an error annotation and exits with STATUS. The message is escaped,
@@ -44,6 +57,17 @@ exit_with_error() {
   message="${message//$'\n'/%0A}"
   printf '::error::%s\n' "${message}" >&2
   exit "${status}"
+}
+
+# Prints the summary word for a check that ended with STATUS: "passed" or
+# "failed". The summary never shows the code itself; the CLI's own lines in
+# the details say why a check failed.
+check_result() {
+  if [[ "${1}" == 0 ]]; then
+    echo passed
+  else
+    echo failed
+  fi
 }
 
 # Prints an error annotation and exits with status 1.
@@ -66,21 +90,42 @@ require_one_line() {
   [[ "${value}" != *[[:cntrl:]]* ]] || die "The ${input} input must be one line, with no tab or other control character."
 }
 
-# Stops unless ENVIRONMENT can name a directory or a file, as the actions
-# name their records directories and a unit's settings files after it: it is
-# one line, holds no "/", and is not "." or "..".
+# Stops unless ENVIRONMENT can name a directory, a file and an artifact, as
+# the actions name records directories, artifacts and a unit's settings files
+# after it: it follows PORTABLE_NAME_PATTERN, and is not "." or "..".
 require_environment_name() {
   local environment="$1"
   [[ -n "${environment}" ]] || die "The environment input is required."
   require_one_line environment "${environment}"
-  [[ "${environment}" != */* && "${environment}" != . && "${environment}" != .. ]] \
-    || die "The environment '${environment}' cannot name a directory or a file. Use a name without '/' that is not '.' or '..'."
+  [[ "${environment}" =~ ${PORTABLE_NAME_PATTERN} && "${environment}" != . && "${environment}" != .. ]] \
+    || die "The environment '${environment}' cannot name a directory or a file. Use only letters, digits, '.', '_' and '-', and not '.' or '..' alone."
+}
+
+# How many hexadecimal digits of the digest of the stack's folder path go into
+# the name of its work folder.
+readonly STACK_FOLDER_DIGEST_LENGTH=12
+
+# Prints the name of the work folder of the stack in the current folder. Every
+# step that runs in the same folder gets the same name. Two stacks in one job
+# get different names, so they keep their files apart.
+stack_work_folder_name() {
+  local digest
+  digest="$(printf '%s' "${PWD}" | sha256sum)" || return 1
+  echo "stack-${digest:0:${STACK_FOLDER_DIGEST_LENGTH}}"
 }
 
 # Prints the absolute path of the tools folder.
 tools_dir() {
+  local temp
+  temp="$(runner_temp)" || return 1
+  echo "${temp}/${ILTERO_TOOLS_DIRECTORY_NAME}"
+}
+
+# Prints the runner's folder for temporary files, or stops when the runner
+# did not set it.
+runner_temp() {
   [[ -n "${RUNNER_TEMP:-}" ]] || die "RUNNER_TEMP is not set. Run this action inside a GitHub Actions job."
-  echo "${RUNNER_TEMP}/${ILTERO_TOOLS_DIRECTORY_NAME}"
+  echo "${RUNNER_TEMP}"
 }
 
 # Refuses the events under which a workflow runs untrusted code with the
@@ -88,7 +133,7 @@ tools_dir() {
 refuse_untrusted_event() {
   case "${GITHUB_EVENT_NAME:-}" in
     pull_request_target | workflow_run)
-      die "Iltero actions do not run on '${GITHUB_EVENT_NAME}' events."
+      die "Iltero actions do not run on '${GITHUB_EVENT_NAME}' events. Run them on pull_request events for a pull request, or after the merge."
       ;;
     "")
       die "GITHUB_EVENT_NAME is not set. Run this action inside a GitHub Actions job."
@@ -126,15 +171,25 @@ check_stage_for_event() {
     [[ "${GITHUB_EVENT_NAME}" == pull_request ]] \
       || die "${action} does not run on ${GITHUB_EVENT_NAME} events. Run it on pull_request events, where it checks ${subject} locally."
     [[ "${stage}" == plan ]] \
-      || die "On pull request events, ${action} records only the plan stage, checked locally."
+      || die "On pull request events, ${action} records only the plan stage, checked locally. Record the other stages after the merge, for example on push events."
   fi
 }
 
-# Refuses pull request events. A pull request may only run a local preview,
-# never a governed run.
-refuse_pull_request() {
+# The events on which an action that deploys or closes a run may run. Each
+# starts from code already in the repository: a push, a manual run, or a
+# schedule.
+readonly DEPLOY_EVENTS=(push workflow_dispatch schedule)
+
+# Stops unless the job runs on one of DEPLOY_EVENTS. A pull request may only
+# run a local preview, never a governed run.
+require_deploy_event() {
   ! is_pull_request_event \
     || die "This action does not run on pull request events. Use the preview action instead."
+  local event
+  for event in "${DEPLOY_EVENTS[@]}"; do
+    [[ "${GITHUB_EVENT_NAME:-}" != "${event}" ]] || return 0
+  done
+  die "This action runs only on push, workflow_dispatch and schedule events, not on '${GITHUB_EVENT_NAME:-}' events. Start the workflow with one of them."
 }
 
 # Stops unless the job may request its GitHub identity token, which the CLI
@@ -214,7 +269,7 @@ append_details_block() {
 
 # Turns workflow commands off until resume_commands, so a line of tool output
 # cannot act as a workflow command. Terraform's output and the output of the
-# CLI's checks print with commands off. The CLI commands `run close`,
+# CLI's checks and of `run close` print with commands off. The CLI commands
 # `environment detect` and `config show` print with them on: the CLI escapes
 # the text they print, and masks secret values.
 pause_commands() {
@@ -237,24 +292,33 @@ print_untrusted() {
 # preview comment's marker.
 check_artifact_name() {
   local name="$1"
-  [[ "${name}" =~ ^[A-Za-z0-9._-]+$ ]] \
+  [[ "${name}" =~ ${PORTABLE_NAME_PATTERN} ]] \
     || die "Invalid artifact name '${name}'. Use letters, digits, '.', '_' and '-'."
 }
 
+# Stops unless RETENTION_DAYS, the retention-days input, is empty or a whole
+# number of days from 1.
+require_retention_days() {
+  [[ -z "${RETENTION_DAYS:-}" || "${RETENTION_DAYS}" =~ ^[1-9][${DIGITS}]*$ ]] \
+    || die "The retention-days input must be empty or a whole number of days of 1 or more. It is '${RETENTION_DAYS}'."
+}
+
 # Prints GIVEN when it is set, and otherwise DEFAULT, the action's default
-# artifact name. Stops unless the name is a valid artifact name.
+# artifact name, followed by "-attempt-" and the pipeline run's attempt
+# number, so a re-run keeps the artifacts of earlier attempts. Stops unless
+# the name is a valid artifact name.
 artifact_name() {
   local given="$1"
   local default="$2"
-  if [[ -n "${given}" ]]; then
-    check_artifact_name "${given}"
-    # printf, because echo reads a name such as -n as one of its options.
-    printf '%s\n' "${given}"
-    return 0
-  fi
-  [[ "${default}" =~ ^[A-Za-z0-9._-]+$ ]] \
-    || die "The default artifact name '${default}' is not a valid artifact name. Set the artifact-name input."
-  printf '%s\n' "${default}"
+  local name="${given:-${default}}"
+  [[ -z "${given}" ]] || check_artifact_name "${given}"
+  [[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][${DIGITS}]*$ ]] \
+    || die "GITHUB_RUN_ATTEMPT is missing or not a whole number. Run this action inside a GitHub Actions job."
+  name+="-attempt-${GITHUB_RUN_ATTEMPT}"
+  [[ "${name}" =~ ${PORTABLE_NAME_PATTERN} ]] \
+    || die "The artifact name '${name}' is not a valid artifact name. Set the artifact-name input."
+  # printf, because echo reads a name such as -n as one of its options.
+  printf '%s\n' "${name}"
 }
 
 # Escapes text for a line of Markdown, such as a heading: HTML as html_escape
@@ -281,7 +345,7 @@ markdown_escape() {
 write_output() {
   local name="$1"
   local value="$2"
-  [[ "${name}" =~ ^[${LOWER}][${LOWER}0-9-]*$ ]] || die "Invalid output name '${name}'."
+  [[ "${name}" =~ ^[${LOWERCASE_LETTERS}][${LOWERCASE_LETTERS}0-9-]*$ ]] || die "Invalid output name '${name}'."
   [[ "${value}" != *$'\n'* && "${value}" != *$'\r'* ]] || die "The value of output '${name}' spans several lines."
   [[ -n "${GITHUB_OUTPUT:-}" ]] || die "GITHUB_OUTPUT is not set. Run this action inside a GitHub Actions job."
   echo "${name}=${value}" >> "${GITHUB_OUTPUT}"

@@ -62,6 +62,8 @@ STUB
   STACK="${BATS_TEST_TMPDIR}/stack"
   mkdir -p "${STACK}/units/network" "${STACK}/units/compute"
   cd "${STACK}" || return
+  # The name the actions give this stack's work folder.
+  STACK_FOLDER="$(stack_folder_name)"
 }
 
 @test "check refuses pull_request_target and workflow_run events, and needs setup" {
@@ -122,10 +124,10 @@ STUB
 
 @test "the bundles artifact is named after the environment unless a name is given" {
   run "${VERIFY}" run "${OUT}"
-  [ "$(output_value artifact-name)" = "iltero-record-bundles-production" ]
+  [ "$(output_value artifact-name)" = "iltero-record-bundles-production-attempt-1" ]
   : > "${GITHUB_OUTPUT}"
   ARTIFACT_NAME=network-bundles run "${VERIFY}" run "${OUT}"
-  [ "$(output_value artifact-name)" = "network-bundles" ]
+  [ "$(output_value artifact-name)" = "network-bundles-attempt-1" ]
 }
 
 @test "the summary names the environment" {
@@ -133,10 +135,10 @@ STUB
   grep -q "^## Iltero record bundles: production$" "${GITHUB_STEP_SUMMARY}"
 }
 
-@test "an environment that cannot name an artifact needs an artifact name" {
+@test "an environment with a space is refused before anything runs" {
   ENVIRONMENT="prod env" run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The default artifact name 'iltero-record-bundles-prod env' is not a valid artifact name."* ]]
+  [[ "${output}" == *"cannot name a directory or a file. Use only letters, digits"* ]]
 }
 
 @test "an environment that cannot name a directory or a file is refused before anything is written" {
@@ -178,8 +180,8 @@ STUB
 }
 
 @test "each unit starts with an empty work directory" {
-  mkdir -p "${RUNNER_TEMP}/iltero-verify/production/units/network"
-  echo "old output" > "${RUNNER_TEMP}/iltero-verify/production/units/network/verify.txt"
+  mkdir -p "${RUNNER_TEMP}/iltero-verify/production/${STACK_FOLDER}/units/network"
+  echo "old output" > "${RUNNER_TEMP}/iltero-verify/production/${STACK_FOLDER}/units/network/verify.txt"
   touch "${MARKS}/no-bundle-network"
   run "${VERIFY}" run "${OUT}"
   ! grep -q "old output" "${GITHUB_STEP_SUMMARY}" || false
@@ -189,22 +191,29 @@ STUB
   echo 1 > "${MARKS}/exit-build-network"
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
-  grep -q "| network | exit 1 | - |" "${GITHUB_STEP_SUMMARY}"
-  grep -q "| compute | exit 0 | exit 0 |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| network | build failed | not run |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| compute | built | verified |" "${GITHUB_STEP_SUMMARY}"
 }
 
-@test "a failed verification fails the step with the CLI's code in the summary" {
+@test "a verification that could not run says so, and fails with the CLI's code" {
+  echo 2 > "${MARKS}/exit-verify-compute"
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 2 ]
+  grep -q "| compute | built | could not verify |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a record that does not verify fails the step with the CLI's code" {
   echo 9 > "${MARKS}/exit-verify-compute"
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 9 ]
-  grep -q "| compute | exit 0 | exit 9 |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| compute | built | does not verify |" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "more than one bundle for a unit is refused" {
   mkdir -p "${OUT}/units/network/car-0000"
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
-  grep -q "| network | exit 0 | no bundle |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| network | built | 2 bundles found, expected 1 |" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a build that writes no bundle is refused and counted as none" {
@@ -212,7 +221,7 @@ STUB
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"Expected one record bundle for unit 'network', found 0."* ]]
-  grep -q "| network | exit 0 | no bundle |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| network | built | bundle not found |" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a line of the CLI's output cannot act as a workflow command" {
@@ -230,7 +239,7 @@ STUB
 @test "each unit's bundle gets a report, as an HTML page for the artifact and in the summary" {
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 0 ]
-  local reports="${RUNNER_TEMP}/iltero-verify/production/reports"
+  local reports="${RUNNER_TEMP}/iltero-verify/production/${STACK_FOLDER}/reports"
   grep -qx "report-directory=${reports}" "${GITHUB_OUTPUT}"
   grep -q "^iltero record report ${OUT}/units/network/car-0001/ --format=html --out=${reports}/network " "${STUB_LOG}"
   grep -q "^iltero record report ${OUT}/units/compute/car-0001/ --format=markdown --out=${reports}/compute " "${STUB_LOG}"
@@ -265,7 +274,7 @@ STUB
   echo 9 > "${MARKS}/exit-report-network"
   run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 0 ]
-  [[ "${output}" == *"::warning::The CLI's report of unit 'network' exited with 9. See its output in the log."* ]]
+  [[ "${output}" == *"::warning::The CLI reported a problem while it wrote the report of unit 'network'. See its output in the log."* ]]
 }
 
 @test "a report the CLI does not write fails the step, and the other units are still checked" {
@@ -316,16 +325,16 @@ STUB
   [ "${status}" -eq 0 ]
   run bash -c "grep -oE '^iltero record (build|verify) [^ ]+ [^ ]+' '${STUB_LOG}' | tr '\n' ','"
   [ "${output}" = "iltero record build --out=${OUT} --unit=compute,iltero record verify ${OUT}/units/compute/car-0001/ ILTERO_OPA_PATH=${TOOLS}/bin/opa," ]
-  grep -q "^| compute | exit 0 | exit 0 |$" "${GITHUB_STEP_SUMMARY}"
+  grep -q "^| compute | built | verified |$" "${GITHUB_STEP_SUMMARY}"
   ! grep -q "^| network |" "${GITHUB_STEP_SUMMARY}" || false
 }
 
 @test "with a unit, the bundles artifact is named after the environment and the unit" {
   UNIT=network run "${VERIFY}" run "${OUT}"
-  [ "$(output_value artifact-name)" = "iltero-record-bundles-production-network" ]
+  [ "$(output_value artifact-name)" = "iltero-record-bundles-production-network-attempt-1" ]
   : > "${GITHUB_OUTPUT}"
   UNIT=network ARTIFACT_NAME=network-bundles run "${VERIFY}" run "${OUT}"
-  [ "$(output_value artifact-name)" = "network-bundles" ]
+  [ "$(output_value artifact-name)" = "network-bundles-attempt-1" ]
 }
 
 @test "a unit the stack does not list is refused before anything is built" {
@@ -350,7 +359,7 @@ STUB
   : > "${GITHUB_OUTPUT}"
   UNIT=compute run "${VERIFY}" run "${OUT}"
   [ "$(output_value report-directory)" != "${network_reports}" ]
-  [ "$(output_value report-directory)" != "${RUNNER_TEMP}/iltero-verify/production/reports" ]
+  [ "$(output_value report-directory)" != "${RUNNER_TEMP}/iltero-verify/production/${STACK_FOLDER}/reports" ]
   [ ! -e "$(output_value report-directory)/network" ]
   [ -n "$(ls "${network_reports}")" ]
 }
@@ -358,7 +367,35 @@ STUB
 @test "a unit name that breaks the unit-name rule is refused before anything is written" {
   UNIT="../network" run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Unit name '../network' does not follow the unit-name rule."* ]]
+  [[ "${output}" == *"The unit name '../network' is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."* ]]
   ! grep -q "^bundles-path=" "${GITHUB_OUTPUT}" || false
   ! grep -q "units list" "${STUB_LOG}" || false
+}
+
+@test "a verify starts from an empty work folder, so no earlier report is taken for one this step wrote" {
+  local root="${RUNNER_TEMP}/iltero-verify/production/${STACK_FOLDER}"
+  mkdir -p "${root}/reports/retired"
+  echo "old report" > "${root}/reports/retired/record-report.md"
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 0 ]
+  [ ! -e "${root}/reports/retired" ]
+}
+
+@test "each stack has its own verify work folder, so two stacks in one job keep their reports apart" {
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 0 ]
+  local first
+  first="$(output_value report-directory)"
+  [ "${first}" = "${RUNNER_TEMP}/iltero-verify/production/${STACK_FOLDER}/reports" ]
+  [ -n "$(ls "${first}")" ]
+  cp -R "${STACK}" "${BATS_TEST_TMPDIR}/second-stack"
+  cd "${BATS_TEST_TMPDIR}/second-stack"
+  local second
+  second="$(stack_folder_name)"
+  [ "${second}" != "${STACK_FOLDER}" ]
+  : > "${GITHUB_OUTPUT}"
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 0 ]
+  [ "$(output_value report-directory)" = "${RUNNER_TEMP}/iltero-verify/production/${second}/reports" ]
+  [ -n "$(ls "${first}")" ]
 }

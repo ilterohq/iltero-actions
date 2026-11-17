@@ -45,7 +45,7 @@ cmd_post() {
     echo "::notice::This pull request comes from Dependabot, so its token cannot comment. See the job summary instead."
     return 0
   fi
-  [[ -f "${file}" ]] || die "The comment file is missing."
+  [[ -f "${file}" ]] || die "The comment artifact holds no comment file. Set artifact-name to the comment-artifact output of the preview action."
   [[ -n "${GITHUB_WORKFLOW_REF:-}" ]] || die "GITHUB_WORKFLOW_REF is not set. Run this action inside a GitHub Actions job."
   local workflow
   workflow="$(printf '%s' "${GITHUB_WORKFLOW_REF%%@*}" | sha256sum | cut -c"1-${WORKFLOW_DIGEST_LENGTH}")"

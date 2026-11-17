@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Packs and checks each unit's Change Assurance Record.
+# Builds each unit's record bundle, then checks that the record and the files
+# it cites are unchanged.
 #
 # Usage:
 #   iac/verify.sh check                  Refuse untrusted events; check that setup ran.
@@ -19,9 +20,24 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/cli-stages.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/report.sh"
 
+# Prints the summary word for `iltero record verify`, from its exit code
+# STATUS: "verified", "does not verify" when the bundle changed, and "could
+# not verify" for any other failure.
+verify_result() {
+  local status="$1"
+  if [[ "${status}" == 0 ]]; then
+    echo verified
+  elif [[ "${status}" == "${RECORD_DOES_NOT_VERIFY_STATUS}" ]]; then
+    echo "does not verify"
+  else
+    echo "could not verify"
+  fi
+}
+
 cmd_check() {
   refuse_untrusted_event
   [[ -z "${ARTIFACT_NAME:-}" ]] || check_artifact_name "${ARTIFACT_NAME}"
+  require_retention_days
   cli_path > /dev/null
 }
 
@@ -34,16 +50,22 @@ cmd_run() {
   [[ -d "${out}" ]] || die "The records directory '${given}' does not exist. Pass the records-directory output of the deploy or record-iac action."
   require_environment_name "${ENVIRONMENT:-}"
   local default_artifact="iltero-record-bundles-${ENVIRONMENT}"
-  # Each environment has its own work directory, and with UNIT each unit
-  # has its own, so their reports stay apart.
-  local work_root="${RUNNER_TEMP}/iltero-verify/${ENVIRONMENT}"
+  # Each environment and stack has its own work folder, and with UNIT each
+  # unit has its own, so their reports stay apart. The action empties the
+  # folder first, so a report left by an earlier step is never taken for one
+  # this step wrote.
+  local temp stack work_root
+  temp="$(runner_temp)" || exit 1
+  stack="$(stack_work_folder_name)" || die "The action could not name the stack's work folder."
+  work_root="${temp}/iltero-verify/${ENVIRONMENT}/${stack}"
   local bundled_units="*"
   if [[ -n "${UNIT:-}" ]]; then
     check_unit_name "${UNIT}"
     default_artifact+="-${UNIT}"
-    work_root="${RUNNER_TEMP}/iltero-verify-unit/${ENVIRONMENT}/${UNIT}"
+    work_root="${temp}/iltero-verify-unit/${ENVIRONMENT}/${stack}/${UNIT}"
     bundled_units="${UNIT}"
   fi
+  rm -rf "${work_root}"
   local artifact
   artifact="$(artifact_name "${ARTIFACT_NAME:-}" "${default_artifact}")"
   local report
@@ -78,7 +100,7 @@ cmd_run() {
   } > "${summary}"
   : > "${details}"
 
-  local name work build verify status first_status=0 bundles
+  local name work build built verify verify_ran status first_status=0 bundles
   while IFS=$'\t' read -r name _; do
     work="${work_root}/units/${name}"
     # Each unit starts with an empty work directory, so no earlier output shows.
@@ -86,7 +108,8 @@ cmd_run() {
     mkdir -p "${work}"
     echo "::group::${name}"
     build=0
-    verify="-"
+    verify="not run"
+    verify_ran=false
     run_cli_logged "${work}/build.txt" record build --out="${out}" --unit="${name}" || build=$?
     if [[ "${build}" -eq 0 ]]; then
       shopt -s nullglob
@@ -94,25 +117,29 @@ cmd_run() {
       shopt -u nullglob
       if [[ "${#bundles[@]}" -ne 1 ]]; then
         echo "::error::Expected one record bundle for unit '${name}', found ${#bundles[@]}."
-        verify="no bundle"
+        verify="bundle not found"
+        [[ "${#bundles[@]}" -eq 0 ]] || verify="${#bundles[@]} bundles found, expected 1"
         [[ "${first_status}" -ne 0 ]] || first_status=1
       else
         status=0
         run_cli_logged "${work}/verify.txt" record verify "${bundles[0]}" || status=$?
         [[ "${status}" -eq 0 || "${first_status}" -ne 0 ]] || first_status="${status}"
-        verify="exit ${status}"
+        verify="$(verify_result "${status}")"
+        verify_ran=true
       fi
     else
       [[ "${first_status}" -ne 0 ]] || first_status="${build}"
     fi
     echo "::endgroup::"
-    echo "| ${name} | exit ${build} | ${verify} |" >> "${summary}"
+    built="built"
+    [[ "${build}" -eq 0 ]] || built="build failed"
+    echo "| ${name} | ${built} | ${verify} |" >> "${summary}"
     local step
     for step in build verify; do
       [[ -f "${work}/${step}.txt" ]] || continue
       append_details_block "${details}" "${name}: ${step}" "${work}/${step}.txt"
     done
-    if [[ "${report}" == true && "${verify}" == exit* ]]; then
+    if [[ "${report}" == true && "${verify_ran}" == true ]]; then
       write_report "${name}" "${bundles[0]}" "${reports}" "${details}" "${work}/report.txt" \
         || [[ "${first_status}" -ne 0 ]] || first_status=1
     fi

@@ -11,7 +11,7 @@ setup() {
   export ACTIONS_ID_TOKEN_REQUEST_TOKEN="request-token"
   export LINKED="true"
   export STORE_RECORDS="false"
-  export ADVISORY="false"
+  export FAIL_ON_FAILED_ASSERTIONS="true"
   IMAGE="registry.example.com/acme/api:1.4.2@sha256:$(printf 'a%.0s' {1..64})"
   export IMAGE
   export APPLICATION="api"
@@ -62,8 +62,10 @@ STUB
   echo '{}' > pods.json
   echo '{}' > owners.json
   echo '{}' > after.json
-  RECORDS="${RUNNER_TEMP}/iltero-image-records"
-  DEPLOYMENTS="${RUNNER_TEMP}/iltero-image-deployment-records/production"
+  # The name the actions give this project's work folder.
+  STACK_FOLDER="$(stack_folder_name)"
+  RECORDS="${RUNNER_TEMP}/iltero-image-records/${STACK_FOLDER}"
+  DEPLOYMENTS="${RUNNER_TEMP}/iltero-image-deployment-records/production/${STACK_FOLDER}"
   DEPLOYED="registry.example.com/acme/api@sha256:$(printf 'a%.0s' {1..64})"
   CLUSTER="0b6a3c1e-5f2d-4e8a-9c7b-1d2e3f4a5b6c"
 }
@@ -144,7 +146,7 @@ check_call() {
   for stage in pre_deploy post_deploy post_verify; do
     GITHUB_EVENT_NAME=pull_request run "${RECORD}" check "${stage}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"On pull request events, record-image records only the plan stage, checked locally."* ]]
+    [[ "${output}" == *"On pull request events, record-image records only the plan stage, checked locally. Record the other stages after the merge, for example on push events."* ]]
   done
 }
 
@@ -159,7 +161,7 @@ check_call() {
   for event in pull_request_target workflow_run; do
     GITHUB_EVENT_NAME="${event}" run "${RECORD}" run plan
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Iltero actions do not run on '${event}' events."* ]]
+    [[ "${output}" == *"Iltero actions do not run on '${event}' events. Run them on pull_request events for a pull request, or after the merge."* ]]
   done
   ! grep -q "^iltero" "${STUB_LOG}" || false
 }
@@ -257,6 +259,13 @@ check_call() {
   check_call | grep -q -- " --application=api$"
 }
 
+@test "on a pull request, fail-on-failed-assertions true still checks as advice" {
+  unset ACTIONS_ID_TOKEN_REQUEST_URL
+  FAIL_ON_FAILED_ASSERTIONS=true GITHUB_EVENT_NAME=pull_request run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  check_call | grep -q -- " --local --advisory$"
+}
+
 @test "on a pull request, the image is checked locally and as advice, with no application and no upload" {
   unset ACTIONS_ID_TOKEN_REQUEST_URL
   GITHUB_EVENT_NAME=pull_request run "${RECORD}" run plan
@@ -313,7 +322,7 @@ check_call() {
 @test "a unit name that breaks the unit-name rule is refused" {
   UNIT="../api" run "${RECORD}" run plan
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Unit name '../api' does not follow the unit-name rule."* ]]
+  [[ "${output}" == *"The unit name '../api' is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."* ]]
 }
 
 @test "the check runs the evaluator setup installed" {
@@ -344,7 +353,7 @@ STUB
 
 @test "by default the records go to their own folder, apart from record-iac's" {
   run "${RECORD}" run plan
-  grep -qx "records-directory=${RUNNER_TEMP}/iltero-image-records" "${GITHUB_OUTPUT}"
+  grep -qx "records-directory=${RECORDS}" "${GITHUB_OUTPUT}"
 }
 
 @test "a relative records directory is given to the upload as an absolute path" {
@@ -356,10 +365,10 @@ STUB
 
 @test "the records artifact is named after the unit unless a name is given" {
   UNIT=api run "${RECORD}" run plan
-  grep -qx "artifact-name=iltero-image-records-api" "${GITHUB_OUTPUT}"
+  grep -qx "artifact-name=iltero-image-records-api-attempt-1" "${GITHUB_OUTPUT}"
   : > "${GITHUB_OUTPUT}"
   ARTIFACT_NAME="api-image" run "${RECORD}" run plan
-  grep -qx "artifact-name=api-image" "${GITHUB_OUTPUT}"
+  grep -qx "artifact-name=api-image-attempt-1" "${GITHUB_OUTPUT}"
 }
 
 # --- deployment stages -------------------------------------------------------
@@ -419,8 +428,8 @@ STUB
   [ "$(check_call | grep -c -- " --application=api --upload --store$")" -eq 3 ]
 }
 
-@test "in a linked project, advisory is passed on at a deployment stage, for the CLI to refuse" {
-  ADVISORY=true IMAGE="${DEPLOYED}" ENVIRONMENT=production run "${RECORD}" run pre_deploy
+@test "in a linked project, with fail-on-failed-assertions false, --advisory is passed on at a deployment stage, for the CLI to refuse" {
+  FAIL_ON_FAILED_ASSERTIONS=false IMAGE="${DEPLOYED}" ENVIRONMENT=production run "${RECORD}" run pre_deploy
   check_call | grep -q -- " --application=api --advisory --upload$"
 }
 
@@ -494,45 +503,45 @@ STUB
   check_call | grep -q -- " --environment=production "
 }
 
-@test "with advisory true, pre_deploy checks as advice" {
-  LINKED=false ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" ADVISORY=true run "${RECORD}" run pre_deploy
+@test "with fail-on-failed-assertions false, pre_deploy checks as advice" {
+  LINKED=false ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" FAIL_ON_FAILED_ASSERTIONS=false run "${RECORD}" run pre_deploy
   [ "${status}" -eq 0 ]
   check_call | grep -q -- "--out=${DEPLOYMENTS} --advisory$"
 }
 
-@test "with advisory true, plan in a project that is not linked checks as advice, and sends nothing" {
-  LINKED=false APPLICATION="" ADVISORY=true run "${RECORD}" run plan
+@test "with fail-on-failed-assertions false, plan in a project that is not linked checks as advice, and sends nothing" {
+  LINKED=false APPLICATION="" FAIL_ON_FAILED_ASSERTIONS=false run "${RECORD}" run plan
   [ "${status}" -eq 0 ]
   check_call | grep -q -- " --advisory$"
   ! check_call | grep -qE -- '--upload|--store|--application' || false
 }
 
-@test "advisory is passed on at every stage, for the CLI to refuse where it does not apply" {
-  ADVISORY=true run "${RECORD}" run plan
+@test "with fail-on-failed-assertions false, --advisory is passed on at every stage, for the CLI to refuse where it does not apply" {
+  FAIL_ON_FAILED_ASSERTIONS=false run "${RECORD}" run plan
   check_call | grep -q -- " --application=api --advisory --upload$"
 }
 
 @test "the summary says when a stage was checked as advice" {
-  ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" ADVISORY=true run "${RECORD}" run pre_deploy
-  grep -q "^Result: exit 0, checked as advice: failed or undecided assertions do not fail the step\.$" "${GITHUB_STEP_SUMMARY}"
+  ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" FAIL_ON_FAILED_ASSERTIONS=false run "${RECORD}" run pre_deploy
+  grep -q "^Result: checked as advice\. Any failed or undecided assertions are listed below, and they do not fail the step\.$" "${GITHUB_STEP_SUMMARY}"
   : > "${GITHUB_STEP_SUMMARY}"
   GITHUB_EVENT_NAME=pull_request run "${RECORD}" run plan
-  grep -q "^Result: exit 0, checked as advice: failed or undecided assertions do not fail the step\.$" "${GITHUB_STEP_SUMMARY}"
+  grep -q "^Result: checked as advice\. Any failed or undecided assertions are listed below, and they do not fail the step\.$" "${GITHUB_STEP_SUMMARY}"
   : > "${GITHUB_STEP_SUMMARY}"
   ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" run "${RECORD}" run pre_deploy
-  grep -q "^Result: exit 0\.$" "${GITHUB_STEP_SUMMARY}"
+  grep -q "^Result: passed\.$" "${GITHUB_STEP_SUMMARY}"
 }
 
-@test "a failed stage checked as advice shows only its exit code" {
+@test "a failed stage checked as advice shows only that it failed" {
   echo 2 > "${MARKS}/exit-check"
-  ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" ADVISORY=true run "${RECORD}" run pre_deploy
-  grep -q "^Result: exit 2\.$" "${GITHUB_STEP_SUMMARY}"
+  ENVIRONMENT=production IMAGE="${DEPLOYED}" APPLICATION="" FAIL_ON_FAILED_ASSERTIONS=false run "${RECORD}" run pre_deploy
+  grep -q "^Result: failed\.$" "${GITHUB_STEP_SUMMARY}"
 }
 
-@test "an advisory value other than true or false is refused" {
-  ENVIRONMENT=production IMAGE="${DEPLOYED}" ADVISORY=yes run "${RECORD}" run pre_deploy
+@test "a fail-on-failed-assertions value other than true or false is refused" {
+  ENVIRONMENT=production IMAGE="${DEPLOYED}" FAIL_ON_FAILED_ASSERTIONS=yes run "${RECORD}" run pre_deploy
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The advisory input must be true or false, not 'yes'."* ]]
+  [[ "${output}" == *"The fail-on-failed-assertions input must be true or false, not 'yes'."* ]]
   ! check_call || false
 }
 
@@ -557,16 +566,16 @@ STUB
   ! check_call || false
 }
 
-@test "a deployment's environment that cannot name an artifact needs an artifact name" {
+@test "a deployment's environment with a space is refused before anything runs" {
   ENVIRONMENT="prod env" IMAGE="${DEPLOYED}" run "${RECORD}" run pre_deploy
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The default artifact name 'iltero-image-deployment-records-prod env-root' is not a valid artifact name."* ]]
+  [[ "${output}" == *"cannot name a directory or a file. Use only letters, digits"* ]]
 }
 
 @test "a deployment's records and artifact are apart from the build's" {
   ENVIRONMENT=production IMAGE="${DEPLOYED}" UNIT=api run "${RECORD}" run pre_deploy
   grep -qx "records-directory=${DEPLOYMENTS}" "${GITHUB_OUTPUT}"
-  grep -qx "artifact-name=iltero-image-deployment-records-production-api" "${GITHUB_OUTPUT}"
+  grep -qx "artifact-name=iltero-image-deployment-records-production-api-attempt-1" "${GITHUB_OUTPUT}"
 }
 
 @test "the summary of a deployment stage names the stage, the image and the environment" {
@@ -580,10 +589,10 @@ STUB
   local input
   grep -qF "image/record.sh\" check \"\${STAGE}\"" "${REPO_ROOT}/record-image/action.yml"
   grep -qF "image/record.sh\" run \"\${STAGE}\"" "${REPO_ROOT}/record-image/action.yml"
-  for input in STAGE IMAGE APPLICATION ENVIRONMENT UNIT BUILD_METADATA IMAGE_INDEX ATTESTATION TEST_REPORTS SCAN_REPORTS CLUSTER_ID WORKLOAD_BEFORE_PODS_LISTING PODS POD_OWNERS WORKLOAD_AFTER_PODS_LISTING RECORDS_DIRECTORY ARTIFACT_NAME STORE_RECORDS ADVISORY; do
+  for input in STAGE IMAGE APPLICATION ENVIRONMENT UNIT BUILD_METADATA IMAGE_INDEX ATTESTATION TEST_REPORTS SCAN_REPORTS CLUSTER_ID WORKLOAD_BEFORE_PODS_LISTING PODS POD_OWNERS WORKLOAD_AFTER_PODS_LISTING RECORDS_DIRECTORY ARTIFACT_NAME STORE_RECORDS FAIL_ON_FAILED_ASSERTIONS; do
     grep -qE "^        ${input}: \\$\\{\\{ inputs\\.[a-z-]+ \\}\\}$" "${REPO_ROOT}/record-image/action.yml"
   done
-  for input in stage environment cluster-id workload-before-pods-listing pods pod-owners workload-after-pods-listing advisory; do
+  for input in stage environment cluster-id workload-before-pods-listing pods pod-owners workload-after-pods-listing fail-on-failed-assertions; do
     grep -qx "        $(echo "${input}" | tr 'a-z-' 'A-Z_'): \${{ inputs.${input} }}" "${REPO_ROOT}/record-image/action.yml"
   done
 }
@@ -596,4 +605,18 @@ STUB
     [ "${status}" -eq 0 ]
     grep -qx -- "records-directory=${PROJECT}/${name}" "${GITHUB_OUTPUT}"
   done
+}
+
+@test "each stack has its own default records folder" {
+  run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  grep -qx "records-directory=${RECORDS}" "${GITHUB_OUTPUT}"
+  mkdir -p "${BATS_TEST_TMPDIR}/second-project"
+  cp "${PROJECT}"/*.json "${BATS_TEST_TMPDIR}/second-project/"
+  cd "${BATS_TEST_TMPDIR}/second-project"
+  : > "${GITHUB_OUTPUT}"
+  run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  grep -qx "records-directory=${RUNNER_TEMP}/iltero-image-records/$(stack_folder_name)" "${GITHUB_OUTPUT}"
+  [ "$(stack_folder_name)" != "${STACK_FOLDER}" ]
 }

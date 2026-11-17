@@ -1,7 +1,7 @@
 name: Iltero Verify
 description: >-
-  Pack each unit's Change Assurance Record, or one unit's, and every file it cites into a record bundle, and check the
-  bundle.
+  Build the record bundle of each unit, or of one unit: a folder that holds the unit's record and every file the
+  record cites. Then check that the record and its files are unchanged.
 author: Iltero
 
 branding:
@@ -17,8 +17,8 @@ inputs:
     required: true
   unit:
     description: >-
-      The name of one unit to check, as `iltero units list` prints it. Empty: every unit. Use it after record-iac,
-      which records one unit.
+      The name of one unit to check, as `iltero units list` prints it. When it is empty, the action checks every unit.
+      Use it after record-iac, which records one unit.
     required: false
     default: ""
   working-directory:
@@ -34,8 +34,18 @@ inputs:
     default: "true"
   artifact-name:
     description: >-
-      Name of the artifact that holds the record bundles. Empty: iltero-record-bundles-<environment>, or
-      iltero-record-bundles-<environment>-<unit> when unit is set.
+      Name of the artifact that holds the record bundles. The action adds -attempt-<attempt> to the name, where
+      <attempt> is the pipeline run's attempt number, so a re-run keeps the record bundles of earlier attempts. When it
+      is empty, the name is iltero-record-bundles-<environment>-attempt-<attempt>, or
+      iltero-record-bundles-<environment>-<unit>-attempt-<attempt> when unit is set. The artifact-name output gives the
+      full name.
+    required: false
+    default: ""
+
+  retention-days:
+    description: >-
+      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the input is empty, the
+      repository's own artifact retention setting applies.
     required: false
     default: ""
 
@@ -53,6 +63,7 @@ runs:
     - name: Check the event and the job
       shell: bash
       env:
+        RETENTION_DAYS: ${{ inputs.retention-days }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/verify.sh" check'
 
@@ -74,6 +85,7 @@ runs:
       with:
         name: ${{ steps.verify.outputs.artifact-name }}
         path: ${{ steps.verify.outputs.bundles-path }}
+        retention-days: ${{ inputs.retention-days }}
         if-no-files-found: error
 
     - name: Upload the reports
@@ -82,4 +94,5 @@ runs:
       with:
         name: ${{ steps.verify.outputs.artifact-name }}-report
         path: ${{ steps.verify.outputs.report-directory }}
+        retention-days: ${{ inputs.retention-days }}
         if-no-files-found: ignore

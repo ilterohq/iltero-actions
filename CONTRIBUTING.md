@@ -26,6 +26,19 @@ words. Pull request titles use the same format.
 - Never use `${{ }}` inside a `run:` block. Pass values through `env:`.
 - Grant permissions per job, and only what the job needs.
 
+### Moving the Iltero CLI pin
+
+The `setup` action installs the Iltero CLI and iltero-schemas at the commits named in `setup/cli-sources.txt`, and
+every other package from `setup/cli-requirements.txt`. To move either commit, run `scripts/lock-cli.py` from the
+repository root. It rewrites both files:
+
+```bash
+scripts/lock-cli.py CLI_CHECKOUT SCHEMAS_COMMIT
+```
+
+`CLI_CHECKOUT` is a checkout of iltero-cli at the commit to pin, and `SCHEMAS_COMMIT` is the iltero-schemas commit
+that CLI commit is tested against. Never edit either file by hand.
+
 ## Developer Certificate of Origin
 
 Each contribution is made under the Developer Certificate of Origin (DCO). By contributing to this project, you
@@ -102,5 +115,21 @@ show as "Unverified".
 
 ### Publishing a release
 
-A release is a GitHub release on a signed `vX.Y.Z` tag. When the release is published, the Release workflow checks
-that the tag has the `vX.Y.Z` format and runs CI on the tagged commit.
+A maintainer makes a release with the Release workflow. First, move the changes under "Unreleased" in
+[CHANGELOG.md](CHANGELOG.md) into a section for the new version, such as `## [0.3.0] - 2026-11-20`, and merge that
+to `main`. Then start the workflow by hand on `main`, with the version:
+
+```bash
+gh workflow run release.yml --ref main -f version=v0.3.0
+```
+
+The workflow publishes nothing until every step passes:
+
+1. It checks that the run is on `main`, that the version has the form `vX.Y.Z`, that no tag for that version exists,
+   that `CHANGELOG.md` has a section for it, and that the Iltero CLI and schemas commits pinned in
+   `setup/cli-sources.txt` are on the `main` branch of their repositories.
+2. It runs CI on the commit being released.
+3. It creates the version's tag at that commit, then the GitHub release on that tag, with the version's
+   `CHANGELOG.md` section as its notes. A version with a suffix, such as `v0.3.0-rc.1`, is published as a pre-release.
+
+A run started on another branch publishes nothing: every job shows as skipped.

@@ -1,63 +1,118 @@
 # =============================================================================
-# Iltero Actions - Release Automation
+# Iltero Actions - Release
 # =============================================================================
-# When a new GitHub Release is published (e.g. v0.3.0), this workflow:
-#   1. Validates the tag follows semantic versioning
-#   2. Runs the full CI suite to ensure quality
+# A maintainer starts this workflow by hand on main and gives it the version to
+# release, for example v0.3.0. The workflow publishes nothing until every step
+# below passes:
+#   1. scripts/release-check.sh checks that the run is on main, that the
+#      version has the form vX.Y.Z (a suffix such as -rc.1 is allowed), that no
+#      tag for it exists, that CHANGELOG.md has a section for it, and that the
+#      Iltero CLI and schemas commits pinned in setup/cli-sources.txt are on the
+#      main branch of their repositories.
+#   2. The full CI suite runs on the commit being released.
+#   3. The workflow creates the tag at that commit, then the GitHub Release on
+#      that tag, with the version's CHANGELOG.md section as its notes. A
+#      version with a suffix is published as a pre-release.
+# A run started on another branch publishes nothing: every job shows as skipped.
 #
 # Pinning: there are no moving major tags. Pin to the release's full commit SHA,
 # with its version as a comment:
 #     uses: ilterohq/iltero-actions/<action>@<commit-sha>  # v0.3.0
 #
-# Published tags are immutable (a repository ruleset blocks moving/deleting them).
+# Published tags are immutable: a repository ruleset blocks moving or deleting them.
 # =============================================================================
 
 name: Release
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to release, such as v0.3.0. CHANGELOG.md must have a section for it.
+        required: true
+        type: string
 
 # Least privilege — each job declares only what it needs
 permissions: {}
 
-# One release run per tag at a time; a running one is never cancelled. The
-# group name differs from ci.yml's, so the called workflow does not wait on it.
+# One release run at a time; a running one is never cancelled. The group name
+# differs from ci.yml's, so the called workflow does not wait on it.
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   # ===========================================================================
-  # Validate: Ensure the release tag is a valid semver
+  # Check: the branch, the version, the changelog and the pins
   # ===========================================================================
-  validate-tag:
-    name: Validate Tag
+  check:
+    name: Release checks
+    # The script checks the branch too. This condition shows a run on another
+    # branch as skipped.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
+    timeout-minutes: 10
+    permissions:
+      contents: read
 
     steps:
-      - name: Parse and validate semver tag
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
+      - name: Check out the commit to release, with its tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-          # Must match vMAJOR.MINOR.PATCH (optional pre-release/build metadata)
-          if [[ ! "${TAG}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$ ]]; then
-            echo "::error::Tag '${TAG}' does not follow semantic versioning (expected vX.Y.Z)"
-            exit 1
-          fi
-
-          echo "Validated tag: ${TAG}"
+      - name: Check that the commit can be released
+        env:
+          VERSION: ${{ inputs.version }}
+        run: scripts/release-check.sh check "${VERSION}" "https://github.com/ilterohq"
 
   # ===========================================================================
-  # CI: Run the full quality suite against the tagged commit
+  # CI: the full quality suite, on the commit being released
   # ===========================================================================
   ci:
     name: CI
-    needs: validate-tag
+    needs: check
     # zizmor asks for GitHub's newer "$/" form of this path, which actionlint rejects.
     uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository]
     permissions:
       contents: read
       security-events: write # ci.yml uploads zizmor's results as SARIF
+
+  # ===========================================================================
+  # Publish: the tag and the release, once every check has passed
+  # ===========================================================================
+  publish:
+    name: Publish the release
+    needs: [check, ci]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # creates the tag and the release
+
+    steps:
+      - name: Check out the commit to release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Write the release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ inputs.version }}
+        run: scripts/release-check.sh notes "${VERSION}" > "${RUNNER_TEMP}/release-notes.md"
+
+      # The tag is created first, at the commit the checks and CI passed. The
+      # call fails when the tag exists, so the release is never built on a tag
+      # at another commit. A version with a suffix, such as -rc.1, is published
+      # as a pre-release.
+      - name: Create the tag and the release
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/${VERSION}" -f sha="${GITHUB_SHA}" > /dev/null
+          release_kind=()
+          [[ "${VERSION}" != *-* ]] || release_kind=(--prerelease)
+          gh release create "${VERSION}" --verify-tag --title "${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md" "${release_kind[@]}"

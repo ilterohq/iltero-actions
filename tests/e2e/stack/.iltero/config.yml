@@ -1,0 +1,22 @@
+version: 1
+assertions:
+  paths:
+    - assertions
+  include_starter_assertions: false
+  custom_policies: []
+  scanner_bindings: null
+  required_scanners: []
+  local_exceptions: null
+  values_known_after_deployment: postpone
+redaction:
+  additional_paths: []
+  exempt_paths: []
+environments:
+  e2e:
+    git_ref:
+      type: branch
+      name: main
+stages:
+  out_of_scope:
+    - pre_deploy
+    - post_verify

@@ -104,6 +104,21 @@ PY
   ! grep -q "^POST" "${API_LOG}" || false
 }
 
+@test "post skips a comment with no user or no body, and still finds its own" {
+  python3 - "${MARKER}" > "${COMMENTS}" << 'PY'
+import json, sys
+print(json.dumps([
+    {"id": 1, "user": None, "body": "by a deleted user"},
+    {"id": 2, "user": {"login": "github-actions[bot]"}, "body": None},
+    {"id": 3, "user": {"login": "github-actions[bot]"}, "body": sys.argv[1] + "\nold"},
+]))
+PY
+  start_fake_github
+  run "${COMMENT}" post iltero-preview-comment "${BODY}"
+  [ "${status}" -eq 0 ]
+  grep -q "^PATCH /repos/octo/stack/issues/comments/3 " "${API_LOG}"
+}
+
 @test "post leaves alone a comment with another marker or by someone else" {
   comments 0 "1|github-actions[bot]|<!-- iltero-preview:other -->" "2|someone|${MARKER}"
   start_fake_github
@@ -155,14 +170,14 @@ PY
   FAKE_STATUS=403 start_fake_github
   run "${COMMENT}" post iltero-preview-comment "${BODY}"
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"HTTP 403"*"pull-requests: write"* ]]
+  [[ "${output}" == *"did not let the job's token post the comment"*"pull-requests: write"* ]]
 }
 
 @test "post fails on any other refusal, and shows GitHub's answer" {
   FAKE_STATUS=422 start_fake_github
   run "${COMMENT}" post iltero-preview-comment "${BODY}"
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"HTTP 422"*"fake failure"* ]]
+  [[ "${output}" == *"GitHub refused to post the comment (HTTP status 422): "*"fake failure"* ]]
   [[ "${output}" != *"pull-requests: write"* ]]
 }
 
@@ -175,5 +190,5 @@ PY
 @test "post fails when the comment file is missing" {
   run "${COMMENT}" post iltero-preview-comment "${BATS_TEST_TMPDIR}/none.md"
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"comment file is missing"* ]]
+  [[ "${output}" == *"The comment artifact holds no comment file. Set artifact-name to the comment-artifact output of the preview action."* ]]
 }

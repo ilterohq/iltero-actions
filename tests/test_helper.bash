@@ -11,6 +11,8 @@ make_runner() {
   export RUNNER_TEMP="${BATS_TEST_TMPDIR}/runner-temp"
   export GITHUB_OUTPUT="${BATS_TEST_TMPDIR}/github-output"
   export GITHUB_EVENT_NAME="push"
+  export GITHUB_RUN_ATTEMPT="1"
+  export TOOL="terraform"
   export RUNNER_OS="Linux"
   export RUNNER_ARCH="X64"
   export STUBS="${BATS_TEST_TMPDIR}/stubs"
@@ -20,6 +22,9 @@ make_runner() {
   : > "${GITHUB_OUTPUT}"
   : > "${STUB_LOG}"
   export PATH="${STUBS}:${PATH}"
+  # The guard passes the job's network settings to the IaC tool. The tests set
+  # only those they are about.
+  unset HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR
 }
 
 # Writes an executable stub command.
@@ -72,4 +77,10 @@ commands_paused_around() {
 output_value() {
   local name="$1"
   grep "^${name}=" "${GITHUB_OUTPUT}" | cut -d= -f2-
+}
+
+# Prints the name the actions give the work folder of the stack in the
+# current folder.
+stack_folder_name() {
+  printf 'stack-%s\n' "$(printf '%s' "${PWD}" | sha256sum | cut -c1-12)"
 }

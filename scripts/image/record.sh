@@ -17,10 +17,9 @@
 # server, the plan stage's check opens or joins the build run of the pipeline
 # run for APPLICATION, and each deployment stage's check opens or joins the
 # image deploy run for APPLICATION and ENVIRONMENT. Each check sends the
-# stage's record. A project with no platform section in .iltero/config.yml
-# records locally: no run, no upload. On a pull request event, the plan stage
-# runs locally, linked or not, as advice: failed or undecided assertions
-# exit 0.
+# stage's record. A project not linked to the server records locally: no
+# run, no upload. On a pull request event, the plan stage runs locally,
+# linked or not, as advice: failed or undecided assertions exit 0.
 #
 # The CLI keeps the deployment's record in RECORDS_DIRECTORY. Each deployment
 # stage after pre_deploy reads the record from it, so a later stage in a
@@ -48,7 +47,7 @@
 #                                plan, iltero-image-deployment-records-<environment>-<unit> for a
 #                                deployment.
 #   STORE_RECORDS                true or false. True: keep the stage's record in the run's artifact store.
-#   ADVISORY                     true or false. True: failed or undecided assertions exit 0.
+#   FAIL_ON_FAILED_ASSERTIONS    true or false. False: failed or undecided assertions do not fail the step.
 
 set -euo pipefail
 
@@ -71,6 +70,7 @@ cmd_check() {
   local stage="$1"
   check_stage_input "${stage}"
   [[ -z "${ARTIFACT_NAME:-}" ]] || check_artifact_name "${ARTIFACT_NAME}"
+  require_retention_days
   cli_path > /dev/null
 }
 
@@ -88,35 +88,28 @@ require_input() {
   [[ -n "${value}" ]] || die "The ${input} input is required for stage ${STAGE}."
 }
 
-# Prints LINE without the spaces at its start and end.
-trim() {
-  local line="$1"
-  line="${line#"${line%%[![:space:]]*}"}"
-  printf '%s\n' "${line%"${line##*[![:space:]]}"}"
-}
-
 # Adds the CLI option OPTION for the file the input INPUT names, when it names
-# one, to ARGS. Each stage takes its own files; the CLI refuses a file option
-# its stage does not take.
-add_file_arg() {
+# one, to CLI_OPTIONS. Each stage takes its own files; the CLI refuses a file
+# option its stage does not take.
+add_file_option() {
   local input="$1"
   local option="$2"
   local path_value="$3"
   [[ -n "${path_value}" ]] || return 0
   require_named_file "${input}" "${path_value}"
-  ARGS+=("${option}=${path_value}")
+  CLI_OPTIONS+=("${option}=${path_value}")
 }
 
-# Adds the CLI's options for the given files to ARGS.
-add_file_args() {
-  add_file_arg build-metadata --build-metadata "${BUILD_METADATA:-}"
-  add_file_arg image-index --image-index "${IMAGE_INDEX:-}"
-  add_file_arg attestation --attestation "${ATTESTATION:-}"
+# Adds the CLI's options for the given files to CLI_OPTIONS.
+add_file_options() {
+  add_file_option build-metadata --build-metadata "${BUILD_METADATA:-}"
+  add_file_option image-index --image-index "${IMAGE_INDEX:-}"
+  add_file_option attestation --attestation "${ATTESTATION:-}"
   local line
   while IFS= read -r line; do
     line="$(trim "${line}")"
     [[ -n "${line}" ]] || continue
-    add_file_arg test-reports --test-report "${line}"
+    add_file_option test-reports --test-report "${line}"
   done <<< "${TEST_REPORTS:-}"
   local scanner report
   while IFS= read -r line; do
@@ -127,12 +120,12 @@ add_file_args() {
     [[ " ${SCANNERS[*]} " == *" ${scanner} "* && "${report}" != "${line}" && -n "${report}" ]] \
       || die "Each line of the scan-reports input must be a scanner (${SCANNERS[*]}), a space and the report's path. One line is '${line}'."
     require_named_file scan-reports "${report}"
-    ARGS+=(--scanner="${scanner}" --scanner-report="${report}")
+    CLI_OPTIONS+=(--scanner="${scanner}" --scanner-report="${report}")
   done <<< "${SCAN_REPORTS:-}"
-  add_file_arg workload-before-pods-listing --workload-before-pods-listing "${WORKLOAD_BEFORE_PODS_LISTING:-}"
-  add_file_arg pods --pods "${PODS:-}"
-  add_file_arg pod-owners --pod-owners "${POD_OWNERS:-}"
-  add_file_arg workload-after-pods-listing --workload-after-pods-listing "${WORKLOAD_AFTER_PODS_LISTING:-}"
+  add_file_option workload-before-pods-listing --workload-before-pods-listing "${WORKLOAD_BEFORE_PODS_LISTING:-}"
+  add_file_option pods --pods "${PODS:-}"
+  add_file_option pod-owners --pod-owners "${POD_OWNERS:-}"
+  add_file_option workload-after-pods-listing --workload-after-pods-listing "${WORKLOAD_AFTER_PODS_LISTING:-}"
 }
 
 # Stops unless the inputs STAGE needs are given.
@@ -167,7 +160,7 @@ cmd_run() {
     require_environment_name "${ENVIRONMENT:-}"
   fi
   require_one_line cluster-id "${CLUSTER_ID:-}"
-  require_true_or_false advisory "${ADVISORY:-}"
+  require_true_or_false fail-on-failed-assertions "${FAIL_ON_FAILED_ASSERTIONS:-}"
   [[ -n "${UNIT:-}" ]] || die "The unit input is required."
   check_unit_name "${UNIT}"
   local linked=false
@@ -176,21 +169,25 @@ cmd_run() {
     # The CLI opens or joins the run on the server with the job's identity token.
     [[ "${linked}" == false ]] || require_id_token
   fi
-  set_server_args "${linked}"
+  set_server_options "${linked}"
 
-  ARGS=()
-  add_file_args
+  CLI_OPTIONS=()
+  add_file_options
 
-  # A build belongs to no environment; a deployment's records are kept apart
-  # for each environment.
-  local default_out="${RUNNER_TEMP}/iltero-image-records" default_artifact="iltero-image-records-${UNIT}"
+  # Each folder that the steps run in has its own records, so two projects in
+  # one job keep them apart. A build belongs to no environment. A deployment's
+  # records are also kept apart for each environment.
+  local temp stack
+  temp="$(runner_temp)" || exit 1
+  stack="$(stack_work_folder_name)" || die "The action could not name the stack's work folder."
+  local default_out="${temp}/iltero-image-records/${stack}" default_artifact="iltero-image-records-${UNIT}"
   if [[ "${STAGE}" != plan ]]; then
-    default_out="${RUNNER_TEMP}/iltero-image-deployment-records/${ENVIRONMENT}"
+    default_out="${temp}/iltero-image-deployment-records/${ENVIRONMENT}/${stack}"
     default_artifact="iltero-image-deployment-records-${ENVIRONMENT}-${UNIT}"
   fi
   local artifact
   artifact="$(artifact_name "${ARTIFACT_NAME:-}" "${default_artifact}")"
-  local work="${RUNNER_TEMP}/iltero-record-image/units/${UNIT}/${STAGE}"
+  local work="${temp}/iltero-record-image/${stack}/units/${UNIT}/${STAGE}"
   local out="${RECORDS_DIRECTORY:-${default_out}}"
   # A relative path starts with ./, so no command reads it as an option.
   [[ "${out}" == /* ]] || out="./${out}"
@@ -201,29 +198,31 @@ cmd_run() {
   write_output records-directory "${out}"
   write_output artifact-name "${artifact}"
 
-  [[ -z "${IMAGE:-}" ]] || ARGS+=(--image="${IMAGE}")
-  [[ -z "${CLUSTER_ID:-}" ]] || ARGS+=(--cluster-id="${CLUSTER_ID}")
-  [[ -z "${ENVIRONMENT:-}" ]] || ARGS+=(--environment="${ENVIRONMENT}")
-  ARGS+=(--unit="${UNIT}" --out="${out}")
+  [[ -z "${IMAGE:-}" ]] || CLI_OPTIONS+=(--image="${IMAGE}")
+  [[ -z "${CLUSTER_ID:-}" ]] || CLI_OPTIONS+=(--cluster-id="${CLUSTER_ID}")
+  [[ -z "${ENVIRONMENT:-}" ]] || CLI_OPTIONS+=(--environment="${ENVIRONMENT}")
+  CLI_OPTIONS+=(--unit="${UNIT}" --out="${out}")
   local as_advice=false
   if is_pull_request_event; then
     # A pull request's image is checked locally, never recorded on the server,
     # and only as advice: a pull request check is never a merge gate.
-    ARGS+=(--local --advisory)
+    CLI_OPTIONS+=(--local --advisory)
     as_advice=true
   else
-    [[ -z "${APPLICATION:-}" ]] || ARGS+=(--application="${APPLICATION}")
+    [[ -z "${APPLICATION:-}" ]] || CLI_OPTIONS+=(--application="${APPLICATION}")
     # The CLI refuses --advisory at a stage, or in a run, that does not take it.
-    [[ "${ADVISORY}" == false ]] || { ARGS+=(--advisory); as_advice=true; }
-    ARGS+=(${SERVER_ARGS[@]+"${SERVER_ARGS[@]}"})
+    [[ "${FAIL_ON_FAILED_ASSERTIONS}" == true ]] || { CLI_OPTIONS+=(--advisory); as_advice=true; }
+    CLI_OPTIONS+=(${SERVER_OPTIONS[@]+"${SERVER_OPTIONS[@]}"})
   fi
   local status=0
-  check_change_stage image "${work}" "${STAGE}" "${ARGS[@]}" || status=$?
+  check_change_stage image "${work}" "${STAGE}" "${CLI_OPTIONS[@]}" || status=$?
 
-  local result="exit ${status}" details="${work}/details.md"
-  # Checked as advice, exit 0 can hide failed or undecided assertions, so the
+  local result details="${work}/details.md"
+  result="$(check_result "${status}")"
+  # Checked as advice, a pass can hide failed or undecided assertions, so the
   # summary says the step checked as advice.
-  [[ "${as_advice}" == false || "${status}" -ne 0 ]] || result+=", checked as advice: failed or undecided assertions do not fail the step"
+  [[ "${as_advice}" == false || "${status}" -ne 0 ]] \
+    || result="checked as advice. Any failed or undecided assertions are listed below, and they do not fail the step"
   : > "${details}"
   append_details_block "${details}" "${UNIT}: image check, ${STAGE//_/-}" "${work}/${STAGE}.txt"
   {

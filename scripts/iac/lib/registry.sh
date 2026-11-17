@@ -3,23 +3,22 @@
 # The private module registry: a short-lived token for it, and the check that
 # the project may use it. The registry accepts the job's GitHub identity
 # token, minted for the registry host's own origin. Source this file after
-# common.sh.
+# common.sh, and load the tool's adapter before calling it.
+
+# Stops unless HOST is a registry host name, with no scheme and no path.
+check_registry_host() {
+  local host="$1"
+  [[ "${host}" =~ ^[${LOWERCASE_LETTERS}0-9-]+(\.[${LOWERCASE_LETTERS}0-9-]+)+$ ]] \
+    || die "Invalid registry host '${host}'. Use a host name such as registry.example.com, with no https:// or path."
+}
 
 # How long the request for the job's identity token may take.
 readonly ID_TOKEN_REQUEST_TIMEOUT_SECONDS=30
 
-# Prints the name of Terraform's credentials variable for a registry host:
-# TF_TOKEN_ followed by the host, with "." written "_" and "-" written "__".
-registry_token_variable() {
-  local host="$1"
-  [[ "${host}" =~ ^[${LOWER}0-9-]+(\.[${LOWER}0-9-]+)+$ ]] || die "Invalid registry host '${host}'."
-  host="${host//-/__}"
-  echo "TF_TOKEN_${host//./_}"
-}
-
 # Mints a registry token for the audience https://<host>, and sets
-# REGISTRY_TOKEN_ENV to "TF_TOKEN_<host>=<token>", for the one Terraform
-# process that runs init. The token is masked first, and is never written to
+# REGISTRY_TOKEN_ENV to "<variable>=<token>", where the IaC tool's adapter
+# names the variable (tool_registry_token_variable), for the one call of the
+# tool that downloads modules. The token is masked first, and is never written to
 # a file, an output or the log. Returns non-zero, with an error annotation,
 # when no token can be minted, so the caller can still write its summary.
 # Callers have already checked that setup ran.
@@ -28,7 +27,8 @@ mint_registry_token() {
   # Each step returns on failure explicitly: callers may run this where bash
   # ignores set -e.
   local variable audience token
-  variable="$(registry_token_variable "${host}")" || return 1
+  # The check steps have already refused a host that is not a host name.
+  variable="$(tool_registry_token_variable "${host}")" || return 1
   audience="https://${host}"
   [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]] || {
     echo "::error::The job cannot request its identity token. Grant it 'permissions: id-token: write'."
@@ -59,5 +59,5 @@ with urllib.request.urlopen(request, timeout=int(os.environ["TIMEOUT_SECONDS"]))
 require_linked_for_registry() {
   local linked="$1"
   [[ "${linked}" == true ]] \
-    || die "This project has no platform section in .iltero/config.yml, so it cannot use the Iltero module registry."
+    || die "This project is not linked to the server, so it cannot use the Iltero module registry. Add a platform section to .iltero/config.yml, or leave registry-host empty."
 }

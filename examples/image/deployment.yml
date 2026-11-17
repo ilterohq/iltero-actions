@@ -1,18 +1,18 @@
 # Reference workflow for a team that deploys a container image to Kubernetes
-# and records the deployment with no Iltero account: .iltero/config.yml has
-# no platform section. A repository owner copies it into .github/workflows/
-# and replaces the example values.
+# and records the deployment in a project not linked to Iltero Platform: its
+# .iltero/config.yml has no platform section. A repository owner copies it
+# into .github/workflows/ and replaces the example values.
 #
 # A person starts the workflow with the image to deploy, by its digest. One
 # job deploys the image to production. Iltero steps around the deployment
 # record each stage of it, on the runner. Each step names the environment:
-#   pre_deploy   before the deployment: checks the image to deploy. A check
-#                on the runner alone reads no approvals, so an assertion
-#                that reads them is undecided. The step sets advisory, so
-#                failed or undecided assertions do not stop the job: the
-#                record shows them. Here the approval is the production
-#                environment's protection rules in GitHub, such as required
-#                reviewers;
+#   pre_deploy   before the deployment: checks the image to deploy. A local
+#                check reads no approvals, so an assertion that reads them
+#                is undecided. The step sets
+#                fail-on-failed-assertions to false, so failed or undecided
+#                assertions do not stop the job: the record shows them.
+#                Here the approval is the production environment's
+#                protection rules in GitHub, such as required reviewers;
 #   post_deploy  after kubectl set image, also when it failed: reports the
 #                image the workload now names, read back from the cluster;
 #   post_verify  after the rollout: checks that every pod of the workload
@@ -29,10 +29,12 @@
 # cluster, replace them with the steps that give kubectl its credentials.
 #
 # Values the owner replaces:
-#   the actions commit (40 hex characters), the GitHub deployment
-#   environment, the deploy role's Amazon Resource Name (ARN), region and
-#   cluster name, and the workload's namespace, name, container and label
-#   selector.
+#   the actions commit (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character ID of the iltero-actions commit you use,
+#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   the GitHub deployment environment, the deploy role's Amazon Resource Name
+#   (ARN), region and cluster name, and the workload's namespace, name,
+#   container and label selector.
 
 name: Deploy image
 
@@ -56,6 +58,8 @@ jobs:
   deploy:
     name: Deploy the image to production
     runs-on: ubuntu-24.04
+    # Set this above the time the slowest apply takes.
+    timeout-minutes: 180
     environment: production
     concurrency:
       group: deploy-image-production
@@ -67,6 +71,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The job deploys the image by its digest, which always names the same
+      # image. A tag can later point to another image.
+      - name: Check that the image is named by its digest
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          [[ "${IMAGE}" =~ ^([^/@[:space:]]+/)*[^/:@[:space:]]+@sha256:[0-9a-f]{64}$ ]] \
+            || { echo "::error::Name the image by its digest, as repository@sha256:<digest>, where the digest is 64 characters from 0-9 and a-f."; exit 1; }
       - uses: ilterohq/iltero-actions/setup@0000000000000000000000000000000000000000 # v0.3.0
 
       - uses: ilterohq/iltero-actions/record-image@0000000000000000000000000000000000000000 # v0.3.0
@@ -74,7 +86,7 @@ jobs:
           stage: pre_deploy
           image: ${{ inputs.image }}
           environment: production
-          advisory: true
+          fail-on-failed-assertions: false
 
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:

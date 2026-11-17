@@ -1,0 +1,19 @@
+apiVersion: iltero.com/v1
+kind: TechnicalAssertion
+metadata:
+  id: EXAMPLE.IAC.RESOURCE.TERRAFORM.DATA.INPUT_SET
+  version: "1.0.0"
+  title: The input of the test marker is e2e
+  remediation: Set the input of terraform_data.marker to "e2e".
+spec:
+  change_type: iac_change
+  stage: plan
+  target:
+    kind: resource
+    resources:
+      - tool: terraform
+        provider: terraform
+        resource_types: [terraform_data]
+  assert:
+    path: resource.after.input
+    equal: e2e

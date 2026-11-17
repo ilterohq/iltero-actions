@@ -3,6 +3,12 @@
 # The CLI's check of one stage of a change, used for both infrastructure as
 # code (IaC) changes and container images. Source this file after common.sh.
 
+# The exit code of `iltero record in-scope` and `iltero record verify` for a
+# record that does not verify: the record, or a file it cites, changed. Used
+# by the scripts that source this file.
+# shellcheck disable=SC2034
+readonly RECORD_DOES_NOT_VERIFY_STATUS=9
+
 # Runs the CLI with ARGS, using the evaluator that `setup` installed. Prints its
 # output with workflow commands paused and keeps a copy in LOG for the summary.
 # Returns the CLI's exit code.

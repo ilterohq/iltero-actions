@@ -4,10 +4,13 @@
 
 # Prints each unit as "name<TAB>directory", in deploy order, from the CLI.
 list_units() {
-  local cli tools listing
-  cli="$(cli_path)"
-  tools="$(tools_dir)"
-  listing="$("${cli}" units list --format=json)" || die "The CLI could not list the units."
+  local cli tools listing status=0
+  # The caller runs this function with || exit, where errexit is off, so each
+  # failure stops it here.
+  cli="$(cli_path)" || exit 1
+  tools="$(tools_dir)" || exit 1
+  listing="$("${cli}" units list --format=json)" || status=$?
+  [[ "${status}" -eq 0 ]] || exit_with_error "${status}" "The CLI could not list the units. Its message above says why."
   "${tools}/venv/bin/python" -I -c '
 import json, sys
 units = json.loads(sys.stdin.read())
@@ -17,6 +20,9 @@ for unit in units:
     name, directory = unit.get("name"), unit.get("working_directory")
     if not isinstance(name, str) or not isinstance(directory, str):
         sys.exit("a unit has no name or working directory")
+    # Each unit is one line of name, tab, directory.
+    if any(not character.isprintable() for character in name + directory):
+        sys.exit("a unit name or working directory holds a character that cannot be printed")
     print(f"{name}\t{directory}")
 ' <<< "${listing}" || die "The CLI's unit list could not be read."
 }

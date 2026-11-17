@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Installs the tools the other actions use: the Iltero CLI and its evaluator,
-# the policy engine that runs the assertions. The deploy and preview actions
+# the program that runs the assertions. The deploy and preview actions
 # install the Terraform they run themselves.
 #
 # Usage:
@@ -31,7 +31,8 @@ pinned_source_commit() {
   local sources="${GITHUB_ACTION_PATH}/cli-sources.txt"
   local name commit
   [[ -f "${sources}" ]] || die "This release of the actions pins no Iltero CLI: ${sources} is missing."
-  while read -r name commit; do
+  # A last line with no newline at its end is read too.
+  while read -r name commit || [[ -n "${name}" ]]; do
     if [[ "${name}" == "${package}" ]]; then
       [[ "${commit}" =~ ${COMMIT_PATTERN} ]] || die "The pinned commit of ${package} is not a full commit: '${commit}'."
       echo "${commit}"
@@ -63,11 +64,13 @@ install_evaluator() {
     linux_arm64) platform="linux-aarch64" ;;
     *) die "No evaluator for this runner." ;;
   esac
-  pin="$("${venv}/bin/iltero" evaluator pin --platform "${platform}")" \
-    || die "The Iltero CLI could not report the evaluator pin for ${platform}."
+  local status=0
+  pin="$("${venv}/bin/iltero" evaluator pin --platform "${platform}")" || status=$?
+  [[ "${status}" -eq 0 ]] \
+    || exit_with_error "${status}" "The Iltero CLI could not say which evaluator release to download for ${platform}. Its message above says why."
   read -r version asset sha extra <<< "${pin}"
-  [[ "${pin}" != *$'\n'* && -z "${extra}" && "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "${asset}" =~ ^[${LOWER}0-9_]+$ && "${sha}" =~ ${SHA256_PATTERN} ]] \
-    || die "The evaluator pin the Iltero CLI reports is malformed."
+  [[ "${pin}" != *$'\n'* && -z "${extra}" && "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "${asset}" =~ ^[${LOWERCASE_LETTERS}0-9_]+$ && "${sha}" =~ ${SHA256_PATTERN} ]] \
+    || die "The Iltero CLI did not name the evaluator release to download as one line with a version, a file name and a SHA-256 digest."
 
   download_checked "${OPA_RELEASES_URL}/${version}/${asset}" "${sha}" "${dir}/bin/opa"
   chmod 0755 "${dir}/bin/opa"
@@ -112,10 +115,19 @@ cmd_cli() {
 
   check_installed_commit "${venv}" iltero "${cli_commit}" "CLI"
   check_installed_commit "${venv}" iltero-schemas "${schemas_commit}" "iltero-schemas"
+  # Check that every package the CLI and iltero-schemas need is installed, at
+  # a version they accept.
+  local log="${venv}.pip-check.log"
+  if ! "${venv}/bin/python" -I -m pip check --disable-pip-version-check > "${log}" 2>&1; then
+    cat "${log}" >&2
+    die "This release of the actions locks packages that do not match its pinned Iltero CLI. A maintainer must run scripts/lock-cli.py for the pinned commits."
+  fi
 
   install_evaluator "${venv}" "${dir}"
-  ILTERO_OPA_PATH="${dir}/bin/opa" "${venv}/bin/iltero" doctor \
-    || die "The Iltero CLI is installed but not ready to run checks."
+  local status=0
+  ILTERO_OPA_PATH="${dir}/bin/opa" "${venv}/bin/iltero" doctor || status=$?
+  [[ "${status}" -eq 0 ]] \
+    || exit_with_error "${status}" "The Iltero CLI is installed but not ready to run checks. Its message above says what is missing."
 
   write_output cli-commit "${cli_commit}"
   write_output cli-path "${venv}/bin/iltero"

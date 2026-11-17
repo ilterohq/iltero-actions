@@ -17,6 +17,9 @@
 #   - Workflow security analysis (zizmor) — the workflows, the composite
 #     actions and the reference workflows.
 #   - Markdown linting — the documents named in the job.
+#   - End to end — the setup, preview and record-iac actions run on the test
+#     stack in tests/e2e/stack, with no cloud, in a project not linked to the
+#     server.
 #
 # =============================================================================
 
@@ -49,7 +52,7 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout
+      - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -86,7 +89,7 @@ jobs:
           actionlint -color -verbose
           actionlint -color -verbose examples/*/*.yml
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
@@ -104,7 +107,7 @@ jobs:
       # --severity=style reports .shellcheckrc's require-variable-braces
       # (SC2250). Not in a log group, so the findings show. shellcheck comes
       # from the runner image; the log shows its version and the files checked.
-      - name: Lint Shell Scripts
+      - name: Lint shell scripts
         run: |
           shellcheck --version
           # An unknown name in .shellcheckrc's enable= is ignored without a
@@ -149,7 +152,7 @@ jobs:
       security-events: write  # For uploading SARIF
 
     steps:
-      - name: Checkout
+      - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -157,7 +160,7 @@ jobs:
 
       # Scans the repository and its history for secrets, reporting only
       # verified ones.
-      - name: Scan for secrets (trufflehog)
+      - name: Scan for secrets with TruffleHog
         uses: trufflesecurity/trufflehog@ea68ca03c865c5f324e86e849ced20ed3cf9dbbb # v3.99.8
         with:
           extra_args: --only-verified
@@ -179,7 +182,7 @@ jobs:
           zizmor --format sarif . examples/*/*.yml > results.sarif || true
           exit "${rc}"
 
-      - name: Upload SARIF results
+      - name: Upload the workflow scan results
         if: always()
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
@@ -197,7 +200,7 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout
+      - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -216,5 +219,122 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bats
 
-      - name: Run the BATS tests
+      - name: Run the Bats tests
         run: bats --tap -r tests/
+
+  # ===========================================================================
+  # End to end: run the actions on a small test stack that needs no cloud
+  # ===========================================================================
+  # The test stack in tests/e2e/stack is a project not linked to the server. It
+  # holds one Terraform unit and one assertion that the unit passes. Every run
+  # sets up Iltero and records the plan with record-iac. A pull request also
+  # runs preview.
+  end-to-end:
+    name: End to end
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    env:
+      STACK: tests/e2e/stack
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The CLI records the commit of the Git repository that holds the
+      # project's .iltero/config.yml. This step makes the test stack a Git
+      # repository of its own, with one commit, on main: the branch the stack's
+      # e2e environment is mapped to.
+      - name: Make the test stack a Git repository of its own
+        run: |
+          git -C "${STACK}" init -q -b main
+          git -C "${STACK}" add -A
+          git -C "${STACK}" -c user.name=ci -c user.email=ci@example.invalid commit -q -m "Test stack"
+
+      - name: Set up Iltero
+        uses: ./setup
+
+      - name: Preview the test stack
+        id: preview
+        if: github.event_name == 'pull_request'
+        uses: ./preview
+        with:
+          working-directory: ${{ env.STACK }}
+          environment: e2e
+
+      - name: Check the preview's outputs
+        if: github.event_name == 'pull_request'
+        env:
+          ENVIRONMENT: ${{ steps.preview.outputs.environment }}
+          COMMENT_ARTIFACT: ${{ steps.preview.outputs.comment-artifact }}
+          TOOL_PATH: ${{ steps.preview.outputs.tool-path }}
+        run: |
+          [[ "${ENVIRONMENT}" == e2e ]] \
+            || { echo "::error::The preview's environment output is '${ENVIRONMENT}', not e2e."; exit 1; }
+          [[ -n "${COMMENT_ARTIFACT}" ]] || { echo "::error::The preview's comment-artifact output is empty."; exit 1; }
+          [[ -x "${TOOL_PATH}" ]] || { echo "::error::The preview's tool-path output is not a program: '${TOOL_PATH}'."; exit 1; }
+
+      - name: Install Terraform
+        id: terraform
+        run: scripts/iac/install-tool.sh terraform ""
+
+      # Before it records a plan, record-iac checks that Terraform keeps the
+      # state outside the working directory. A small web server on the runner
+      # keeps the state for this job.
+      - name: Start a local server for the Terraform state
+        run: |
+          mkdir -p "${RUNNER_TEMP}/e2e-state"
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory "${RUNNER_TEMP}/e2e-state" \
+            > "${RUNNER_TEMP}/e2e-state.log" 2>&1 &
+          server=$!
+          for _ in $(seq 1 20); do
+            curl -s -o /dev/null http://127.0.0.1:8765/ && exit 0
+            kill -0 "${server}" 2> /dev/null || break
+            sleep 1
+          done
+          cat "${RUNNER_TEMP}/e2e-state.log" >&2
+          echo "::error::The state server did not start."
+          exit 1
+
+      - name: Plan the test stack
+        working-directory: ${{ env.STACK }}
+        env:
+          TERRAFORM: ${{ steps.terraform.outputs.tool-path }}
+          TF_DATA_DIR: ${{ runner.temp }}/e2e-plan/data
+          TF_IN_AUTOMATION: "1"
+          CHECKPOINT_DISABLE: "1"
+        run: |
+          plan="${RUNNER_TEMP}/e2e-plan"
+          mkdir -p "${plan}"
+          "${TERRAFORM}" init -input=false -no-color -lockfile=readonly -backend-config=config/backend/e2e.hcl
+          "${TERRAFORM}" plan -input=false -no-color -lock=false -out="${plan}/tfplan"
+          "${TERRAFORM}" show -json "${plan}/tfplan" > "${plan}/plan.json"
+
+      - name: Record the plan
+        id: record
+        uses: ./record-iac
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/e2e-plan/data
+        with:
+          stage: plan
+          environment: e2e
+          unit: root
+          working-directory: ${{ env.STACK }}
+          plan: ${{ runner.temp }}/e2e-plan/plan.json
+          saved-plan: ${{ runner.temp }}/e2e-plan/tfplan
+          retention-days: 1
+
+      # The report lists the assertions the plan was checked against, so the
+      # test stack's assertion must be in it.
+      - name: Check that the record was written and checked the assertion
+        env:
+          RECORDS: ${{ steps.record.outputs.records-directory }}
+          REPORTS: ${{ steps.record.outputs.report-directory }}
+        run: |
+          [[ -f "${RECORDS}/units/root/car.json" ]] || { echo "::error::record-iac wrote no record for unit root."; exit 1; }
+          grep -qF EXAMPLE.IAC.RESOURCE.TERRAFORM.DATA.INPUT_SET "${REPORTS}/root/record-report.md" \
+            || { echo "::error::The record's report does not list the test stack's assertion."; exit 1; }

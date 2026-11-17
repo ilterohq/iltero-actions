@@ -34,7 +34,7 @@ write_report() {
     "${cli}" record report "${target}" --format="${format}" --out="${dir}" >> "${log}" 2>&1 || status=$?
   done
   print_untrusted "${log}"
-  [[ "${status}" -eq 0 ]] || echo "::warning::The CLI's report of unit '${name}' exited with ${status}. See its output in the log."
+  [[ "${status}" -eq 0 ]] || echo "::warning::The CLI reported a problem while it wrote the report of unit '${name}'. See its output in the log."
   local file
   for file in "${REPORT_HTML_FILE}" "${REPORT_MARKDOWN_FILE}"; do
     if [[ ! -f "${dir}/${file}" ]]; then
