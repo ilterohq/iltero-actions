@@ -31,9 +31,9 @@ action_files() {
   [ -z "${bad}" ] || { echo "${bad}"; false; }
 }
 
-@test "no run: block in an action contains an expression" {
+@test "no run: block in an action, workflow or example contains an expression" {
   local file
-  for file in $(action_files); do
+  for file in $(yaml_files); do
     run awk '
       /^[[:space:]]*(-[[:space:]]+)?run:/ { in_run = 1; indent = match($0, /[^ ]/); if (index($0, "${{")) { print FILENAME ":" NR; bad = 1 } next }
       in_run && NF && match($0, /[^ ]/) <= indent { in_run = 0 }
@@ -53,35 +53,43 @@ action_files() {
   [ "${status}" -eq 1 ] || { echo "${output}"; false; }
 }
 
-@test "deploy and preview default to the same Terraform version, with a pinned checksum for each runner architecture" {
-  local action version versions=()
+# The pinned checksums of the Terraform adapter.
+TERRAFORM_CHECKSUMS="${REPO_ROOT}/scripts/iac/tools/terraform/checksums.sha256"
+
+@test "deploy and preview default to terraform at the adapter's default version, pinned for each runner architecture" {
+  local action version
   for action in deploy preview; do
-    version="$(awk '/^  terraform-version:$/ { inside = 1 } inside && /^    default: / { gsub(/"/, "", $2); print $2; exit }' "${REPO_ROOT}/${action}/action.yml")"
-    [ -n "${version}" ]
-    versions+=("${version}")
+    awk '/^  tool:$/ { inside = 1 } inside && /^    default: / { print $2; exit }' "${REPO_ROOT}/${action}/action.yml" \
+      | grep -qx terraform
+    awk '/^  tool-version:$/ { inside = 1 } inside && /^    default: / { print $2; exit }' "${REPO_ROOT}/${action}/action.yml" \
+      | grep -qx '""'
   done
-  [ "${versions[0]}" = "${versions[1]}" ]
-  grep -qE "^[0-9a-f]{64}  terraform_${versions[0]}_linux_amd64\.zip$" "${REPO_ROOT}/scripts/iac/terraform.sha256"
-  grep -qE "^[0-9a-f]{64}  terraform_${versions[0]}_linux_arm64\.zip$" "${REPO_ROOT}/scripts/iac/terraform.sha256"
+  version="$(sed -n 's/^readonly TOOL_DEFAULT_VERSION="\(.*\)"$/\1/p' "${REPO_ROOT}/scripts/iac/tools/terraform/tool.sh")"
+  [ -n "${version}" ]
+  grep -qE "^[0-9a-f]{64}  terraform_${version}_linux_amd64\.zip$" "${TERRAFORM_CHECKSUMS}"
+  grep -qE "^[0-9a-f]{64}  terraform_${version}_linux_arm64\.zip$" "${TERRAFORM_CHECKSUMS}"
 }
 
-@test "the locked requirements belong to the pinned CLI commit" {
-  local commit
-  commit="$(awk '$1 == "iltero-cli" { print $2 }' "${REPO_ROOT}/setup/cli-sources.txt")"
-  grep -qx "# Iltero CLI commit: ${commit}" "${REPO_ROOT}/setup/cli-requirements.txt"
-}
-
-@test "no records or report upload sets its own retention, so the repository's setting applies" {
+@test "every records and report upload keeps its artifact for the retention-days input, empty by default" {
   local file
   for file in deploy verify record-iac record-image; do
-    ! grep -n 'retention-days' "${REPO_ROOT}/${file}/action.yml" || false
+    [ "$(grep -c 'uses: actions/upload-artifact@' "${REPO_ROOT}/${file}/action.yml")" -eq \
+      "$(grep -cx '        retention-days: ${{ inputs.retention-days }}' "${REPO_ROOT}/${file}/action.yml")" ]
+    grep -A5 '^  retention-days:$' "${REPO_ROOT}/${file}/action.yml" | grep -qx '    default: ""'
+    # The check step gets the input, so a bad value stops the job before anything runs.
+    grep -A5 'name: Check the event and the job' "${REPO_ROOT}/${file}/action.yml" \
+      | grep -qx '        RETENTION_DAYS: ${{ inputs.retention-days }}'
   done
+}
+
+@test "record-image fails on failed assertions unless the workflow says otherwise" {
+  grep -A10 '^  fail-on-failed-assertions:$' "${REPO_ROOT}/record-image/action.yml" | grep -qx '    default: "true"'
 }
 
 @test "an empty records upload of record-iac and record-image gives a warning" {
   local file
   for file in record-iac record-image; do
-    grep -A6 'name: Upload the records' "${REPO_ROOT}/${file}/action.yml" | grep -qx '        if-no-files-found: warn'
+    grep -A8 'name: Upload the records' "${REPO_ROOT}/${file}/action.yml" | grep -qx '        if-no-files-found: warn'
   done
 }
 
@@ -118,12 +126,93 @@ action_files() {
   done
 }
 
-@test "every pinned Terraform checksum is well formed" {
-  run grep -vcE '^[0-9a-f]{64}  terraform_[0-9]+\.[0-9]+\.[0-9]+_linux_(amd64|arm64)\.zip$' "${REPO_ROOT}/scripts/iac/terraform.sha256"
+@test "every pinned Terraform checksum is well formed, and there is at least one" {
+  [ -s "${TERRAFORM_CHECKSUMS}" ]
+  run grep -vcE '^[0-9a-f]{64}  terraform_[0-9]+\.[0-9]+\.[0-9]+_linux_(amd64|arm64)\.zip$' "${TERRAFORM_CHECKSUMS}"
   [ "${output}" = "0" ]
 }
 
-@test "the CLI is pinned to full commits" {
-  run grep -vcE '^iltero-(schemas|cli) [0-9a-f]{40}$' "${REPO_ROOT}/setup/cli-sources.txt"
+@test "the CLI and iltero-schemas are each pinned to one full commit" {
+  local sources="${REPO_ROOT}/setup/cli-sources.txt"
+  run grep -vcE '^iltero-(schemas|cli) [0-9a-f]{40}$' "${sources}"
   [ "${output}" = "0" ]
+  [ "$(grep -c '^iltero-cli ' "${sources}")" -eq 1 ]
+  [ "$(grep -c '^iltero-schemas ' "${sources}")" -eq 1 ]
+}
+
+@test "every run: step of a composite action names its shell" {
+  local file bad=""
+  for file in $(action_files); do
+    bad+="$(awk '
+      /^    - / { if (step && has_run && !has_shell) print FILENAME ":" start; step = 1; start = NR; has_run = 0; has_shell = 0 }
+      /^      run:/ || /^    - run:/ { has_run = 1 }
+      /^      shell: / || /^    - shell: / { has_shell = 1 }
+      END { if (step && has_run && !has_shell) print FILENAME ":" start }' "${REPO_ROOT}/${file}")"
+  done
+  [ -z "${bad}" ] || { echo "${bad}"; false; }
+}
+
+@test "every tool adapter is supported, and every supported tool has an adapter that defines the whole interface" {
+  local adapters supported tool
+  adapters="$(cd "${REPO_ROOT}/scripts/iac/tools" && ls -d -- */ | tr -d / | sort | paste -sd' ' -)"
+  supported="$(bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; source '${REPO_ROOT}/scripts/iac/lib/tool.sh'; printf '%s\\n' \"\${SUPPORTED_TOOLS[@]}\" | sort | paste -sd' ' -")"
+  [ "${adapters}" = "${supported}" ]
+  for tool in ${supported}; do
+    # load_tool stops when the adapter misses any function or constant of the interface.
+    run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; source '${REPO_ROOT}/scripts/iac/lib/tool.sh'; load_tool '${tool}'"
+    [ "${status}" -eq 0 ] || { echo "${tool}: ${output}"; false; }
+  done
+}
+
+@test "an adapter that misses part of the interface is refused" {
+  local copy="${BATS_TEST_TMPDIR}/scripts"
+  cp -R "${REPO_ROOT}/scripts" "${copy}"
+  sed -i '/^tool_apply() {/,/^}/d' "${copy}/iac/tools/terraform/tool.sh"
+  run bash -c "source '${copy}/lib/common.sh'; source '${copy}/iac/lib/tool.sh'; load_tool terraform"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The adapter of the tool 'terraform' does not define tool_apply."* ]]
+}
+
+@test "the cloud adapters give deploy credential names and preview mock credentials" {
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; source '${REPO_ROOT}/scripts/iac/lib/cloud-credentials.sh'
+    [[ \${#CLOUD_CREDENTIAL_ENV[@]} -gt 0 && \${#PREVIEW_CREDENTIAL_ENV[@]} -gt 0 ]]"
+  [ "${status}" -eq 0 ]
+}
+
+@test "Terraform's default version is the newest one pinned, and the docs name it" {
+  local default newest
+  default="$(sed -n 's/^readonly TOOL_DEFAULT_VERSION="\(.*\)"$/\1/p' "${REPO_ROOT}/scripts/iac/tools/terraform/tool.sh")"
+  newest="$(sed -E 's/.*terraform_([0-9.]+)_linux.*/\1/' "${TERRAFORM_CHECKSUMS}" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+  [ "${default}" = "${newest}" ]
+  grep -q "Terraform ${default}" "${REPO_ROOT}/docs/README.md"
+}
+
+@test "the end-to-end test stack needs no Iltero account and runs no starter assertion" {
+  local config="${REPO_ROOT}/tests/e2e/stack/.iltero/config.yml"
+  ! grep -q '^platform:' "${config}" || false
+  grep -qx '  include_starter_assertions: false' "${config}"
+}
+
+@test "the end-to-end CI job, which runs pull request code, may only read the repository and keeps no credential" {
+  local ci="${REPO_ROOT}/.github/workflows/ci.yml" job
+  job="$(awk '/^  [a-z-]+:$/ { inside = ($1 == "end-to-end:") } inside' "${ci}")"
+  [ -n "${job}" ]
+  [ "$(grep -E '^      [a-z-]+: (read|write)' <<< "${job}")" = "      contents: read" ]
+  ! grep -q 'id-token' <<< "${job}" || false
+  [ "$(grep -c 'persist-credentials: false' <<< "${job}")" -eq "$(grep -c 'actions/checkout@' <<< "${job}")" ]
+}
+
+@test "the end-to-end CI job runs only when the runner can download the Iltero CLI's repository, and the check fails on an unexpected answer" {
+  local ci="${REPO_ROOT}/.github/workflows/ci.yml" job check
+  job="$(awk '/^  [a-z-]+:$/ { inside = ($1 == "end-to-end:") } inside' "${ci}")"
+  check="$(awk '/^  [a-z-]+:$/ { inside = ($1 == "cli-download:") } inside' "${ci}")"
+  grep -qx '    if: needs.cli-download.outputs.available == .true.' <<< "${job}"
+  ! grep -q 'continue-on-error' <<< "${job}" || false
+  grep -qx '    permissions: {}' <<< "${check}"
+  grep -q "%{http_code}' \"\${CLI_REPOSITORY}\")\"" <<< "${check}"
+  grep -qx '            200) echo "available=true" >> "${GITHUB_OUTPUT}" ;;' <<< "${check}"
+  grep -qx '            404)' <<< "${check}"
+  grep -qx '              echo "available=false" >> "${GITHUB_OUTPUT}"' <<< "${check}"
+  grep -qx '              exit 1' <<< "${check}"
+  grep -q '|| { echo "::error::Could not reach ${CLI_REPOSITORY}."; exit 1; }' <<< "${check}"
 }

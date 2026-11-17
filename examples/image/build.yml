@@ -1,7 +1,7 @@
-# Reference workflow for a team that builds a container image and records
-# its build with no Iltero account: .iltero/config.yml has no platform
-# section. A repository owner copies it into .github/workflows/ and replaces
-# the example values.
+# Reference workflow for a team that builds a container image and records its
+# build in a project not linked to Iltero Platform: its .iltero/config.yml has
+# no platform section. A repository owner copies it into .github/workflows/
+# and replaces the example values.
 #
 # A push to main runs three jobs, each with only the rights it needs:
 #   build  checks the CPU architectures in IMAGE_PLATFORMS, then builds
@@ -26,27 +26,32 @@
 #          record-image step. It also runs when the scan failed the workflow
 #          after it kept the reports, so the record lists the findings. The
 #          CLI records the image on the runner and sends nothing to Iltero.
-#          On the runner alone, no server verifies the commit the image was
-#          built from, so the assertion that reads that commit is undecided.
-#          The step sets advisory, so failed or undecided assertions, such
-#          as those on the scan's findings, do not stop the job: the record
-#          shows them.
+#          In a local check, no server verifies the commit the image was
+#          built from, so the assertion that reads that commit is undecided:
+#          the CLI has too little information to pass or fail it.
+#          The step sets fail-on-failed-assertions to false, so failed or
+#          undecided assertions, such as those on the scan's findings, do
+#          not stop the job: the record shows them.
 #          The step uploads the record as a workflow artifact.
 #
 # The build and scan jobs pass their files to the record job as artifacts,
 # kept for one day. The record-image step keeps each file it is given in the
 # image's record, byte for byte, and uploads the record as an artifact. The
 # repository's artifact retention setting decides how long GitHub keeps that
-# artifact. In a public repository, anyone can download these artifacts while
+# artifact. The record-image step's retention-days input sets a number of days
+# instead. In a public repository, anyone can download these artifacts while
 # GitHub keeps them, including the scan reports, which list the image's
 # vulnerabilities.
 #
-# The CLI refuses a file that holds a value the redaction policy would hide,
-# such as a secret a scanner found.
+# The CLI refuses a file that holds a value it hides from records, such as a
+# secret a scanner found.
 #
 # Values the owner replaces:
-#   the actions commit (40 hex characters), IMAGE_PLATFORMS and
-#   FAIL_ON_SCAN_SEVERITIES. The image name comes from the repository.
+#   the actions commit (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character ID of the iltero-actions commit you use,
+#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   IMAGE_PLATFORMS and FAIL_ON_SCAN_SEVERITIES. The image name comes from the
+#   repository.
 
 name: Iltero image
 
@@ -70,6 +75,7 @@ jobs:
   build:
     name: Build the image
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
       contents: read # build the source
       packages: write # push the image to the GitHub container registry
@@ -125,6 +131,7 @@ jobs:
     name: Scan the pushed image
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
       packages: read # pull the image from the GitHub container registry
     outputs:
@@ -183,6 +190,7 @@ jobs:
     # record lists the findings.
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.scan.outputs.report-kept == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
       contents: read # read .iltero/config.yml
     steps:
@@ -218,4 +226,4 @@ jobs:
           build-metadata: ${{ runner.temp }}/build/metadata.json
           image-index: ${{ runner.temp }}/build/index.json
           scan-reports: ${{ steps.scan-reports.outputs.lines }}
-          advisory: true
+          fail-on-failed-assertions: false

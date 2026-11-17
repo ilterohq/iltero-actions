@@ -1,6 +1,7 @@
 name: Iltero Setup
 description: >-
-  Install the Iltero CLI and its evaluator at pinned, checksum-verified versions.
+  Install the Iltero command-line tool (CLI) and its evaluator, the program that runs the assertions, at pinned,
+  checksum-verified versions.
 author: Iltero
 
 branding:
@@ -15,7 +16,7 @@ outputs:
     description: Absolute path of the Iltero CLI.
     value: ${{ steps.cli.outputs.cli-path }}
   evaluator-path:
-    description: Absolute path of the evaluator, the policy engine that runs the assertions.
+    description: Absolute path of the evaluator, the program that runs the assertions.
     value: ${{ steps.cli.outputs.evaluator-path }}
 
 runs:

@@ -32,7 +32,9 @@ ERROR_EXCERPT_CHARS = 300
 
 
 def fail(message: str) -> NoReturn:
-    print(f"::error::{message}", file=sys.stderr)
+    # Escaped as the shell scripts escape theirs, so the message cannot start another workflow command.
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::error::{escaped}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -59,9 +61,9 @@ def call(method: str, url: str, token: str, body: dict | None = None):
             return json.load(response)
     except urllib.error.HTTPError as error:
         if error.code in PERMISSION_STATUSES:
-            fail(f"GitHub refused the comment request with HTTP {error.code}. Check 'permissions: pull-requests: write'.")
+            fail("GitHub did not let the job's token post the comment. Grant the job 'permissions: pull-requests: write'.")
         answer = " ".join(error.read().decode(errors="replace").split())[:ERROR_EXCERPT_CHARS]
-        fail(f"GitHub refused the comment request with HTTP {error.code}: {answer}")
+        fail(f"GitHub refused to post the comment (HTTP status {error.code}): {answer or 'no reason given'}")
     except (urllib.error.URLError, TimeoutError) as error:
         fail(f"Could not reach GitHub: {getattr(error, 'reason', error)}.")
 
@@ -72,7 +74,9 @@ def find_comment(comments_url: str, token: str, marker: str) -> int | None:
     while True:
         comments = call("GET", f"{comments_url}?per_page={PAGE_SIZE}&page={page}", token)
         for comment in comments:
-            if comment["user"]["login"] == BOT_LOGIN and comment["body"].startswith(marker):
+            # GitHub can send a comment with no user or no body.
+            login = (comment.get("user") or {}).get("login")
+            if login == BOT_LOGIN and (comment.get("body") or "").startswith(marker):
                 return comment["id"]
         if len(comments) < PAGE_SIZE:
             return None

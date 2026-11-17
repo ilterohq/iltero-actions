@@ -11,24 +11,27 @@ branding:
 inputs:
   stage:
     description: >-
-      The stage to record: plan (after the build pushed the image, before any deployment uses it), pre_deploy
-      (before the deployment), post_deploy (after the deployment) or post_verify (after the rollout, a check of
-      what the workload's pods run). In a project linked to Iltero Platform, plan runs in the build run of the
-      application, and each deployment stage runs in the image deploy run of the application and the environment. On
-      pull_request events, only plan, checked locally and as advice: failed or undecided assertions do not fail the
-      step. record-image refuses pull request review events.
+      The stage to record: plan (after the build pushed the image, before any deployment uses it), pre_deploy (before
+      the deployment), post_deploy (after the deployment) or post_verify (after the rollout, a check of what the
+      workload's pods run). In a project linked to Iltero Platform, plan runs in the build run of the application, and
+      each deployment stage runs in the image deploy run of the application and the environment. On pull_request
+      events, record-image records only plan, and checks it locally and as advice: failed or undecided assertions do
+      not fail the step. An undecided assertion is one the CLI had too little information to pass or fail.
+      record-image refuses pull request review events.
     required: true
   image:
     description: >-
-      The image, by its digest. At plan, the image the build pushed: repository[:tag]@sha256:<digest>; a tag needs
-      build-metadata. At pre_deploy, the image to deploy, and at post_deploy, the image the deployment reports it
-      deployed: repository@sha256:<digest>, with no tag. Required at those three stages, and empty at post_verify.
+      The image, by its digest. At plan, the image the build pushed: repository[:tag]@sha256:<digest>. When the image
+      includes a tag, also give build-metadata. At pre_deploy, the image to deploy, and at post_deploy, the image the
+      deployment reports it deployed: repository@sha256:<digest>, with no tag. Required at those three stages, and
+      empty at post_verify.
     required: false
     default: ""
   application:
     description: >-
       The application key: the name Iltero Platform gives the application the image is of. Required at every stage in
-      a project linked to Iltero Platform, and empty in a project that is not. Not used on pull_request events.
+      a project linked to Iltero Platform, and empty in a project that is not. The action ignores it on pull_request
+      events.
     required: false
     default: ""
   environment:
@@ -62,8 +65,9 @@ inputs:
     default: ""
   attestation:
     description: >-
-      Plan only. The build's signed SLSA (Supply-chain Levels for Software Artifacts) provenance, as a Sigstore
-      bundle.
+      Plan only. The build's signed SLSA (Supply-chain Levels for Software Artifacts) provenance, which says how and
+      from what source the image was built. Give it as a Sigstore bundle: the provenance with the signature and
+      certificate that show who signed it.
     required: false
     default: ""
   test-reports:
@@ -79,8 +83,8 @@ inputs:
     default: ""
   cluster-id:
     description: >-
-      post_verify only. The cluster the workload runs on, by the uid of its kube-system namespace:
-      `kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'`.
+      post_verify only. The cluster the workload runs on, by the unique ID (uid) that Kubernetes gives the cluster's
+      kube-system namespace: `kubectl get namespace kube-system -o jsonpath='{.metadata.uid}'`.
     required: false
     default: ""
   workload-before-pods-listing:
@@ -109,38 +113,50 @@ inputs:
       workload-before-pods-listing.
     required: false
     default: ""
-  advisory:
+  fail-on-failed-assertions:
     description: >-
-      true or false. When true, failed or undecided assertions do not fail the step; the record still shows them.
-      Applies to plan and pre_deploy, in a project with no platform section only. At pre_deploy, the CLI always checks
-      that Iltero Platform accepted a build of the image for the environment. Only Iltero Platform accepts a build, so
-      in a project with no platform section, pre_deploy fails unless advisory is true. In a project linked to Iltero
-      Platform, the run's settings on Iltero Platform decide instead. pull_request events always check as advice.
+      true or false. When true, failed or undecided assertions fail the step. When false, they do not fail the step,
+      and the record still shows them. False applies to plan and pre_deploy only, in a project not linked to Iltero
+      Platform. At pre_deploy, the CLI always checks that Iltero Platform accepted a build of the image for the
+      environment. Only Iltero Platform accepts a build, so in a project not linked to Iltero Platform, pre_deploy
+      fails unless this input is false. In a linked project, the run's settings on Iltero Platform decide instead. On
+      pull_request events, failed or undecided assertions never fail the step.
     required: false
-    default: "false"
+    default: "true"
   records-directory:
     description: >-
-      Where the CLI keeps the records. Empty: a directory under the runner's temporary directory, one for builds and
-      one for each environment's deployments. A relative path is relative to working-directory. Never the records
-      directory of record-iac or deploy. Each deployment needs a records directory with no record of its unit. Every
-      stage after pre_deploy reads the record from it. When a later stage runs in a different job, download the records
-      artifact of the earlier job and pass its directory here.
+      Where the CLI keeps the records. When it is empty, the action uses a directory under the runner's temporary
+      directory, one for each working-directory's builds and one for each working-directory and environment's
+      deployments, so give every stage the same working-directory. A relative path is relative to working-directory.
+      Do not reuse the records directory of record-iac or deploy. Each deployment needs a records directory with no
+      record of its unit. Every stage after pre_deploy reads the record from it. When a later stage runs in a
+      different job, download the records artifact of the earlier job and pass its directory here.
     required: false
     default: ""
   store-records:
     description: >-
       true or false. When true, the CLI keeps the stage's record and every file it cites in the run's artifact store,
-      the bucket that Iltero Platform names for the run, with the job's own cloud credentials. At every stage, in a
-      project linked to Iltero Platform only. Not used on pull_request events. A failed store fails the step.
+      the bucket that Iltero Platform names for the run, with the job's own cloud credentials. Set it to true only in
+      a project linked to Iltero Platform, at any stage. It has no effect on pull_request events. A failed store
+      fails the step.
     required: false
     default: "false"
   artifact-name:
     description: >-
-      Name of the artifact that holds the records. Empty: iltero-image-records-<unit> for plan, and
-      iltero-image-deployment-records-<environment>-<unit> for a deployment stage. Each step replaces the artifact
-      with the records in records-directory. Image builds in the same pipeline run (on GitHub, the same workflow run)
-      need different unit values or different artifact names, and so do separate deployments of the same unit to the
-      same environment.
+      Name of the artifact that holds the records. The action adds -attempt-<attempt> to the name, where <attempt> is
+      the pipeline run's attempt number, so a re-run keeps the records of earlier attempts. When the input is empty, the name
+      is iltero-image-records-<unit>-attempt-<attempt> for plan, and
+      iltero-image-deployment-records-<environment>-<unit>-attempt-<attempt> for a deployment stage. The artifact-name
+      output gives the full name. Each step replaces the artifact with the records in records-directory. Image builds
+      in the same pipeline run (on GitHub, the same workflow run) need different unit values or different artifact
+      names, and so do separate deployments of the same unit to the same environment.
+    required: false
+    default: ""
+
+  retention-days:
+    description: >-
+      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the input is empty, the
+      repository's own artifact retention setting applies.
     required: false
     default: ""
 
@@ -158,6 +174,7 @@ runs:
     - name: Check the event and the job
       shell: bash
       env:
+        RETENTION_DAYS: ${{ inputs.retention-days }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         STAGE: ${{ inputs.stage }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/image/record.sh" check "${STAGE}"'
@@ -185,7 +202,7 @@ runs:
         RECORDS_DIRECTORY: ${{ inputs.records-directory }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         STORE_RECORDS: ${{ inputs.store-records }}
-        ADVISORY: ${{ inputs.advisory }}
+        FAIL_ON_FAILED_ASSERTIONS: ${{ inputs.fail-on-failed-assertions }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/image/record.sh" run "${STAGE}"'
 
     - name: Upload the records
@@ -194,5 +211,6 @@ runs:
       with:
         name: ${{ steps.record.outputs.artifact-name }}
         path: ${{ steps.record.outputs.records-directory }}
+        retention-days: ${{ inputs.retention-days }}
         if-no-files-found: warn
         overwrite: true

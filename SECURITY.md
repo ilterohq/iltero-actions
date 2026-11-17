@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Only the latest release receives security fixes. This repository has no release yet.
+Only the latest release receives security fixes. This repository has no release.
 
 ## Reporting a Vulnerability
 
@@ -16,7 +16,7 @@ Email **<security@iltero.io>** with:
 
 - A description of the vulnerability
 - Steps to reproduce the issue
-- Potential impact assessment
+- What an attacker could do with it
 - Any suggested fixes (optional)
 
 ### What to Expect

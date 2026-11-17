@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Checks each unit's plan locally, with no cloud credential. The CLI sends
-# nothing to the server. With REGISTRY_HOST set, terraform init alone gets a
+# nothing to the server. With REGISTRY_HOST set, the tool's init alone gets a
 # short-lived token to download modules from the private module registry.
 #
 # Usage:
@@ -17,13 +17,16 @@
 # Run from the stack's working directory. The units, and their order, are the
 # ones `iltero units list` prints, as for deploy and verify.
 #
-# A unit that reads other units' remote state can declare the variable
-# enable_remote_state_dependencies. It is then planned with that variable set
-# to false, without upstream state, and its result is labelled best effort.
-# A unit that cannot be planned without credentials is reported as not
-# evaluated, and the step fails.
+# A unit that reads other units' remote state can declare the tool's
+# remote-state switch, which the tool's adapter names. It is then planned with
+# the switch off,
+# without upstream state, and its result says it was planned without the
+# state of the units it reads.
+# A unit that cannot be planned is reported as not evaluated, and the step
+# fails.
 #
 # Environment:
+#   TOOL             The IaC tool the stack uses: one of SUPPORTED_TOOLS in lib/tool.sh.
 #   ENVIRONMENT      The environment to check against. Empty: the CLI finds it from the target branch.
 #   REGISTRY_HOST    The private module registry's host name. Empty: no registry token.
 
@@ -32,14 +35,13 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/common.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/cli-stages.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/stages.sh"
-source "$(dirname "${BASH_SOURCE[0]}")/lib/preview-providers.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/project.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/registry.sh"
-source "$(dirname "${BASH_SOURCE[0]}")/lib/terraform.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-credentials.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/guard.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/tool.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
 
-# The override file the action adds to a unit while it plans it.
-readonly OVERRIDE_FILE="zzz_iltero_preview_override.tf"
 # The longest comment the action writes. GitHub accepts up to 65536
 # characters; the rest is room for the comment action's marker.
 readonly COMMENT_MAX_CHARS=60000
@@ -57,7 +59,7 @@ cmd_check() {
   require_true_or_false upload-records "${UPLOAD_RECORDS:-}"
   cli_path > /dev/null
   if [[ -n "${REGISTRY_HOST:-}" ]]; then
-    registry_token_variable "${REGISTRY_HOST}" > /dev/null
+    check_registry_host "${REGISTRY_HOST}"
     [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]] \
       || die "The job cannot request its identity token for the module registry. Grant it 'permissions: id-token: write'. By default, GitHub gives no identity token to a pull request from a fork."
   fi
@@ -93,71 +95,19 @@ cmd_environment() {
   return "${status}"
 }
 
+# Sets PREVIEW_WORK_ROOT to the work folder of the stack in the current
+# folder. Each stack has its own, so two previews in one job keep their files
+# apart.
+set_preview_work_root() {
+  local temp stack
+  temp="$(runner_temp)" || exit 1
+  stack="$(stack_work_folder_name)" || die "The action could not name the stack's work folder."
+  readonly PREVIEW_WORK_ROOT="${temp}/iltero-preview/${stack}"
+}
+
 # Prints the directory that holds the pull request comment.
 comment_dir() {
-  echo "${RUNNER_TEMP}/iltero-preview/comment"
-}
-
-# Runs Terraform with the provider adapter's settings added to what
-# run_terraform keeps. Takes run_terraform's arguments.
-terraform_with_preview_settings() {
-  local work="$1"
-  shift
-  run_terraform "${work}" ${PREVIEW_PROVIDER_ENV[@]+"${PREVIEW_PROVIDER_ENV[@]}"} "$@"
-}
-
-# Plans one unit with no credentials. Writes tfplan and plan.json under WORK.
-# TOKEN_ENV, when given, is a NAME=VALUE that reaches only the init process.
-# Sets PLANNED_WITHOUT_UPSTREAM to true when the remote-state switch was off.
-# Returns non-zero, with the reason on stderr, when the unit cannot be planned.
-plan_unit() {
-  local dir="$1"
-  local work="$2"
-  local var_file="$3"
-  local token_env="${4:-}"
-  local override="${dir}/${OVERRIDE_FILE}"
-
-  [[ ! -e "${override}" ]] || { echo "The unit already has a file named ${OVERRIDE_FILE}." >&2; return 1; }
-  preview_override "${dir}" > "${work}/override.tf" || return 1
-  cp "${work}/override.tf" "${override}" || return 1
-
-  local args=(-input=false -refresh=false -lock=false -out="${work}/tfplan")
-  [[ ! -f "${var_file}" ]] || args+=(-var-file="${var_file}")
-  PLANNED_WITHOUT_UPSTREAM=false
-  if declares_remote_state_switch "${dir}"; then
-    # Set from a variables file, not -var: Terraform records a -var value in
-    # the plan as a string, and a file value as its own type. The file comes
-    # last, so it wins over the unit's variables file.
-    echo "${REMOTE_STATE_SWITCH} = false" > "${work}/without-upstream.tfvars"
-    args+=(-var-file="${work}/without-upstream.tfvars")
-    PLANNED_WITHOUT_UPSTREAM=true
-  fi
-
-  # Terraform writes a lock file when the unit has none. It is removed after,
-  # and a committed one is only read, so the checkout is left as it was.
-  local lock="${dir}/.terraform.lock.hcl"
-  local had_lock=false
-  local init_args=(-input=false -no-color)
-  if [[ -e "${lock}" ]]; then
-    had_lock=true
-    init_args+=(-lockfile=readonly)
-  fi
-
-  local status=0
-  (
-    cd "${dir}" || exit 1
-    terraform_with_preview_settings "${work}" ${token_env:+"${token_env}"} -- init "${init_args[@]}" \
-      > "${work}/terraform.log" 2>&1 \
-      && terraform_with_preview_settings "${work}" -- plan -no-color "${args[@]}" >> "${work}/terraform.log" 2>&1 \
-      && terraform_with_preview_settings "${work}" -- show -json "${work}/tfplan" > "${work}/plan.json" 2>> "${work}/terraform.log"
-  ) || status=$?
-  rm -f "${override}"
-  [[ "${had_lock}" == true ]] || rm -f "${lock}"
-  if [[ "${status}" -ne 0 ]]; then
-    cat "${work}/terraform.log" >&2
-    echo "Terraform could not plan the unit without credentials." >&2
-    return 1
-  fi
+  echo "${PREVIEW_WORK_ROOT}/comment"
 }
 
 # Writes TEXT as the pull request comment into DIR, with the commit and a link
@@ -188,6 +138,10 @@ write_result_comment() {
   if [[ "${#text}" -gt "${COMMENT_MAX_CHARS}" ]]; then
     text="$(cat "${summary}")"$'\n\n'"The CLI's output is too long for a comment."
   fi
+  # With very many units, the result table alone can be too long for a comment.
+  if [[ "${#text}" -gt "${COMMENT_MAX_CHARS}" ]]; then
+    text="$(head -n 1 "${summary}")"$'\n\n'"The result is too long for a comment."
+  fi
   write_comment "${dir}" "${text}"
 }
 
@@ -206,10 +160,19 @@ cmd_run() {
   RESULT_COMMENT_WRITTEN=false
   trap replace_comment_on_failure EXIT
   require_environment_name "${environment}"
-  work_root="${RUNNER_TEMP}/iltero-preview"
+  work_root="${PREVIEW_WORK_ROOT}"
   out="${work_root}/out"
+  # The action removes the records and unit files of an earlier preview, so
+  # none is taken for one this preview wrote. It keeps the comment, which the
+  # step that finds the environment wrote.
+  rm -rf "${out}" "${work_root}/units"
   summary="${work_root}/summary.md"
   mkdir -p "${out}"
+  # The action checks the unit list before it writes any output. When the
+  # list fails its checks, the step writes no output, and the upload step
+  # does not run.
+  local units="${work_root}/units.tsv"
+  list_checked_units "${units}"
   write_output records-directory "${out}"
 
   {
@@ -221,42 +184,46 @@ cmd_run() {
   local details="${work_root}/details.md"
   : > "${details}"
 
-  # Listed and checked before the loop, so a bad unit stops the step.
-  local units="${work_root}/units.tsv"
-  list_checked_units "${units}"
+  trust_paths "${out}" "${units}" "${summary}" "${details}"
 
-  local first_status=0 name dir work status result token_env var_file
+  local first_status=0 name dir work status result token_env
   while IFS=$'\t' read -r name dir; do
     work="${work_root}/units/${name}"
     # Each unit starts with an empty work directory, so no earlier output shows.
     rm -rf "${work}"
     mkdir -p "${work}"
     echo "::group::${name}"
-    # A fresh registry token for each init: it lives only a few minutes.
-    # Minted here, not in plan_unit, so a failure stops the step.
-    token_env=""
-    if [[ -n "${REGISTRY_HOST:-}" ]]; then
-      mint_registry_token "${REGISTRY_HOST}" || {
-        echo "::endgroup::"
-        exit 1
-      }
-      token_env="${REGISTRY_TOKEN_ENV}"
-      REGISTRY_TOKEN_ENV=""
-    fi
-    var_file="$(unit_var_file "${dir}" "${environment}")"
-    if ! plan_unit "${dir}" "${work}" "${var_file}" "${token_env}" 2> "${work}/reason.txt"; then
+    if ! tool_check_environment_settings "${dir}" "${environment}" 2> "${work}/reason.txt"; then
       print_untrusted "${work}/reason.txt" >&2
-      result="not evaluated: the plan could not be made without credentials"
+      result="not evaluated: the unit is not set up for this environment"
       [[ "${first_status}" -ne 0 ]] || first_status=1
     else
-      status=0
-      # A pull request's check stays local, never on the server, linked or not.
-      check_stage "${work}" plan --plan="${work}/plan.json" --saved-plan="${work}/tfplan" \
-        --environment="${environment}" --unit="${name}" --out="${out}" --local || status=$?
-      result="exit ${status}"
-      [[ "${PLANNED_WITHOUT_UPSTREAM}" != true ]] || result+=" (best effort: planned without upstream state)"
-      [[ "${status}" -eq 0 || "${first_status}" -ne 0 ]] || first_status="${status}"
-      append_details_block "${details}" "${name}" "${work}/plan.txt"
+      # A fresh registry token for each init: it lives only a few minutes.
+      # Minted here, not in tool_preview_plan, so a failure stops the step.
+      token_env=""
+      if [[ -n "${REGISTRY_HOST:-}" ]]; then
+        mint_registry_token "${REGISTRY_HOST}" || {
+          echo "::endgroup::"
+          exit 1
+        }
+        token_env="${REGISTRY_TOKEN_ENV}"
+        REGISTRY_TOKEN_ENV=""
+      fi
+      if ! tool_preview_plan "${work}" "${dir}" "${environment}" "${token_env}" 2> "${work}/reason.txt"; then
+        print_untrusted "${work}/reason.txt" >&2
+        result="not evaluated: the preview could not plan the unit"
+        [[ "${first_status}" -ne 0 ]] || first_status=1
+      else
+        status=0
+        # A pull request's check stays local, never on the server, linked or not.
+        check_stage "${work}" plan --plan="${work}/plan.json" --saved-plan="${work}/${TOOL_SAVED_PLAN_FILE}" \
+          --environment="${environment}" --unit="${name}" --out="${out}" --local || status=$?
+        result="$(check_result "${status}")"
+        [[ "${PLANNED_WITHOUT_UPSTREAM}" != true ]] \
+          || result+=" (planned without the state of the units it reads, so the result can differ after the merge)"
+        [[ "${status}" -eq 0 || "${first_status}" -ne 0 ]] || first_status="${status}"
+        append_details_block "${details}" "${name}" "${work}/plan.txt"
+      fi
     fi
     token_env=""
     echo "::endgroup::"
@@ -284,14 +251,21 @@ run_url() {
 main() {
   local command="${1:-}"
   shift || true
+  load_tool "${TOOL:-}"
+  # The tool gets only mock credentials. The adapter reads them.
+  # shellcheck disable=SC2034
+  readonly TOOL_ENVIRONMENT_PAIRS=(${PREVIEW_CREDENTIAL_ENV[@]+"${PREVIEW_CREDENTIAL_ENV[@]}"})
   case "${command}" in
     check) [[ $# -eq 1 ]] || die "Usage: iac/preview.sh check ARTIFACT_NAME"; cmd_check "$@" ;;
-    environment) cmd_environment ;;
-    run) [[ $# -eq 1 ]] || die "Usage: iac/preview.sh run ENVIRONMENT"; cmd_run "$@" ;;
+    environment) set_preview_work_root; cmd_environment ;;
+    run) [[ $# -eq 1 ]] || die "Usage: iac/preview.sh run ENVIRONMENT"; set_preview_work_root; cmd_run "$@" ;;
     *) die "Unknown command '${command}'. Use: check ARTIFACT_NAME | environment | run ENVIRONMENT" ;;
   esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  # A stop signal, such as the one stop_step sends, ends the step as failed,
+  # after any exit trap.
+  trap 'exit 143' TERM
   main "$@"
 fi

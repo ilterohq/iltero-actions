@@ -9,23 +9,24 @@
 # Run from the stack's working directory. In a project linked to the server,
 # the plan stage's check opens the run on the server for the pipeline run and
 # environment, each later stage joins it, and the deploy sends each stage's
-# record. A project with no platform section in .iltero/config.yml deploys
-# locally: no run, no upload and no pre-deploy stage.
+# record. A project not linked to the server deploys locally: no run, no
+# upload and no pre-deploy stage.
 #
 # For each unit, in the order `iltero units list` prints:
-#   1. terraform init, with a registry token when REGISTRY_HOST is set;
+#   1. the tool's init, with a registry token when REGISTRY_HOST is set;
 #   2. iltero state check, which refuses a unit that keeps its state in its
 #      working directory;
-#   3. terraform plan, saved, and its JSON;
+#   3. the tool's plan, saved, and its JSON;
 #   4. iltero iac check --stage plan;
 #   5. iltero iac check --stage pre_deploy (linked projects only);
-#   6. terraform apply of the saved plan;
+#   6. the tool's apply of the saved plan;
 #   7. the state after the apply, as JSON;
 #   8. iltero iac check --stage post_deploy, also after a failed apply.
 # The deploy stops at the first step that fails, and exits with its code.
 #
 # When every unit deployed, the deploy reads back twice each unit whose record
-# expects the post-verify stage, with a refresh-only plan, then runs
+# requires the post-verify stage, with the tool's reading of the deployed
+# resources, then runs
 #   9. iltero iac check --stage post_verify, from the two readings and the
 #      state file that the post-deploy stage checked.
 # The deploy takes every unit's first reading before any second reading, so
@@ -34,6 +35,7 @@
 # When WRITE_REPORT is true, the CLI also writes a report of each unit's record.
 #
 # Environment:
+#   TOOL            The IaC tool the stack uses: one of SUPPORTED_TOOLS in lib/tool.sh.
 #   REGISTRY_HOST   The private module registry's host name. Empty: no registry token.
 #   WRITE_REPORT    true or false. True: write a report of each unit's record.
 #   STORE_RECORDS   true or false. True: keep each stage's record in the run's artifact store.
@@ -48,20 +50,20 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-credentials.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/report.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/../lib/cli-stages.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/stages.sh"
-source "$(dirname "${BASH_SOURCE[0]}")/lib/terraform.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/guard.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/tool.sh"
 
 # The shortest time between a unit's two readings, which the deploy gives the
-# CLI. The deploy waits one second more, because the shell's clock and
-# Terraform's timestamps count whole seconds.
+# CLI. The deploy waits one second more, because the shell's clock and the
+# tool's timestamps count whole seconds.
 readonly READING_INTERVAL_SECONDS=60
-# How long a reading waits for the state lock.
-readonly READING_LOCK_TIMEOUT=5m
 
 cmd_check() {
   refuse_untrusted_event
-  refuse_pull_request
+  require_deploy_event
   [[ -z "${ARTIFACT_NAME:-}" ]] || check_artifact_name "${ARTIFACT_NAME}"
-  [[ -z "${REGISTRY_HOST:-}" ]] || registry_token_variable "${REGISTRY_HOST}" > /dev/null
+  require_retention_days
+  [[ -z "${REGISTRY_HOST:-}" ]] || check_registry_host "${REGISTRY_HOST}"
   cli_path > /dev/null
 }
 
@@ -74,16 +76,15 @@ require_project_permissions() {
   [[ "${linked}" == false ]] || require_id_token
 }
 
-# Runs Terraform with the cloud's credentials and TF_VAR_* values added to
-# what run_terraform keeps. Takes run_terraform's arguments.
-terraform_with_cloud_credentials() {
-  local work="$1"
-  shift
-  local kept=() name
-  for name in "${CLOUD_CREDENTIAL_ENV[@]}" $(compgen -e | grep '^TF_VAR_' || true); do
-    [[ -z "${!name+set}" ]] || kept+=("${name}=${!name}")
+# Fills TOOL_ENVIRONMENT_PAIRS with the cloud's credentials and the tool's
+# own input variables from the job's environment.
+pass_cloud_credentials() {
+  local name names
+  names="$(tool_input_variable_names)" || return 1
+  TOOL_ENVIRONMENT_PAIRS=()
+  for name in "${CLOUD_CREDENTIAL_ENV[@]}" ${names}; do
+    [[ -z "${!name+set}" ]] || TOOL_ENVIRONMENT_PAIRS+=("${name}=${!name}")
   done
-  run_terraform "${work}" ${kept[@]+"${kept[@]}"} "$@"
 }
 
 # Deploys one unit. Sets UNIT_RESULTS to its summary row cells. Returns the
@@ -96,103 +97,100 @@ deploy_unit() {
   local linked="$5"
   local out="$6"
   # A linked project's run is found by its stack and environment, at every stage.
-  local run_args=(--unit="${name}" --out="${out}" --environment="${environment}" ${SERVER_ARGS[@]+"${SERVER_ARGS[@]}"})
-  local plan_files=(--plan="${work}/plan.json" --saved-plan="${work}/tfplan")
+  local run_args=(--unit="${name}" --out="${out}" --environment="${environment}" ${SERVER_OPTIONS[@]+"${SERVER_OPTIONS[@]}"})
+  local saved_plan="${work}/${TOOL_SAVED_PLAN_FILE}"
+  local plan_files=(--plan="${work}/plan.json" --saved-plan="${saved_plan}")
   UNIT_RESULTS=("not run" "not run" "not run" "not run")
+  local tool_failed="${TOOL_DISPLAY_NAME} failed"
 
-  local backend_config var_file
-  backend_config="$(unit_backend_config "${dir}" "${environment}")"
-  var_file="$(unit_var_file "${dir}" "${environment}")"
-  local init_args=(-input=false -no-color -lockfile=readonly)
-  [[ ! -f "${backend_config}" ]] || init_args+=(-backend-config="${backend_config}")
-  local variable_args=()
-  [[ ! -f "${var_file}" ]] || variable_args+=(-var-file="${var_file}")
-  if declares_remote_state_switch "${dir}"; then
-    # Set from a variables file, not -var: Terraform records a -var value in
-    # the plan as a string. The file comes last, so it wins.
-    echo "${REMOTE_STATE_SWITCH} = true" > "${work}/with-upstream.tfvars" || return 1
-    variable_args+=(-var-file="${work}/with-upstream.tfvars")
+  local status=0
+  pause_commands
+  tool_check_environment_settings "${dir}" "${environment}" 2>&1 || status=$?
+  resume_commands
+  if [[ "${status}" -ne 0 ]]; then
+    UNIT_RESULTS[0]="not set up for this environment"
+    echo "::error::Unit '${name}' is not set up for environment '${environment}'. See the log."
+    return "${status}"
   fi
-  # The readings after the deploy use the same variables.
-  local arg
-  : > "${work}/variable-args"
-  for arg in ${variable_args[@]+"${variable_args[@]}"}; do
-    echo "${arg}" >> "${work}/variable-args"
-  done
-  local plan_args=(-input=false -no-color -out="${work}/tfplan" ${variable_args[@]+"${variable_args[@]}"})
 
   # A fresh registry token for each init: it lives only a few minutes.
-  local token_env=() status=0
+  local token_env=()
   if [[ -n "${REGISTRY_HOST:-}" ]]; then
     mint_registry_token "${REGISTRY_HOST}" || {
-      UNIT_RESULTS[0]="registry token failed"
+      UNIT_RESULTS[0]="could not get registry token"
       return 1
     }
     token_env=("${REGISTRY_TOKEN_ENV}")
     REGISTRY_TOKEN_ENV=""
   fi
   pause_commands
-  (
-    cd "${dir}" || exit 1
-    terraform_with_cloud_credentials "${work}" ${token_env[@]+"${token_env[@]}"} -- init "${init_args[@]}"
-  ) 2>&1 || status=$?
+  tool_deploy_init "${work}" "${dir}" "${environment}" ${token_env[@]+"${token_env[@]}"} 2>&1 || status=$?
   resume_commands
   token_env=()
   if [[ "${status}" -ne 0 ]]; then
-    UNIT_RESULTS[0]="terraform failed"
-    echo "::error::Terraform could not initialize unit '${name}'."
+    UNIT_RESULTS[0]="${tool_failed}"
+    echo "::error::${TOOL_DISPLAY_NAME} could not initialize unit '${name}'."
     return "${status}"
   fi
 
-  # Runs before the plan, so Terraform runs none of the unit's code until the
-  # check passes.
-  TF_DATA_DIR="$(terraform_data_dir "${work}")" state_check "${dir}" "${work}" || status=$?
+  # Runs before the plan, so no provider or data source of the unit runs until
+  # the check passes.
+  # The CLI finds the unit's tool data through the adapter's variables, one
+  # NAME=VALUE pair per line.
+  local state_check_env
+  state_check_env="$(tool_state_check_environment "${work}")" || return 1
+  (
+    while IFS= read -r pair; do
+      [[ -z "${pair}" ]] || export "${pair?}"
+    done <<< "${state_check_env}"
+    state_check "${dir}" "${work}"
+  ) || status=$?
   if [[ "${status}" -ne 0 ]]; then
-    UNIT_RESULTS[0]="state check exit ${status}"
+    UNIT_RESULTS[0]="state check failed"
     return "${status}"
   fi
 
   pause_commands
-  (
-    cd "${dir}" || exit 1
-    terraform_with_cloud_credentials "${work}" -- plan "${plan_args[@]}" \
-      && terraform_with_cloud_credentials "${work}" -- show -json "${work}/tfplan" > "${work}/plan.json"
-  ) 2>&1 || status=$?
+  tool_deploy_plan "${work}" "${dir}" "${environment}" 2>&1 || status=$?
   resume_commands
   if [[ "${status}" -ne 0 ]]; then
-    UNIT_RESULTS[0]="terraform failed"
-    echo "::error::Terraform could not plan unit '${name}'."
+    UNIT_RESULTS[0]="${tool_failed}"
+    echo "::error::${TOOL_DISPLAY_NAME} could not plan unit '${name}'."
     return "${status}"
   fi
+  # The saved plan and its JSON, which the CLI checks, are fingerprinted
+  # together, so the apply can confirm that neither changed after the check.
   local checked_plan
-  if ! checked_plan="$(file_digest "${work}/tfplan")" || [[ ! "${checked_plan}" =~ ${SHA256_PATTERN} ]]; then
+  if ! checked_plan="$(plan_digests "${work}")"; then
     UNIT_RESULTS[0]="plan unreadable"
     echo "::error::The saved plan of unit '${name}' could not be read."
     return 1
   fi
 
   check_stage "${work}" plan "${plan_files[@]}" "${run_args[@]}" || status=$?
-  UNIT_RESULTS[0]="exit ${status}"
+  UNIT_RESULTS[0]="$(check_result "${status}")"
   [[ "${status}" -eq 0 ]] || return "${status}"
 
   # Pre-deploy checks facts only the server holds, so it runs only in a
   # linked project.
   if [[ "${linked}" == true ]]; then
     check_stage "${work}" pre_deploy "${run_args[@]}" || status=$?
-    UNIT_RESULTS[1]="exit ${status}"
+    UNIT_RESULTS[1]="$(check_result "${status}")"
     [[ "${status}" -eq 0 ]] || return "${status}"
   else
     UNIT_RESULTS[1]="$(local_pre_deploy_result "${work}" "${out}" "${name}")" || status=$?
     if [[ "${status}" -ne 0 ]]; then
-      UNIT_RESULTS[1]="$(record_scope_failure "${status}")"
-      [[ -f "${out}/units/${name}/car.json" ]] || UNIT_RESULTS[1]="no record"
+      if [[ "${UNIT_RESULTS[1]}" != "${PRE_DEPLOY_CANNOT_RUN_RESULT}" ]]; then
+        UNIT_RESULTS[1]="$(record_scope_failure "${status}")"
+        [[ -f "${out}/units/${name}/car.json" ]] || UNIT_RESULTS[1]="no record"
+      fi
       return "${status}"
     fi
   fi
 
   # Only the plan that was checked is applied.
   local plan_to_apply
-  if ! plan_to_apply="$(file_digest "${work}/tfplan")"; then
+  if ! plan_to_apply="$(plan_digests "${work}")"; then
     UNIT_RESULTS[2]="plan unreadable"
     echo "::error::The saved plan of unit '${name}' could not be read, so the unit was not applied."
     return 1
@@ -205,27 +203,24 @@ deploy_unit() {
 
   local apply_status=0 show_status=0
   pause_commands
-  (
-    cd "${dir}" || exit 1
-    terraform_with_cloud_credentials "${work}" -- apply -input=false -json "${work}/tfplan" > "${work}/apply.ndjson"
-  ) 2>&1 || apply_status=$?
-  UNIT_RESULTS[2]="exit ${apply_status}"
-  (cd "${dir}" && terraform_with_cloud_credentials "${work}" -- show -json > "${work}/state.json") 2>&1 || show_status=$?
+  tool_apply "${work}" "${dir}" 2>&1 || apply_status=$?
+  UNIT_RESULTS[2]="applied"
+  [[ "${apply_status}" -eq 0 ]] || UNIT_RESULTS[2]="apply failed"
+  tool_read_state "${work}" "${dir}" 2>&1 || show_status=$?
   resume_commands
 
-  # The apply is recorded also when Terraform could not read the state after
+  # The apply is recorded also when the tool could not read the state after
   # it: the record then holds the apply log alone.
   local state_args=(--state="${work}/state.json")
   if [[ "${show_status}" -ne 0 ]]; then
-    echo "::error::Terraform could not read the state of unit '${name}' after the apply."
+    echo "::error::${TOOL_DISPLAY_NAME} could not read the state of unit '${name}' after the apply."
     state_args=(--state-unreadable)
   fi
 
   status=0
-  check_stage "${work}" post_deploy "${plan_files[@]}" --apply-log="${work}/apply.ndjson" \
+  check_stage "${work}" post_deploy "${plan_files[@]}" --apply-log="${work}/${TOOL_APPLY_LOG_FILE}" \
     "${state_args[@]}" "${run_args[@]}" || status=$?
-  UNIT_RESULTS[3]="exit ${status}"
-  [[ "${show_status}" -eq 0 ]] || UNIT_RESULTS[3]+=", state not read"
+  UNIT_RESULTS[3]="$(post_deploy_result "${status}" "${show_status}")"
   # The apply's own failure comes first, then the CLI's code.
   [[ "${apply_status}" -eq 0 ]] || return "${apply_status}"
   return "${status}"
@@ -240,34 +235,17 @@ with open(sys.argv[1], "rb") as data:
 ' "$1"
 }
 
-# Takes a reading of the deployed resources of the unit in DIR into FILE, as
-# JSON: a refresh-only plan, saved in the unit's work folder WORK and never
-# applied. Applying it would write what it read into the state, so drift would
-# no longer show.
-take_reading() {
-  local dir="$1"
-  local work="$2"
-  local file="$3"
-  local saved
-  saved="${work}/reading-$(basename "${file%.json}").tfplan"
-  local variable_args=() line status=0
-  while IFS= read -r line; do
-    variable_args+=("${line}")
-  done < "${work}/variable-args"
-  pause_commands
-  (
-    cd "${dir}" || exit 1
-    terraform_with_cloud_credentials "${work}" -- plan -input=false -no-color -refresh-only \
-      -lock-timeout="${READING_LOCK_TIMEOUT}" -out="${saved}" ${variable_args[@]+"${variable_args[@]}"} \
-      && terraform_with_cloud_credentials "${work}" -- show -json "${saved}" > "${file}"
-  ) 2>&1 || status=$?
-  resume_commands
-  # A reading Terraform did not finish is not kept.
-  [[ "${status}" -eq 0 ]] || rm -f "${file}"
-  return "${status}"
+# Prints the SHA-256 digests of the saved plan in WORK and of its JSON, on one
+# line. Fails unless both files can be read.
+plan_digests() {
+  local work="$1"
+  local saved json
+  saved="$(file_digest "${work}/${TOOL_SAVED_PLAN_FILE}")" && [[ "${saved}" =~ ${SHA256_PATTERN} ]] || return 1
+  json="$(file_digest "${work}/plan.json")" && [[ "${json}" =~ ${SHA256_PATTERN} ]] || return 1
+  echo "${saved} ${json}"
 }
 
-# Runs the post-verify stage for each deployed unit whose record expects it.
+# Runs the post-verify stage for each deployed unit whose record requires it.
 # The units are UNIT_NAMES and UNIT_DIRS. Sets POST_VERIFY_RESULTS to each
 # unit's summary cell. A failed unit does not stop the others. Returns the
 # code of the first step that failed.
@@ -276,19 +254,19 @@ post_verify_units() {
   local out="$2"
   local environment="$3"
   local readings="${work_root}/readings"
-  local i name work expects in_scope=() first_done=() status=0 first_status=0 wait_seconds
+  local i name work required in_scope=() first_done=() status=0 first_status=0 wait_seconds
   POST_VERIFY_RESULTS=()
   for i in "${!UNIT_NAMES[@]}"; do
-    POST_VERIFY_RESULTS[i]="not in scope"
+    POST_VERIFY_RESULTS[i]="not required"
     status=0
-    expects="$(record_expects_stage "${work_root}/units/${UNIT_NAMES[i]}" "${out}" "${UNIT_NAMES[i]}" post_verify)" \
+    required="$(record_requires_stage "${work_root}/units/${UNIT_NAMES[i]}" "${out}" "${UNIT_NAMES[i]}" post_verify)" \
       || status=$?
     if [[ "${status}" -ne 0 ]]; then
       POST_VERIFY_RESULTS[i]="$(record_scope_failure "${status}")"
       [[ "${first_status}" -ne 0 ]] || first_status="${status}"
       continue
     fi
-    [[ "${expects}" == true ]] || continue
+    [[ "${required}" == true ]] || continue
     POST_VERIFY_RESULTS[i]="not run"
     in_scope+=("${i}")
   done
@@ -298,12 +276,14 @@ post_verify_units() {
     mkdir -p "${readings}/${name}" || return 1
     status=0
     echo "::group::${name}: first reading"
-    take_reading "${UNIT_DIRS[i]}" "${work_root}/units/${name}" "${readings}/${name}/first.json" || status=$?
+    pause_commands
+    tool_take_reading "${work_root}/units/${name}" "${UNIT_DIRS[i]}" "${readings}/${name}/first.json" 2>&1 || status=$?
+    resume_commands
     echo "::endgroup::"
     first_done[i]="${SECONDS}"
     if [[ "${status}" -ne 0 ]]; then
-      POST_VERIFY_RESULTS[i]="terraform failed"
-      echo "::error::Terraform could not read back unit '${name}'."
+      POST_VERIFY_RESULTS[i]="${TOOL_DISPLAY_NAME} failed"
+      echo "::error::${TOOL_DISPLAY_NAME} could not read the deployed resources of unit '${name}'."
       [[ "${first_status}" -ne 0 ]] || first_status="${status}"
     fi
   done
@@ -320,19 +300,21 @@ post_verify_units() {
     fi
     status=0
     echo "::group::${name}: second reading and post-verify"
-    take_reading "${UNIT_DIRS[i]}" "${work}" "${readings}/${name}/second.json" || status=$?
+    pause_commands
+    tool_take_reading "${work}" "${UNIT_DIRS[i]}" "${readings}/${name}/second.json" 2>&1 || status=$?
+    resume_commands
     if [[ "${status}" -ne 0 ]]; then
-      POST_VERIFY_RESULTS[i]="terraform failed"
-      echo "::error::Terraform could not read back unit '${name}'."
+      POST_VERIFY_RESULTS[i]="${TOOL_DISPLAY_NAME} failed"
+      echo "::error::${TOOL_DISPLAY_NAME} could not read the deployed resources of unit '${name}'."
     else
-      local run_args=(--unit="${name}" --out="${out}" --environment="${environment}" ${SERVER_ARGS[@]+"${SERVER_ARGS[@]}"})
+      local run_args=(--unit="${name}" --out="${out}" --environment="${environment}" ${SERVER_OPTIONS[@]+"${SERVER_OPTIONS[@]}"})
       # Post-verify also gets the state file that the post-deploy stage checked.
       # The CLI confirms it is the same file, and reads it only for the checks
       # that the plan stage left until after the apply.
       check_stage "${work}" post_verify --refresh-plan="${readings}/${name}/first.json" \
         --refresh-plan="${readings}/${name}/second.json" --state="${work}/state.json" \
         --minimum-interval-seconds="${READING_INTERVAL_SECONDS}" "${run_args[@]}" || status=$?
-      POST_VERIFY_RESULTS[i]="exit ${status}"
+      POST_VERIFY_RESULTS[i]="$(check_result "${status}")"
     fi
     echo "::endgroup::"
     [[ "${status}" -eq 0 || "${first_status}" -ne 0 ]] || first_status="${status}"
@@ -347,15 +329,26 @@ cmd_run() {
   report="$(report_enabled)"
   linked="$(project_linked)"
   require_project_permissions "${linked}"
-  set_server_args "${linked}"
-  # Each environment has its own work folder, so two deploys in one job keep
-  # their records apart.
-  local work_root="${RUNNER_TEMP}/iltero-deploy/${environment}"
+  set_server_options "${linked}"
+  pass_cloud_credentials || die "The action could not read the tool's input variables."
+  readonly TOOL_ENVIRONMENT_PAIRS
+  # Each environment and stack has its own work folder, so two deploys in one
+  # job keep their records apart. The action empties the folder first, so a
+  # record left by an earlier deploy is never taken for one this deploy wrote.
+  local temp stack work_root
+  temp="$(runner_temp)" || exit 1
+  stack="$(stack_work_folder_name)" || die "The action could not name the stack's work folder."
+  work_root="${temp}/iltero-deploy/${environment}/${stack}"
+  rm -rf "${work_root}"
   local out="${work_root}/out" artifact
   artifact="$(artifact_name "${ARTIFACT_NAME:-}" "iltero-deploy-${environment}")"
   local units="${work_root}/units.tsv"
   local reports="${work_root}/reports"
   mkdir -p "${out}" "${work_root}/readings"
+  # The action checks the unit list before it writes any output. When the
+  # list fails its checks, the step writes no output, and the upload steps
+  # do not run.
+  list_checked_units "${units}"
   write_output records-directory "${out}"
   write_output artifact-name "${artifact}"
   write_output readings-directory "${work_root}/readings"
@@ -363,8 +356,6 @@ cmd_run() {
     mkdir -p "${reports}"
     write_output report-directory "${reports}"
   fi
-
-  list_checked_units "${units}"
 
   local summary="${work_root}/summary.md" details="${work_root}/details.md"
   {
@@ -374,12 +365,12 @@ cmd_run() {
     echo "| --- | --- | --- | --- | --- | --- |"
   } > "${summary}"
   : > "${details}"
+  trust_paths "${out}" "${units}" "${summary}" "${details}"
 
   local name dir work status=0 failed_unit="" verify_failed=false stage report_missing=0 i rows=()
   UNIT_NAMES=() UNIT_DIRS=() POST_VERIFY_RESULTS=()
   while IFS=$'\t' read -r name dir; do
     work="${work_root}/units/${name}"
-    rm -rf "${work}" "${work_root}/readings/${name}"
     mkdir -p "${work}"
     echo "::group::${name}"
     deploy_unit "${name}" "${dir}" "${work}" "${environment}" "${linked}" "${out}" || status=$?
@@ -407,7 +398,7 @@ cmd_run() {
     fi
     for stage in state-check plan in-scope-pre_deploy pre_deploy post_deploy in-scope-post_verify post_verify; do
       [[ -f "${work}/${stage}.txt" ]] || continue
-      append_details_block "${details}" "${name}: ${stage//_/-}" "${work}/${stage}.txt"
+      append_details_block "${details}" "${name}: $(details_title "${stage}")" "${work}/${stage}.txt"
     done
     if [[ "${report}" == true && -f "${out}/units/${name}/car.json" ]]; then
       write_report "${name}" "${out}/units/${name}" "${reports}" "${details}" "${work}/report.txt" || report_missing=1
@@ -440,6 +431,7 @@ cmd_run() {
 main() {
   local command="${1:-}"
   shift || true
+  load_tool "${TOOL:-}"
   case "${command}" in
     check) cmd_check ;;
     run) [[ $# -eq 1 ]] || die "Usage: iac/deploy.sh run ENVIRONMENT"; cmd_run "$@" ;;
@@ -448,5 +440,8 @@ main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  # A stop signal, such as the one stop_step sends, ends the step as failed,
+  # after any exit trap.
+  trap 'exit 143' TERM
   main "$@"
 fi

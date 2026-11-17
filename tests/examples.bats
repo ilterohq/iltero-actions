@@ -201,33 +201,47 @@ job_permissions() {
   [ "$(awk '/^  comment:$/ { inside = 1; next } /^  [a-z-]+:$/ { inside = 0 } inside && /uses:/ { sub(/.*uses: /, ""); sub(/@.*/, ""); print }' "${REPO_ROOT}/examples/iac/preview.yml")" = "ilterohq/iltero-actions/comment" ]
 }
 
+# Prints "<close job> <needs> <job-level if>" for each job of FILE whose name
+# matches PATTERN.
+close_jobs() {
+  awk -v pattern="$2" '
+    function flush() { if (job ~ pattern) print job, needs, (cond == "" ? "-" : cond); job = ""; needs = ""; cond = "" }
+    /^  [a-z-]+:$/ { flush(); job = $1; sub(/:$/, "", job); next }
+    /^    needs: / { needs = $2 }
+    /^    if: / { cond = $0; sub(/^    if: /, "", cond) }
+    END { flush() }
+  ' "$1"
+}
+
 @test "the governed workflows close each run only after its deploy job succeeded" {
-  local jobs
-  # Prints "<close job> <needs> <job-level if, or ->" for each close job.
-  jobs="$(awk '
-    function flush() { if (job ~ /^close-/) print job, needs, (cond == "" ? "-" : cond); job = ""; needs = ""; cond = "" }
-    /^  [a-z-]+:$/ { flush(); job = $1; sub(/:$/, "", job); next }
-    /^    needs: / { needs = $2 }
-    /^    if: / { cond = $0 }
-    END { flush() }
-  ' "${REPO_ROOT}/examples/iac/governed-deploy.yml")"
-  [ "${jobs}" = "$(printf '%s\n' 'close-staging deploy-staging -' 'close-production deploy-production -')" ]
-  jobs="$(awk '
-    function flush() { if (job == "close") print job, needs, (cond == "" ? "-" : cond); job = ""; needs = ""; cond = "" }
-    /^  [a-z-]+:$/ { flush(); job = $1; sub(/:$/, "", job); next }
-    /^    needs: / { needs = $2 }
-    /^    if: / { cond = $0 }
-    END { flush() }
-  ' "${REPO_ROOT}/examples/iac/governed-own-terraform.yml")"
-  [ "${jobs}" = "close deploy -" ]
-  jobs="$(awk '
-    function flush() { if (job == "close") print job, needs, (cond == "" ? "-" : cond); job = ""; needs = ""; cond = "" }
-    /^  [a-z-]+:$/ { flush(); job = $1; sub(/:$/, "", job); next }
-    /^    needs: / { needs = $2 }
-    /^    if: / { cond = $0 }
-    END { flush() }
-  ' "${REPO_ROOT}/examples/image/governed-deployment.yml")"
-  [ "${jobs}" = "close deploy -" ]
+  [ "$(close_jobs "${REPO_ROOT}/examples/iac/governed-deploy.yml" '^close-')" = "$(printf '%s\n' \
+    'close-staging deploy-staging -' 'close-production deploy-production -')" ]
+  local file
+  for file in examples/iac/governed-own-terraform.yml examples/image/governed-deployment.yml; do
+    [ "$(close_jobs "${REPO_ROOT}/${file}" '^close$')" = "close deploy -" ]
+  done
+}
+
+# Prints "<job id>: <timeout-minutes>" for each job of FILE.
+job_time_limits() {
+  awk '/^  [a-z-]+:$/ { job = $1; sub(/:$/, "", job) } /^    timeout-minutes: / { print job ": " $2 }' "$1"
+}
+
+@test "every example job has a time limit: 180 minutes to deploy, 10 to close or comment, 60 otherwise" {
+  local file line job limit expected
+  for file in "${REPO_ROOT}"/examples/*/*.yml; do
+    [ "$(grep -c '^    runs-on:' "${file}")" -eq "$(job_time_limits "${file}" | wc -l)" ]
+    while IFS= read -r line; do
+      job="${line%: *}"
+      limit="${line##*: }"
+      case "${job}" in
+        close* | comment) expected=10 ;;
+        deploy*) expected=180 ;;
+        *) expected=60 ;;
+      esac
+      [ "${limit}" -eq "${expected}" ] || { echo "${file}: ${line}"; false; }
+    done < <(job_time_limits "${file}")
+  done
 }
 
 # The two own-Terraform examples: with no account, and in a governed run.
@@ -267,7 +281,7 @@ header_text() {
 @test "the examples that deploy Terraform with no account tell the owner to list pre_deploy as out of scope" {
   local file
   for file in iac/deploy.yml iac/own-terraform.yml; do
-    header_text "${REPO_ROOT}/examples/${file}" | grep -qF 'list pre_deploy under stages.out_of_scope in .iltero/config.yml'
+    header_text "${REPO_ROOT}/examples/${file}" | grep -qF 'List pre_deploy under stages.out_of_scope in .iltero/config.yml'
   done
 }
 
@@ -328,7 +342,7 @@ deployment_examples() {
   for example in $(own_terraform_examples); do
     version="$(grep -A2 'hashicorp/setup-terraform@' "${example}" | awk '$1 == "terraform_version:" { print $2 }')"
     [ -n "${version}" ]
-    grep -qE "^[0-9a-f]{64}  terraform_${version}_linux_amd64\.zip$" "${REPO_ROOT}/scripts/iac/terraform.sha256"
+    grep -qE "^[0-9a-f]{64}  terraform_${version}_linux_amd64\.zip$" "${REPO_ROOT}/scripts/iac/tools/terraform/checksums.sha256"
   done
 }
 
@@ -364,10 +378,11 @@ deployment_examples() {
 @test "each own-Terraform example keeps Terraform's files out of the checked-out repository" {
   local example
   for example in $(own_terraform_examples); do
-    ! grep -E -- '-out=|> ' "${example}" | grep -v RUNNER_TEMP || false
+    # Command lines only: a comment may show a path pattern such as <prefix>.
+    ! grep -vE '^ *#' "${example}" | grep -E -- '-out=|> ' | grep -v RUNNER_TEMP || false
     ! grep -E '^          (plan|saved-plan|apply-log|state): ' "${example}" | grep -v 'runner.temp' || false
-    grep -q '^          refresh-plans: |$' "${example}"
-    ! grep -A2 '^          refresh-plans: |$' "${example}" | tail -n +2 | grep -v 'runner.temp' || false
+    grep -q '^          refresh-only-plans: |$' "${example}"
+    ! grep -A2 '^          refresh-only-plans: |$' "${example}" | tail -n +2 | grep -v 'runner.temp' || false
   done
 }
 
@@ -606,12 +621,12 @@ SH
 }
 
 @test "the image build example with no account checks the build as advice, since a local check cannot confirm its commit" {
-  grep -A7 'iltero-actions/record-image@' "${REPO_ROOT}/examples/image/build.yml" | grep -qx '          advisory: true'
-  [ "$(grep -c '^          advisory: true$' "${REPO_ROOT}/examples/image/build.yml")" -eq 1 ]
+  grep -A7 'iltero-actions/record-image@' "${REPO_ROOT}/examples/image/build.yml" | grep -qx '          fail-on-failed-assertions: false'
+  [ "$(grep -c '^          fail-on-failed-assertions: false$' "${REPO_ROOT}/examples/image/build.yml")" -eq 1 ]
 }
 
 @test "the governed image build example never checks as advice, since the run decides" {
-  ! grep -q 'advisory:' "${REPO_ROOT}/examples/image/governed-build.yml" || false
+  ! grep -q 'fail-on-failed-assertions:' "${REPO_ROOT}/examples/image/governed-build.yml" || false
 }
 
 @test "each image build example gives the build the job's token only in a private repository" {
@@ -716,8 +731,8 @@ deployment_order() {
 }
 
 @test "the deployment example checks the pre-deploy gate as advice, since a local record reads no approvals" {
-  grep -A5 'iltero-actions/record-image@' "${REPO_ROOT}/examples/image/deployment.yml" | grep -qx '          advisory: true'
-  [ "$(grep -c '^          advisory: true$' "${REPO_ROOT}/examples/image/deployment.yml")" -eq 1 ]
+  grep -A5 'iltero-actions/record-image@' "${REPO_ROOT}/examples/image/deployment.yml" | grep -qx '          fail-on-failed-assertions: false'
+  [ "$(grep -c '^          fail-on-failed-assertions: false$' "${REPO_ROOT}/examples/image/deployment.yml")" -eq 1 ]
 }
 
 @test "the deployment examples read the workload, its pods, its ReplicaSets and the workload again, in that order" {
@@ -784,7 +799,7 @@ deployment_order() {
 }
 
 @test "the governed deployment example never checks as advice, since the run decides" {
-  ! grep -q 'advisory:' "${REPO_ROOT}/examples/image/governed-deployment.yml" || false
+  ! grep -q 'fail-on-failed-assertions:' "${REPO_ROOT}/examples/image/governed-deployment.yml" || false
 }
 
 @test "the governed deployment example closes the image deploy run of its application and environment" {
@@ -792,4 +807,52 @@ deployment_order() {
   close="$(grep -A3 'iltero-actions/close@' "${REPO_ROOT}/examples/image/governed-deployment.yml")"
   grep -qxF '          application: ${{ env.APPLICATION }}' <<< "${close}"
   grep -qx '          environment: production' <<< "${close}"
+}
+
+@test "the examples that run Terraform themselves use the committed lock file" {
+  local example file
+  for example in own-terraform governed-own-terraform; do
+    file="${REPO_ROOT}/examples/iac/${example}.yml"
+    # Each command line that runs terraform init, leaving out comment lines.
+    grep -qE "^ +terraform init" "${file}"
+    ! grep -E "^ +terraform init" "${file}" | grep -vqF -- "-lockfile=readonly" || false
+  done
+}
+
+@test "the image deployment examples deploy only an image named by its digest, checked before any record" {
+  local example file check record
+  for example in deployment governed-deployment; do
+    file="${REPO_ROOT}/examples/image/${example}.yml"
+    check="$(grep -n "name: Check that the image is named by its digest" "${file}" | cut -d: -f1)"
+    record="$(grep -n "stage: pre_deploy" "${file}" | cut -d: -f1)"
+    [ -n "${check}" ]
+    [ -n "${record}" ]
+    [ "${check}" -lt "${record}" ]
+  done
+}
+
+@test "the image digest check accepts a digest reference and refuses a tag" {
+  local file="${REPO_ROOT}/examples/image/deployment.yml" pattern digest
+  pattern="$(sed -n 's/.*\[\[ "\${IMAGE}" =~ \(.*\) \]\] \\$/\1/p' "${file}" | head -n 1)"
+  [ -n "${pattern}" ]
+  grep -qF "=~ ${pattern} ]]" "${REPO_ROOT}/examples/image/governed-deployment.yml"
+  digest="$(printf 'a%.0s' {1..64})"
+  [[ "registry.example.com/acme/api@sha256:${digest}" =~ ${pattern} ]]
+  [[ "registry.example.com:5000/acme/api@sha256:${digest}" =~ ${pattern} ]]
+  [[ "api@sha256:${digest}" =~ ${pattern} ]]
+  ! [[ "registry.example.com/acme/api:v1@sha256:${digest}" =~ ${pattern} ]] || false
+  ! [[ "registry.example.com/acme/api:v1" =~ ${pattern} ]] || false
+  ! [[ "api@sha256:$(printf 'A%.0s' {1..64})" =~ ${pattern} ]] || false
+  ! [[ "api@sha256:${digest}"$'\n' =~ ${pattern} ]] || false
+}
+
+@test "each own-Terraform example gives the post-verify stage the same state file as the post-deploy stage" {
+  local example post_deploy post_verify
+  for example in $(own_terraform_examples); do
+    post_deploy="$(awk '/stage: post_deploy/ { inside = 1 } inside && /^          state: / { print; exit }' "${example}")"
+    post_verify="$(awk '/stage: post_verify/ { inside = 1 } inside && /^          state: / { print; exit }' "${example}")"
+    [[ "${post_deploy}" == *"{0}/network-state.json"* ]]
+    [ "${post_verify}" = '          state: ${{ runner.temp }}/network-state.json' ]
+    grep -qF 'terraform show -json > "${RUNNER_TEMP}/network-state.json"' "${example}"
+  done
 }

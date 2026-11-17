@@ -1,20 +1,23 @@
 # Reference workflow for a stack linked to Iltero Platform. A repository owner
 # copies it into .github/workflows/ and replaces the example values.
 #
-# A push to an environment's branch deploys that environment in a governed run:
-# the deploy job plans, checks, applies and records each unit in order. For
-# each unit whose record expects the post-verify stage, it then checks that
-# the deployed resources still match what the apply left. The plan stage's
-# check opens the run on Iltero Platform, and each later stage joins it.
-# The close job closes the run when the deploy job succeeded. A run whose
+# A push to an environment's branch deploys that environment in a governed
+# run: the deploy job plans, checks, applies and records each unit in order.
+# For each unit whose record requires the post-verify stage, it then checks
+# that the deployed resources still match what the apply left. The plan
+# stage's check opens the run on Iltero Platform, and each later stage joins
+# it. The close job closes the run when the deploy job succeeded. A run whose
 # deploy failed or was cancelled stays open, so a re-run of the failed job
 # joins it.
 #
 # Values the owner replaces:
-#   the actions commit (40 hex characters), each environment's name, branch,
-#   GitHub deployment environment, deploy role's Amazon Resource Name (ARN)
-#   and region, and ILTERO_API_URL. The stack comes from the platform
-#   section of .iltero/config.yml.
+#   the actions commit (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character ID of the iltero-actions commit you use,
+#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   each environment's name, branch, GitHub deployment environment, deploy
+#   role's Amazon Resource Name (ARN) and region, and ILTERO_API_URL, which
+#   must be the same address as platform.api_url in .iltero/config.yml. The
+#   stack comes from the platform section of .iltero/config.yml.
 
 name: Iltero
 
@@ -33,6 +36,8 @@ jobs:
     name: Deploy staging
     if: github.ref == 'refs/heads/staging'
     runs-on: ubuntu-24.04
+    # Set this above the time the slowest apply takes.
+    timeout-minutes: 180
     environment: staging
     concurrency:
       group: iltero-staging
@@ -60,6 +65,7 @@ jobs:
     name: Close staging
     needs: deploy-staging
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     concurrency:
       group: iltero-close-staging
       cancel-in-progress: false
@@ -79,6 +85,8 @@ jobs:
     name: Deploy production
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    # Set this above the time the slowest apply takes.
+    timeout-minutes: 180
     environment: production
     concurrency:
       group: iltero-production
@@ -106,6 +114,7 @@ jobs:
     name: Close production
     needs: deploy-production
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     concurrency:
       group: iltero-close-production
       cancel-in-progress: false

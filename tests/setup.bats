@@ -31,11 +31,17 @@ cli_release() {
   export INSTALLED_SCHEMAS_COMMIT="${SCHEMAS_COMMIT}"
   export PIP_EXIT=0
   export DOCTOR_EXIT=0
+  export PIP_CHECK_EXIT=0
   stub python3 '
 [[ "$1 $2 $3" == "-I -m venv" ]] || exit 99
 mkdir -p "$4/bin"
 cat > "$4/bin/python" << "EOF"
 #!/bin/bash
+if [[ "$1 $2 $3 $4" == "-I -m pip check" ]]; then
+  echo "pip $*" >> "${STUB_LOG}"
+  echo "iltero 1.0 requires typer, which is not installed."
+  exit "${PIP_CHECK_EXIT}"
+fi
 if [[ "$1 $2 $3" == "-I -m pip" ]]; then
   echo "pip $*" >> "${STUB_LOG}"
   echo "pip failure detail"
@@ -61,6 +67,12 @@ chmod +x "$4/bin/python" "$4/bin/iltero"'
 }
 
 # --- check -------------------------------------------------------------------
+
+@test "check_result says passed only for a literal 0" {
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; check_result 0; check_result 3; check_result ''; check_result abc"
+  [ "${status}" -eq 0 ]
+  [ "${output}" == $'passed\nfailed\nfailed\nfailed' ]
+}
 
 @test "check refuses pull_request_target events" {
   GITHUB_EVENT_NAME=pull_request_target run "${SETUP}" check
@@ -154,6 +166,14 @@ chmod +x "$4/bin/python" "$4/bin/iltero"'
   [[ "${output}" == *"Installing the Iltero CLI failed"* ]]
 }
 
+@test "cli reads a pins file whose last line has no newline" {
+  cli_release
+  printf 'iltero-schemas %s\niltero-cli %s' "${SCHEMAS_COMMIT}" "${CLI_COMMIT}" > "${GITHUB_ACTION_PATH}/cli-sources.txt"
+  run "${SETUP}" cli
+  [ "${status}" -eq 0 ]
+  grep -q "iltero-cli.git@${CLI_COMMIT}" "${STUB_LOG}"
+}
+
 @test "cli refuses an installed CLI from another commit" {
   cli_release
   INSTALLED_COMMIT="3333333333333333333333333333333333333333" run "${SETUP}" cli
@@ -166,6 +186,22 @@ chmod +x "$4/bin/python" "$4/bin/iltero"'
   INSTALLED_SCHEMAS_COMMIT="4444444444444444444444444444444444444444" run "${SETUP}" cli
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"The installed iltero-schemas is commit '4444444444444444444444444444444444444444', not the pinned"* ]]
+}
+
+@test "cli refuses locked packages that do not match what the pinned CLI needs, and shows pip's reason" {
+  cli_release
+  PIP_CHECK_EXIT=1 run "${SETUP}" cli
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"iltero 1.0 requires typer, which is not installed."* ]]
+  [[ "${output}" == *"This release of the actions locks packages that do not match its pinned Iltero CLI. A maintainer must run scripts/lock-cli.py for the pinned commits."* ]]
+  ! grep -q "doctor" "${STUB_LOG}" || false
+}
+
+@test "cli checks the installed packages" {
+  cli_release
+  run "${SETUP}" cli
+  [ "${status}" -eq 0 ]
+  grep -q "^pip -I -m pip check" "${STUB_LOG}"
 }
 
 @test "cli refuses an evaluator that does not match the contract's pin" {
@@ -187,20 +223,20 @@ chmod +x "$4/bin/python" "$4/bin/iltero"'
   cli_release
   PIN_LINE="v1.20.2 opa_linux_amd64_static ${OPA_SHA} extra" run "${SETUP}" cli
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The evaluator pin the Iltero CLI reports is malformed."* ]]
+  [[ "${output}" == *"The Iltero CLI did not name the evaluator release to download as one line with a version, a file name and a SHA-256 digest."* ]]
   PIN_LINE="$(printf 'v1.20.2 opa_linux_amd64_static %s\nmore' "${OPA_SHA}")" run "${SETUP}" cli
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The evaluator pin the Iltero CLI reports is malformed."* ]]
+  [[ "${output}" == *"The Iltero CLI did not name the evaluator release to download as one line with a version, a file name and a SHA-256 digest."* ]]
   PIN_EXIT=9 run "${SETUP}" cli
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The Iltero CLI could not report the evaluator pin for linux-x86_64."* ]]
+  [ "${status}" -eq 9 ]
+  [[ "${output}" == *"The Iltero CLI could not say which evaluator release to download for linux-x86_64. Its message above says why."* ]]
 }
 
 @test "cli fails when the CLI reports it is not ready" {
   cli_release
   DOCTOR_EXIT=4 run "${SETUP}" cli
-  [ "${status}" -eq 1 ]
-  [[ "${output}" == *"not ready to run checks"* ]]
+  [ "${status}" -eq 4 ]
+  [[ "${output}" == *"not ready to run checks. Its message above says what is missing."* ]]
 }
 
 @test "cli runs doctor with the pinned evaluator and writes its outputs" {

@@ -19,6 +19,7 @@ setup() {
   cat > "${RUNNER_TEMP}/iltero-tools/venv/bin/iltero" << 'EOF'
 #!/bin/bash
 echo "iltero $*" >> "${STUB_LOG}"
+echo "${CLOSE_OUTPUT:-}"
 exit "${CLI_EXIT}"
 EOF
   chmod +x "${RUNNER_TEMP}/iltero-tools/venv/bin/iltero"
@@ -53,6 +54,15 @@ EOF
   [[ "${output}" == *"Run the setup action first"* ]]
 }
 
+@test "check refuses every event other than push, workflow_dispatch and schedule" {
+  local event
+  for event in issue_comment merge_group repository_dispatch workflow_call; do
+    GITHUB_EVENT_NAME="${event}" run "${RUN}" check
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"runs only on push, workflow_dispatch and schedule events, not on '${event}' events."* ]]
+  done
+}
+
 @test "check accepts push, workflow_dispatch and schedule events" {
   local event
   for event in push workflow_dispatch schedule; do
@@ -67,6 +77,12 @@ EOF
   ENVIRONMENT=production run "${RUN}" close
   [ "${status}" -eq 0 ]
   grep -qx "iltero run close --environment=production" "${STUB_LOG}"
+}
+
+@test "close passes the environment and application without the spaces around them" {
+  ENVIRONMENT=" production " APPLICATION="  api " run "${RUN}" close
+  [ "${status}" -eq 0 ]
+  grep -qx "iltero run close --application=api --environment=production" "${STUB_LOG}"
 }
 
 @test "close closes the pipeline run's build run for the application" {
@@ -131,4 +147,10 @@ EOF
   run awk '/- name: Close the run/ { inside = 1; next } inside && /working-directory:/ { sub(/^ +/, ""); print; exit }' \
     "${REPO_ROOT}/close/action.yml"
   [ "${output}" = 'working-directory: ${{ inputs.working-directory }}' ]
+}
+
+@test "a line of the CLI's report cannot act as a workflow command" {
+  CLOSE_OUTPUT="::error::forged" ENVIRONMENT=production run "${RUN}" close
+  [ "${status}" -eq 0 ]
+  commands_paused_around "::error::forged"
 }

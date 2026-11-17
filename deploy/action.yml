@@ -1,5 +1,5 @@
 name: Iltero Deploy
-description: Plan, check and apply each unit of a stack, in a governed Iltero run or locally.
+description: Plan, check and apply each unit of a stack, in a governed run on Iltero Platform or locally on the runner.
 author: Iltero
 
 branding:
@@ -16,7 +16,7 @@ inputs:
     default: "."
   registry-host:
     description: >-
-      Host name of Iltero Platform's private module registry, from which terraform init downloads private modules.
+      Host name of Iltero Platform's private module registry, from which the IaC tool downloads private modules.
       Leave empty when the stack uses no private modules. When it is set, the project must be linked to Iltero
       Platform, and the job needs id-token: write.
     required: false
@@ -25,36 +25,51 @@ inputs:
     description: >-
       true or false. When true, the CLI writes a report of each unit's record for a person to read, as an HTML
       page and as Markdown. The action uploads both as the artifact <artifact-name>-report and adds the Markdown
-      to the job summary. When the CLI does not write both files for a unit, the step fails at its end. A unit
-      whose deploy failed sets the step's exit code.
+      to the job summary. When the CLI does not write both files for a unit, the step fails at its end. When a unit
+      also failed to deploy, the step reports the deploy failure.
     required: false
     default: "true"
   store-records:
     description: >-
-      true or false. When true, the CLI keeps each stage's record and every file it cites in the run's artifact store, the
-      bucket that Iltero Platform names for the run, with the job's own cloud credentials. Only in a project
-      linked to Iltero Platform. A failed store fails the step.
+      true or false. When true, the CLI keeps each stage's record and every file it cites in the run's artifact store,
+      the bucket that Iltero Platform names for the run, with the job's own cloud credentials. Set it to true only in
+      a project linked to Iltero Platform. A failed store fails the step.
     required: false
     default: "false"
   artifact-name:
     description: >-
-      Name of the artifact that holds the records. Empty: iltero-deploy-<environment>. Two deploy steps in one
-      pipeline run (on GitHub, one workflow run) that deploy the same environment need different names.
+      Name of the artifact that holds the records. The action adds -attempt-<attempt> to the name, where <attempt> is
+      the pipeline run's attempt number, so a re-run keeps the records of earlier attempts. When the input is empty, the name
+      is iltero-deploy-<environment>-attempt-<attempt>. The artifact-name output gives the full name. Two deploy steps in one pipeline run (on GitHub, one workflow run) that
+      deploy the same environment need different names.
     required: false
     default: ""
-  terraform-version:
+  tool:
     description: >-
-      The Terraform version to install and run. Only versions listed in scripts/iac/terraform.sha256 are accepted.
+      The infrastructure-as-code (IaC) tool the stack uses, to install and run. Supported: terraform.
     required: false
-    default: "1.16.5"
+    default: terraform
+  tool-version:
+    description: >-
+      The version of the tool to install and run. When the input is empty, the action installs the version it pins as
+      the tool's default. The action accepts only versions whose checksums it pins.
+    required: false
+    default: ""
+
+  retention-days:
+    description: >-
+      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the input is empty, the
+      repository's own artifact retention setting applies.
+    required: false
+    default: ""
 
 outputs:
-  terraform-version:
-    description: The Terraform version installed.
-    value: ${{ steps.terraform.outputs.terraform-version }}
-  terraform-path:
-    description: Absolute path of the Terraform binary.
-    value: ${{ steps.terraform.outputs.terraform-path }}
+  tool-version:
+    description: The version of the IaC tool installed.
+    value: ${{ steps.tool.outputs.tool-version }}
+  tool-path:
+    description: Absolute path of the IaC tool's binary.
+    value: ${{ steps.tool.outputs.tool-path }}
   records-directory:
     description: The directory that holds the records.
     value: ${{ steps.deploy.outputs.records-directory }}
@@ -66,9 +81,9 @@ outputs:
     value: ${{ steps.deploy.outputs.report-directory }}
   readings-directory:
     description: >-
-      The directory that holds the two readings of the deployed resources for each unit whose record expects the
+      The directory that holds the two readings of the deployed resources for each unit whose record requires the
       post-verify stage, as <unit>/first.json and <unit>/second.json. The readings can hold secret values. The action
-      does not upload them, and they are not meant to be kept: the record keeps only their digests.
+      does not upload them. Do not keep them: the record keeps only their digests.
     value: ${{ steps.deploy.outputs.readings-directory }}
 
 runs:
@@ -77,22 +92,26 @@ runs:
     - name: Check the event and the job
       shell: bash
       env:
+        TOOL: ${{ inputs.tool }}
+        RETENTION_DAYS: ${{ inputs.retention-days }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/deploy.sh" check'
 
-    - name: Install Terraform
-      id: terraform
+    - name: Install the IaC tool
+      id: tool
       shell: bash
       env:
-        TERRAFORM_VERSION: ${{ inputs.terraform-version }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/install-terraform.sh" "${TERRAFORM_VERSION}"'
+        TOOL: ${{ inputs.tool }}
+        TOOL_VERSION: ${{ inputs.tool-version }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/install-tool.sh" "${TOOL}" "${TOOL_VERSION}"'
 
     - name: Deploy each unit
       id: deploy
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
+        TOOL: ${{ inputs.tool }}
         ENVIRONMENT: ${{ inputs.environment }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         WRITE_REPORT: ${{ inputs.write-report }}
@@ -106,6 +125,7 @@ runs:
       with:
         name: ${{ steps.deploy.outputs.artifact-name }}
         path: ${{ steps.deploy.outputs.records-directory }}
+        retention-days: ${{ inputs.retention-days }}
         if-no-files-found: error
 
     - name: Upload the reports
@@ -114,4 +134,5 @@ runs:
       with:
         name: ${{ steps.deploy.outputs.artifact-name }}-report
         path: ${{ steps.deploy.outputs.report-directory }}
+        retention-days: ${{ inputs.retention-days }}
         if-no-files-found: ignore

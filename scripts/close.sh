@@ -17,7 +17,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
 cmd_check() {
   refuse_untrusted_event
-  refuse_pull_request
+  require_deploy_event
   require_id_token
   cli_path > /dev/null
 }
@@ -25,14 +25,23 @@ cmd_check() {
 cmd_close() {
   require_one_line environment "${ENVIRONMENT:-}"
   require_one_line application "${APPLICATION:-}"
-  local environment="${ENVIRONMENT:-}" application="${APPLICATION:-}"
+  local environment application
+  environment="$(trim "${ENVIRONMENT:-}")"
+  application="$(trim "${APPLICATION:-}")"
   local options=()
-  [[ -z "${application//[[:space:]]/}" ]] || options+=("--application=${APPLICATION}")
-  [[ -z "${environment//[[:space:]]/}" ]] || options+=("--environment=${ENVIRONMENT}")
+  [[ -z "${application}" ]] || options+=("--application=${application}")
+  [[ -z "${environment}" ]] || options+=("--environment=${environment}")
   [[ ${#options[@]} -gt 0 ]] || die "Give the environment input, the application input, or both."
   local cli
   cli="$(cli_path)"
-  "${cli}" run close "${options[@]}"
+  # The CLI's report holds names from the run, such as assertion names, so it
+  # prints with workflow commands off: no line of it can act as a command.
+  # The step ends with the CLI's exit code.
+  local status=0
+  pause_commands
+  "${cli}" run close "${options[@]}" || status=$?
+  resume_commands
+  return "${status}"
 }
 
 main() {

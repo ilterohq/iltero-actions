@@ -41,7 +41,8 @@ exec python3 "$@"
 STUB
 
   # A stand-in for Terraform. It records its arguments, its environment and
-  # the override file, and writes a lock file on init as Terraform does.
+  # the override file. Like Terraform with -lockfile=readonly, its init fails
+  # when a unit that uses a provider has no lock file.
   # Terraform runs with an emptied environment, so the paths it writes to are
   # fixed in the stand-in when it is created.
   cat > "${TOOLS}/bin/terraform" << STUB
@@ -52,7 +53,10 @@ case "\$1" in
   init)
     env | sort > "${BATS_TEST_TMPDIR}/terraform-env-\${unit}"
     cp zzz_iltero_preview_override.tf "${BATS_TEST_TMPDIR}/override-\${unit}.tf"
-    touch .terraform.lock.hcl
+    if [[ ! -e .terraform.lock.hcl ]] && grep -qs provider ./*.tf; then
+      echo "Error: the lock file is read-only and has no entry for the provider"
+      exit 1
+    fi
     ;;
   plan)
     env | sort > "${BATS_TEST_TMPDIR}/terraform-env-plan-\${unit}"
@@ -95,10 +99,15 @@ if [[ "$1 $2" == "environment detect" ]]; then
 fi
 EOF
   chmod +x "${TOOLS}/bin/terraform" "${TOOLS}/venv/bin/iltero" "${TOOLS}/venv/bin/python"
+  # The Python installation the virtual environment runs on.
+  mkdir -p "${BATS_TEST_TMPDIR}/python/bin"
+  echo "home = ${BATS_TEST_TMPDIR}/python/bin" > "${TOOLS}/venv/pyvenv.cfg"
 
   STACK="${BATS_TEST_TMPDIR}/stack"
   mkdir -p "${STACK}"
   cd "${STACK}" || return
+  # The name the actions give this stack's work folder.
+  STACK_FOLDER="$(stack_folder_name)"
 }
 
 # Writes a unit with an AWS provider. With "role", the provider assumes a role.
@@ -112,9 +121,16 @@ aws_unit() {
     [[ -z "${role}" ]] || echo '  assume_role { role_arn = "arn:aws:iam::123456789012:role/deploy" }'
     echo '}'
   } > "${dir}/main.tf"
+  touch "${dir}/.terraform.lock.hcl"
 }
 
 # --- check -------------------------------------------------------------------
+
+@test "preview refuses a tool it has no adapter for" {
+  TOOL=pulumi run "${PREVIEW}" check iltero-preview
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The tool input must be one of: terraform. It is 'pulumi'."* ]]
+}
 
 @test "check refuses pull_request_target and workflow_run events" {
   GITHUB_EVENT_NAME=pull_request_target run "${PREVIEW}" check iltero-preview
@@ -202,7 +218,7 @@ aws_unit() {
   ENVIRONMENT=$'production\nstaging' run "${PREVIEW}" environment
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"The environment input must be one line, with no tab or other control character."* ]]
-  grep -q "The preview stopped before it checked every unit." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+  grep -q "The preview stopped before it checked every unit." "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
 }
 
 @test "a named environment that cannot name a settings file is refused before anything runs" {
@@ -252,7 +268,9 @@ aws_unit() {
   echo '[{"name": "Network", "working_directory": "units/Network"}]' > "${UNITS_JSON}"
   run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"does not follow the unit-name rule"* ]]
+  [[ "${output}" == *"is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."* ]]
+  # No output is written, so the upload step does not run.
+  ! grep -q "^records-directory=" "${GITHUB_OUTPUT}" || false
 }
 
 # --- planning without credentials --------------------------------------------
@@ -265,7 +283,25 @@ aws_unit() {
   ! grep -qE '^(GITHUB_ENV|GITHUB_OUTPUT|GITHUB_PATH|GITHUB_STEP_SUMMARY|ACTIONS_ID_TOKEN_REQUEST_URL|ACTIONS_RUNTIME_TOKEN|TF_TOKEN_[^=]*)=' "${env_file}" || false
   grep -qx "AWS_ACCESS_KEY_ID=iltero-preview-mock" "${env_file}"
   grep -qx "AWS_EC2_METADATA_DISABLED=true" "${env_file}"
-  grep -q "^TF_DATA_DIR=${RUNNER_TEMP}/iltero-preview/units/network/" "${env_file}"
+  grep -q "^TF_DATA_DIR=${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/units/network/" "${env_file}"
+}
+
+@test "Terraform gets the job's proxy settings in a preview, but not AWS's settings files" {
+  aws_unit units/network
+  HTTPS_PROXY="http://proxy.example:3128" AWS_CONFIG_FILE="/etc/aws/config" \
+    AWS_SHARED_CREDENTIALS_FILE="/etc/aws/credentials" AWS_CA_BUNDLE="/etc/ssl/aws.pem" run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
+  grep -qx "HTTPS_PROXY=http://proxy.example:3128" "${BATS_TEST_TMPDIR}/terraform-env-plan-network"
+  ! grep -qE "^(AWS_CONFIG_FILE|AWS_SHARED_CREDENTIALS_FILE|AWS_CA_BUNDLE)=" "${BATS_TEST_TMPDIR}/terraform-env-plan-network" || false
+}
+
+@test "the job's real credentials and input variables never reach Terraform in a preview" {
+  aws_unit units/network
+  AWS_SECRET_ACCESS_KEY=real-secret AWS_SESSION_TOKEN=real-session TF_VAR_x=real-value run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
+  local env_file="${BATS_TEST_TMPDIR}/terraform-env-network"
+  ! grep -qE 'real-(secret|session|value)' "${env_file}" || false
+  grep -qx "AWS_SECRET_ACCESS_KEY=iltero-preview-mock" "${env_file}"
 }
 
 @test "a fresh registry token reaches only each init, for the registry host's origin, and is masked" {
@@ -303,8 +339,8 @@ aws_unit() {
 @test "a project with no platform section cannot use the Iltero registry, and gets no comment" {
   LINKED=false REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" environment
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"cannot use the Iltero module registry"* ]]
-  [ ! -e "${RUNNER_TEMP}/iltero-preview/comment/comment.md" ]
+  [[ "${output}" == *"This project is not linked to the server, so it cannot use the Iltero module registry. Add a platform section to .iltero/config.yml, or leave registry-host empty."* ]]
+  [ ! -e "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md" ]
   ! grep -q "^iltero environment" "${STUB_LOG}" || false
   LINKED=true REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" environment
   [ "${status}" -eq 0 ]
@@ -338,11 +374,103 @@ aws_unit() {
   grep -q "assume_role {}" "${BATS_TEST_TMPDIR}/override-network.tf"
 }
 
+@test "the AWS adapter overrides each aliased provider block, and drops the role only where one is assumed" {
+  aws_unit units/network
+  cat >> units/network/main.tf << 'HCL'
+provider "aws" {
+  alias  = "east" # the second region
+  region = "us-east-1"
+  assume_role {
+    role_arn = "arn:aws:iam::123456789012:role/deploy"
+  }
+  default_tags {
+    tags = { team = "platform" }
+  }
+}
+provider "aws" { alias = "west" }
+HCL
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
+  local override="${BATS_TEST_TMPDIR}/override-network.tf"
+  [ "$(grep -c '^provider "aws" {' "${override}")" -eq 3 ]
+  [ "$(grep -c 'skip_credentials_validation = true' "${override}")" -eq 3 ]
+  grep -q '  alias = "east"' "${override}"
+  grep -q '  alias = "west"' "${override}"
+  [ "$(grep -c 'assume_role {}' "${override}")" -eq 1 ]
+  sed -n '/alias = "east"/,/^}/p' "${override}" | grep -q 'assume_role {}'
+}
+
+@test "the AWS adapter reads an alias only at a block's top level, skips comment lines, and keeps counting braces after a # in a string" {
+  mkdir -p units/network
+  touch units/network/.terraform.lock.hcl
+  cat > units/network/main.tf << 'HCL'
+# provider "aws" { alias = "commented" }
+provider "aws" {
+  region = "us-east-1"
+  default_tags { tags = { alias = "a-tag", doc = "https://wiki.example/x#a" } }
+  # assume_role {
+  // assume_role {
+  # a comment with an unbalanced brace {
+}
+HCL
+  cat > units/network/providers.tf << 'HCL'
+provider "aws" {
+  alias = "second"
+}
+HCL
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
+  local override="${BATS_TEST_TMPDIR}/override-network.tf"
+  [ "$(grep -c '^provider "aws" {' "${override}")" -eq 2 ]
+  [ "$(grep -c '  alias = ' "${override}")" -eq 1 ]
+  grep -q '  alias = "second"' "${override}"
+  ! grep -q 'assume_role' "${override}" || false
+}
+
+@test "a unit whose AWS provider alias is not a plain name is not evaluated" {
+  aws_unit units/network
+  printf 'provider "aws" {\n  alias = "east${var.x}"\n}\n' >> units/network/main.tf
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The preview cannot plan an AWS provider block whose alias is not a plain name."* ]]
+  grep -q "| network | not evaluated: the preview could not plan the unit |" "${GITHUB_STEP_SUMMARY}"
+  ! grep -q "terraform network" "${STUB_LOG}" || false
+}
+
 @test "the unit's variables file for the environment is used when it exists" {
   aws_unit units/network
   mkdir -p units/network/config && touch units/network/config/production.tfvars.json
   run "${PREVIEW}" run production
   grep -q -- "-var-file=${STACK}/units/network/config/production.tfvars.json" "${STUB_LOG}"
+}
+
+@test "a unit with variables for other environments but not this one is not evaluated, and Terraform does not run for it" {
+  aws_unit units/network
+  mkdir -p units/network/config && touch units/network/config/staging.tfvars.json
+  run "${PREVIEW}" run production
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"units/network/config/production.tfvars.json is missing."* ]]
+  grep -q "| network | not evaluated: the unit is not set up for this environment |" "${GITHUB_STEP_SUMMARY}"
+  ! grep -q "^terraform network" "${STUB_LOG}" || false
+}
+
+@test "a job that sets TF_WORKSPACE gets no preview" {
+  aws_unit units/network
+  TF_WORKSPACE=production run "${PREVIEW}" run production
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"The job sets TF_WORKSPACE"* ]]
+  grep -q "| network | not evaluated: the unit is not set up for this environment |" "${GITHUB_STEP_SUMMARY}"
+  ! grep -q "^terraform " "${STUB_LOG}" || false
+}
+
+@test "a unit with backend settings for other environments but not this one is not evaluated, and gets no registry token" {
+  aws_unit units/network
+  mkdir -p units/network/config/backend && touch units/network/config/backend/staging.hcl
+  REGISTRY_HOST="registry.iltero-test.io" run "${PREVIEW}" run production
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"units/network/config/backend/production.hcl is missing."* ]]
+  ! grep -q "^audience " "${STUB_LOG}" || false
+  ! grep -q "^terraform network" "${STUB_LOG}" || false
 }
 
 @test "variables files outside the unit's config folder are not used" {
@@ -358,46 +486,50 @@ aws_unit() {
   echo 'variable "enable_remote_state_dependencies" { type = bool }' > units/compute/variables.tf
   mkdir -p units/compute/config && touch units/compute/config/production.tfvars.json
   run "${PREVIEW}" run production
-  grep -q -- "-var-file=${STACK}/units/compute/config/production.tfvars.json -var-file=${RUNNER_TEMP}/iltero-preview/units/compute/without-upstream.tfvars" "${STUB_LOG}"
+  grep -q -- "-var-file=${STACK}/units/compute/config/production.tfvars.json -var-file=${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/units/compute/without-upstream.tfvars" "${STUB_LOG}"
 }
 
 @test "the checkout is left as it was" {
   aws_unit units/network
-  aws_unit units/compute
-  touch units/compute/.terraform.lock.hcl
   run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
   [ ! -e units/network/zzz_iltero_preview_override.tf ]
-  [ ! -e units/network/.terraform.lock.hcl ]
-  [ -e units/compute/.terraform.lock.hcl ]
 }
 
-@test "a committed lock file is only read, and a unit without one may get a temporary one" {
+@test "the lock file is only read, as committed" {
   aws_unit units/network
-  aws_unit units/compute
-  touch units/compute/.terraform.lock.hcl
   run "${PREVIEW}" run production
-  grep -qx "terraform compute init -input=false -no-color -lockfile=readonly" "${STUB_LOG}"
-  grep -qx "terraform network init -input=false -no-color" "${STUB_LOG}"
+  grep -qx "terraform network init -input=false -no-color -lockfile=readonly" "${STUB_LOG}"
+}
+
+@test "a unit with no lock file is not evaluated, as the deploy would refuse it" {
+  aws_unit units/network
+  rm units/network/.terraform.lock.hcl
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"the lock file is read-only"* ]]
+  grep -q "| network | not evaluated: the preview could not plan the unit |" "${GITHUB_STEP_SUMMARY}"
+  [ ! -e units/network/.terraform.lock.hcl ]
 }
 
 # --- planning without upstream state ----------------------------------------
 
-@test "a unit with the remote-state switch is planned with it off and labelled best effort" {
+@test "a unit with the remote-state switch is planned with it off and labelled as planned without upstream state" {
   aws_unit units/compute
   echo 'variable "enable_remote_state_dependencies" { type = bool }' > units/compute/variables.tf
   run "${PREVIEW}" run production
   [ "${status}" -eq 0 ]
-  local switch="${RUNNER_TEMP}/iltero-preview/units/compute/without-upstream.tfvars"
+  local switch="${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/units/compute/without-upstream.tfvars"
   grep -q "terraform compute plan .*-var-file=${switch}" "${STUB_LOG}"
   [ "$(cat "${switch}")" = "enable_remote_state_dependencies = false" ]
-  grep -q "| compute | exit 0 (best effort: planned without upstream state) |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| compute | passed (planned without the state of the units it reads, so the result can differ after the merge) |" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a unit without the remote-state switch is planned as it is" {
   aws_unit units/network
   run "${PREVIEW}" run production
   ! grep -q "enable_remote_state_dependencies" "${STUB_LOG}" || false
-  grep -q "| network | exit 0 |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| network | passed |" "${GITHUB_STEP_SUMMARY}"
 }
 
 # --- not evaluated -----------------------------------------------------------
@@ -418,7 +550,7 @@ aws_unit() {
   echo 'provider "google" {}' > units/app/main.tf
   run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"No preview adapter for provider 'google'"* ]]
+  [[ "${output}" == *"The preview cannot plan provider 'google' without credentials. It supports: aws."* ]]
   ! grep -q "terraform app" "${STUB_LOG}" || false
 }
 
@@ -427,7 +559,25 @@ aws_unit() {
   touch units/network/zzz_iltero_preview_override.tf
   run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The preview adds a file named zzz_iltero_preview_override.tf to each unit, and this unit already has one."* ]]
   [ -e units/network/zzz_iltero_preview_override.tf ]
+}
+
+@test "a unit whose override file name is a link to nothing is not evaluated, and nothing is written through it" {
+  aws_unit units/network
+  ln -s "${BATS_TEST_TMPDIR}/elsewhere.tf" units/network/zzz_iltero_preview_override.tf
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 1 ]
+  [ ! -e "${BATS_TEST_TMPDIR}/elsewhere.tf" ]
+}
+
+@test "a unit that configures no provider of its own still gets mock AWS keys" {
+  mkdir -p units/network
+  echo 'module "vpc" { source = "./vpc" }' > units/network/main.tf
+  run "${PREVIEW}" run production
+  local env_file="${BATS_TEST_TMPDIR}/terraform-env-network"
+  grep -qx "AWS_ACCESS_KEY_ID=iltero-preview-mock" "${env_file}"
+  grep -qx "AWS_EC2_METADATA_DISABLED=true" "${env_file}"
 }
 
 # --- checking ----------------------------------------------------------------
@@ -435,24 +585,24 @@ aws_unit() {
 @test "each plan is checked locally by the CLI with the pinned evaluator, never on the server" {
   aws_unit units/network
   run "${PREVIEW}" run production
-  local work="${RUNNER_TEMP}/iltero-preview/units/network"
-  grep -q "iltero iac check --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan --environment=production --unit=network --out=${RUNNER_TEMP}/iltero-preview/out --local ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
+  local work="${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/units/network"
+  grep -q "iltero iac check --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan --environment=production --unit=network --out=${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/out --local ILTERO_OPA_PATH=${TOOLS}/bin/opa" "${STUB_LOG}"
 }
 
 @test "a failing check fails the step and the summary shows the CLI's exit code" {
   aws_unit units/network
   CHECK_EXIT=1 run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
-  grep -q "| network | exit 1 |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| network | failed |" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a failing check fails the step with the CLI's own exit code" {
   aws_unit units/network
   CHECK_EXIT=3 run "${PREVIEW}" run production
   [ "${status}" -eq 3 ]
-  grep -q "| network | exit 3 |" "${GITHUB_STEP_SUMMARY}"
-  grep -q "^| network | exit 3 |$" "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
-  ! grep -q "preview stopped" "${RUNNER_TEMP}/iltero-preview/comment/comment.md" || false
+  grep -q "| network | failed |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "^| network | failed |$" "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
+  ! grep -q "preview stopped" "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md" || false
 }
 
 @test "a stack with no unit stops the preview" {
@@ -464,26 +614,26 @@ aws_unit() {
 
 @test "a run that stops before its result says so in the comment" {
   run "${PREVIEW}" environment
-  grep -q "has not finished" "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+  grep -q "has not finished" "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
   echo '[]' > "${UNITS_JSON}"
   run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
-  grep -q "The preview stopped before it checked every unit. See the job summary and the log." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
-  ! grep -q "has not finished" "${RUNNER_TEMP}/iltero-preview/comment/comment.md" || false
+  grep -q "The preview stopped before it checked every unit. See the job summary and the log." "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
+  ! grep -q "has not finished" "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md" || false
 }
 
 @test "an environment the CLI cannot find leaves a comment that says the preview stopped" {
   DETECT_EXIT=2 run "${PREVIEW}" environment
   [ "${status}" -eq 2 ]
-  grep -q "The preview stopped before it checked every unit." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+  grep -q "The preview stopped before it checked every unit." "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
 }
 
 @test "each unit starts with an empty work directory" {
   aws_unit units/network
-  mkdir -p "${RUNNER_TEMP}/iltero-preview/units/network"
-  echo "old output" > "${RUNNER_TEMP}/iltero-preview/units/network/stale.txt"
+  mkdir -p "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/units/network"
+  echo "old output" > "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/units/network/stale.txt"
   run "${PREVIEW}" run production
-  [ ! -e "${RUNNER_TEMP}/iltero-preview/units/network/stale.txt" ]
+  [ ! -e "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/units/network/stale.txt" ]
 }
 
 @test "the summary shows the CLI's output with HTML escaped" {
@@ -495,14 +645,51 @@ aws_unit() {
 @test "the records directory is an output" {
   aws_unit units/network
   run "${PREVIEW}" run production
-  [ "$(output_value records-directory)" = "${RUNNER_TEMP}/iltero-preview/out" ]
+  [ "$(output_value records-directory)" = "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/out" ]
+}
+
+@test "a preview run starts with no earlier records or unit files, and keeps the comment" {
+  aws_unit units/network
+  local root="${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}"
+  mkdir -p "${root}/out/units/retired" "${root}/units/retired" "${root}/comment"
+  echo '{}' > "${root}/out/units/retired/car.json"
+  echo "from the environment step" > "${root}/comment/kept.md"
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
+  [ ! -e "${root}/out/units/retired" ]
+  [ ! -e "${root}/units/retired" ]
+  [ -f "${root}/comment/kept.md" ]
+}
+
+@test "each stack has its own preview work folder, so two previews in one job keep their files apart" {
+  aws_unit units/network
+  run "${PREVIEW}" environment
+  [ "${status}" -eq 0 ]
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
+  local first="${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}"
+  cp -R "${STACK}" "${BATS_TEST_TMPDIR}/second-stack"
+  cd "${BATS_TEST_TMPDIR}/second-stack"
+  local second
+  second="$(stack_folder_name)"
+  [ "${second}" != "${STACK_FOLDER}" ]
+  : > "${GITHUB_OUTPUT}"
+  ENVIRONMENT=production run "${PREVIEW}" environment
+  [ "${status}" -eq 0 ]
+  [ "$(output_value comment-directory)" = "${RUNNER_TEMP}/iltero-preview/${second}/comment" ]
+  run "${PREVIEW}" run production
+  [ "${status}" -eq 0 ]
+  [ "$(output_value records-directory)" = "${RUNNER_TEMP}/iltero-preview/${second}/out" ]
+  [ -d "${first}/out" ]
+  [ -f "${first}/comment/comment.md" ]
+  [ -f "${RUNNER_TEMP}/iltero-preview/${second}/comment/comment.md" ]
 }
 
 @test "the comment holds the summary, the escaped output and a link to the run" {
   aws_unit units/network
   run "${PREVIEW}" run production
-  local comment="${RUNNER_TEMP}/iltero-preview/comment/comment.md"
-  grep -q "^| network | exit 0 |$" "${comment}"
+  local comment="${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
+  grep -q "^| network | passed |$" "${comment}"
   grep -q "verdict &lt;b&gt;fail&lt;/b&gt; &amp; more" "${comment}"
   grep -qF "Commit ${HEAD_SHA}. [See the job summary](https://github.example/octo/stack/actions/runs/99)" "${comment}"
   ! grep -q "has not finished" "${comment}" || false
@@ -511,9 +698,9 @@ aws_unit() {
 @test "until the run finishes, the comment says the preview has not finished" {
   run "${PREVIEW}" environment
   [ "${status}" -eq 0 ]
-  [ "$(output_value comment-directory)" = "${RUNNER_TEMP}/iltero-preview/comment" ]
-  grep -q "The preview has not finished." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
-  grep -qF "Commit ${HEAD_SHA}." "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+  [ "$(output_value comment-directory)" = "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment" ]
+  grep -q "The preview has not finished." "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
+  grep -qF "Commit ${HEAD_SHA}." "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
 }
 
 @test "the comment needs the pull request's head commit" {
@@ -522,24 +709,25 @@ aws_unit() {
   [[ "${output}" == *"HEAD_SHA is not the pull request's head commit"* ]]
 }
 
-@test "the environment's name cannot add Markdown to the heading" {
+@test "an environment name with Markdown in it is refused" {
   aws_unit units/network
   run "${PREVIEW}" run "[x](javascript:e.test)"
-  grep -qF '## Iltero preview: \[x\]\(javascript\:e\.test\)' "${GITHUB_STEP_SUMMARY}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"cannot name a directory or a file. Use only letters, digits"* ]]
 }
 
 @test "the CLI's output cannot mention anyone in the summary or the comment" {
   aws_unit units/network
   CHECK_OUTPUT="ping @octo/admins" run "${PREVIEW}" run production
   grep -q "ping &#64;octo/admins" "${GITHUB_STEP_SUMMARY}"
-  grep -q "ping &#64;octo/admins" "${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+  grep -q "ping &#64;octo/admins" "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
 }
 
 @test "output too long for a comment is left to the job summary" {
   aws_unit units/network
   CHECK_OUTPUT="$(printf 'x%.0s' {1..60001})" run "${PREVIEW}" run production
-  local comment="${RUNNER_TEMP}/iltero-preview/comment/comment.md"
-  grep -q "^| network | exit 0 |$" "${comment}"
+  local comment="${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
+  grep -q "^| network | passed |$" "${comment}"
   grep -q "The CLI's output is too long for a comment." "${comment}"
   ! grep -q "<details>" "${comment}" || false
   grep -q "xxxxxxxxxx" "${GITHUB_STEP_SUMMARY}"
@@ -549,14 +737,14 @@ aws_unit() {
   aws_unit units/network
   GITHUB_RUN_ID="" run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
-  [ ! -e "${RUNNER_TEMP}/iltero-preview/comment/comment.md" ]
-  [ "$(output_value records-directory)" = "${RUNNER_TEMP}/iltero-preview/out" ]
+  [ ! -e "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md" ]
+  [ "$(output_value records-directory)" = "${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/out" ]
 }
 
 @test "the CLI's output stays inside its block when it has blank lines" {
   aws_unit units/network
   CHECK_OUTPUT=$'first\n\n[link](https://example.test)' run "${PREVIEW}" run production
-  local comment="${RUNNER_TEMP}/iltero-preview/comment/comment.md"
+  local comment="${RUNNER_TEMP}/iltero-preview/${STACK_FOLDER}/comment/comment.md"
   run awk '/^<pre>$/ { inside = 1; next } /^<\/pre>$/ { inside = 0 } /link\]/ { print (inside ? "inside" : "outside") }' "${comment}"
   [ "${output}" = "inside" ]
 }
@@ -586,4 +774,19 @@ aws_unit() {
   run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"Unit 'network' has a directory that starts with '-': '-L'. Rename the directory."* ]]
+}
+
+@test "a result table too long for a comment on its own is left to the job summary" {
+  {
+    echo "## Iltero preview: production"
+    printf '| unit-%s | passed |\n' $(seq 1 4000)
+  } > "${BATS_TEST_TMPDIR}/summary.md"
+  : > "${BATS_TEST_TMPDIR}/details.md"
+  run bash -c "source '${PREVIEW}'; write_result_comment '${BATS_TEST_TMPDIR}/comment' '${BATS_TEST_TMPDIR}/summary.md' '${BATS_TEST_TMPDIR}/details.md'"
+  [ "${status}" -eq 0 ]
+  local comment="${BATS_TEST_TMPDIR}/comment/comment.md"
+  grep -qx "## Iltero preview: production" "${comment}"
+  grep -qx "The result is too long for a comment." "${comment}"
+  ! grep -q "unit-1 " "${comment}" || false
+  [ "$(wc -c < "${comment}")" -lt 60000 ]
 }

@@ -1,12 +1,14 @@
 # Checks each pull request locally: the preview step plans every unit with no
 # credentials and checks its plan with the Iltero CLI. The CLI sends nothing
-# to Iltero and the job holds no secret, so the workflow works with or
-# without an Iltero account. A second job, which runs no code from the pull
-# request, posts the result as a comment.
+# to Iltero and the job holds no secret, so the workflow works whether or not
+# the project is linked to Iltero Platform. A second job, which runs no code
+# from the pull request, posts the result as a comment.
 #
 # A repository owner copies this workflow into .github/workflows/, sets the
 # actions commit, and sets the branches .iltero/config.yml maps to
-# environments.
+# environments. Each 0000000000000000000000000000000000000000 is a placeholder
+# for the 40-character ID of the iltero-actions commit, and each # v0.3.0
+# comment a placeholder for the version of its release.
 
 name: Iltero preview
 
@@ -20,6 +22,7 @@ jobs:
   preview:
     name: Preview
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -43,6 +46,7 @@ jobs:
     needs: preview
     if: always() && needs.preview.outputs.comment-artifact != ''
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     concurrency:
       group: ${{ github.workflow }}-comment-${{ github.event.pull_request.number }}
       cancel-in-progress: true

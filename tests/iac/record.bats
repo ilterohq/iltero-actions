@@ -17,7 +17,29 @@ setup() {
   export STATE_UNREADABLE="false"
   export UNIT="network"
   : > "${GITHUB_STEP_SUMMARY}"
-  RECORD="${REPO_ROOT}/scripts/iac/record.sh"
+  # The step for one stage gets only the inputs that stage reads, as a
+  # workflow would pass them. This wrapper clears the file inputs set below
+  # that the stage does not read, when they still hold their default value.
+  RECORD="${BATS_TEST_TMPDIR}/record-stage.sh"
+  cat > "${RECORD}" << STAGE
+#!/bin/bash
+declare -A unused=(
+  [plan]="APPLY_LOG STATE REFRESH_ONLY_PLANS"
+  [pre_deploy]="PLAN SAVED_PLAN APPLY_LOG STATE REFRESH_ONLY_PLANS"
+  [post_deploy]="REFRESH_ONLY_PLANS"
+  [post_verify]="PLAN SAVED_PLAN APPLY_LOG"
+)
+declare -A defaults=(
+  [PLAN]="plan.json" [SAVED_PLAN]="tfplan" [APPLY_LOG]="apply.ndjson" [STATE]="state.json"
+  [REFRESH_ONLY_PLANS]=\$'first.json\nsecond.json\n'
+)
+# The action passes every input, as an empty string when it is not given.
+for name in \${unused[\${2:-none}]:-}; do
+  [[ "\${!name:-}" != "\${defaults[\${name}]}" ]] || export "\${name}="
+done
+exec "${REPO_ROOT}/scripts/iac/record.sh" "\$@"
+STAGE
+  chmod +x "${RECORD}"
   TOOLS="${RUNNER_TEMP}/iltero-tools"
   export MARKS="${BATS_TEST_TMPDIR}/marks"
   mkdir -p "${TOOLS}/venv/bin" "${MARKS}"
@@ -86,8 +108,9 @@ else
   echo '{"expected_stages": ["plan", "post_deploy"]}' > "${out}/units/${unit}/car.json"
 fi
 echo "::warning::${stage} <checked> for ${unit}"
-# A post-deploy check given --state-unreadable always exits 6.
-[[ " $* " != *" --state-unreadable "* ]] || exit 6
+# A post-deploy check given --state-unreadable exits 6, unless the test
+# marks it as passing.
+[[ " $* " != *" --state-unreadable "* || -e "${MARKS}/state-unreadable-passes" ]] || exit 6
 [[ ! -e "${MARKS}/exit-${stage}" ]] || exit "$(cat "${MARKS}/exit-${stage}")"
 exit 0
 STUB
@@ -106,8 +129,10 @@ STUB
   echo '{}' > first.json
   echo '{}' > second.json
   export PLAN="plan.json" SAVED_PLAN="tfplan" APPLY_LOG="apply.ndjson" STATE="state.json"
-  export REFRESH_PLANS=$'first.json\nsecond.json\n'
-  RECORDS="${RUNNER_TEMP}/iltero-records/production"
+  export REFRESH_ONLY_PLANS=$'first.json\nsecond.json\n'
+  # The name the actions give this stack's work folder.
+  STACK_FOLDER="$(stack_folder_name)"
+  RECORDS="${RUNNER_TEMP}/iltero-records/production/${STACK_FOLDER}"
 }
 
 # Prints the CLI's stage call for STAGE from the stub log.
@@ -144,7 +169,7 @@ stage_call() {
   for stage in pre_deploy post_deploy post_verify; do
     GITHUB_EVENT_NAME=pull_request run "${RECORD}" check "${stage}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"On pull request events, record-iac records only the plan stage, checked locally."* ]]
+    [[ "${output}" == *"On pull request events, record-iac records only the plan stage, checked locally. Record the other stages after the merge, for example on push events."* ]]
   done
   GITHUB_EVENT_NAME=pull_request run "${RECORD}" check plan
   [ "${status}" -eq 0 ]
@@ -168,7 +193,7 @@ stage_call() {
   for event in pull_request_target workflow_run; do
     GITHUB_EVENT_NAME="${event}" run "${RECORD}" run plan
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Iltero actions do not run on '${event}' events."* ]]
+    [[ "${output}" == *"Iltero actions do not run on '${event}' events. Run them on pull_request events for a pull request, or after the merge."* ]]
   done
   ! grep -q "^iltero" "${STUB_LOG}" || false
 }
@@ -209,14 +234,14 @@ stage_call() {
   run "${RECORD}" run plan
   [ "${status}" -eq 4 ]
   ! stage_call plan || false
-  grep -q "Result: state check exit 4." "${GITHUB_STEP_SUMMARY}"
+  grep -q "Result: state check failed." "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "the plan stage's exit code is the step's" {
   echo 6 > "${MARKS}/exit-plan"
   run "${RECORD}" run plan
   [ "${status}" -eq 6 ]
-  grep -q "Result: exit 6." "${GITHUB_STEP_SUMMARY}"
+  grep -q "Result: failed." "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "plan refuses a missing plan or saved plan" {
@@ -245,13 +270,13 @@ stage_call() {
   ! grep -q "state check" "${STUB_LOG}" || false
 }
 
-@test "pre_deploy is not in scope for a local record, and checks nothing" {
+@test "pre_deploy is not required for a local record, and checks nothing" {
   LINKED=false run "${RECORD}" run plan
   LINKED=false run "${RECORD}" run pre_deploy
   [ "${status}" -eq 0 ]
-  [[ "${output}" == *"::notice::A project with no platform section does not run the pre-deploy stage. Nothing was checked."* ]]
+  [[ "${output}" == *"::notice::A project not linked to the server does not run the pre-deploy stage, and this unit's record does not require it. Nothing was checked."* ]]
   ! stage_call pre_deploy || false
-  grep -q "Result: not in scope." "${GITHUB_STEP_SUMMARY}"
+  grep -q "Result: not required." "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a local pre_deploy with no record of the unit stops and says where the record comes from" {
@@ -259,7 +284,7 @@ stage_call() {
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"The records directory holds no record of unit 'network'. Run the plan stage first. In another job, download the plan job's records artifact and pass its directory as records-directory."* ]]
   [[ "${output}" != *"does not run the pre-deploy stage"* ]]
-  ! grep -q "Result: not in scope." "${GITHUB_STEP_SUMMARY}" || false
+  ! grep -q "Result: not required." "${GITHUB_STEP_SUMMARY}" || false
 }
 
 @test "a local pre_deploy whose record cannot be read fails the step and says so in the summary" {
@@ -268,14 +293,14 @@ stage_call() {
   : > "${GITHUB_STEP_SUMMARY}"
   LINKED=false run "${RECORD}" run pre_deploy
   [ "${status}" -eq 9 ]
-  [[ "${output}" == *"The CLI could not say whether the record of unit 'network' expects the pre-deploy stage (exit 9)."* ]]
+  [[ "${output}" == *"The CLI could not say whether the record of unit 'network' requires the pre-deploy stage. See the CLI's output in the log."* ]]
   grep -q "Result: record does not verify." "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a unit name that breaks the unit-name rule is refused before the artifact is named" {
   UNIT="../x" run "${RECORD}" run plan
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"Unit name '../x' does not follow the unit-name rule."* ]]
+  [[ "${output}" == *"The unit name '../x' is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."* ]]
 }
 
 @test "a local pre_deploy asks the CLI, keeps its answer and shows it paused and in the summary" {
@@ -284,9 +309,9 @@ stage_call() {
   LINKED=false run "${RECORD}" run pre_deploy
   [ "${status}" -eq 0 ]
   grep -q "^iltero record in-scope ${RECORDS}/units/network --stage=pre_deploy$" "${STUB_LOG}"
-  grep -qx "The pre_deploy stage is out of scope." "${RUNNER_TEMP}/iltero-record-iac/production/units/network/pre_deploy/in-scope-pre_deploy.txt"
+  grep -qx "The pre_deploy stage is out of scope." "${RUNNER_TEMP}/iltero-record-iac/production/${STACK_FOLDER}/units/network/pre_deploy/in-scope-pre_deploy.txt"
   commands_paused_around "::error::injected by the record"
-  grep -q "<summary>network: in-scope-pre-deploy</summary>" "${GITHUB_STEP_SUMMARY}"
+  grep -q "<summary>network: is the pre-deploy stage required?</summary>" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "any other answer than in or out of scope fails a local pre_deploy with the CLI's code" {
@@ -297,14 +322,14 @@ stage_call() {
   grep -q "Result: record unreadable." "${GITHUB_STEP_SUMMARY}"
 }
 
-@test "a local pre_deploy whose record expects the stage says it did not run, and how to leave it out" {
+@test "a local pre_deploy whose record requires the stage fails, and says how to leave it out" {
   touch "${MARKS}/expects-pre-deploy"
   LINKED=false run "${RECORD}" run plan
   LINKED=false run "${RECORD}" run pre_deploy
-  [ "${status}" -eq 0 ]
-  [[ "${output}" == *"List pre_deploy under stages.out_of_scope in .iltero/config.yml."* ]]
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"::error::The record of unit 'network' requires the pre-deploy stage, which only a project linked to the server can run. List pre_deploy under stages.out_of_scope in .iltero/config.yml."* ]]
   ! stage_call pre_deploy || false
-  grep -q "Result: not run." "${GITHUB_STEP_SUMMARY}"
+  grep -q "Result: required, needs the server." "${GITHUB_STEP_SUMMARY}"
 }
 
 # --- post_deploy -------------------------------------------------------------
@@ -312,6 +337,7 @@ stage_call() {
 @test "post_deploy passes the plan, the apply log and the state" {
   run "${RECORD}" run post_deploy
   [ "${status}" -eq 0 ]
+  grep -q "Result: passed." "${GITHUB_STEP_SUMMARY}"
   stage_call post_deploy | grep -qx "iltero iac check --stage=post_deploy --plan=plan.json --saved-plan=tfplan --apply-log=apply.ndjson --state=state.json --unit=network --out=${RECORDS} --environment=production --upload"
 }
 
@@ -319,7 +345,14 @@ stage_call() {
   STATE="" STATE_UNREADABLE=true run "${RECORD}" run post_deploy
   [ "${status}" -eq 6 ]
   stage_call post_deploy | grep -qx "iltero iac check --stage=post_deploy --plan=plan.json --saved-plan=tfplan --apply-log=apply.ndjson --state-unreadable --unit=network --out=${RECORDS} --environment=production --upload"
-  grep -q "Result: exit 6, state not read." "${GITHUB_STEP_SUMMARY}"
+  grep -q "Result: failed without the state file." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "post_deploy that passes without the state says so" {
+  touch "${MARKS}/state-unreadable-passes"
+  STATE="" STATE_UNREADABLE=true run "${RECORD}" run post_deploy
+  [ "${status}" -eq 0 ]
+  grep -q "Result: passed without the state file." "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "post_deploy refuses both the state and state-unreadable" {
@@ -357,17 +390,29 @@ stage_call() {
 }
 
 @test "post_verify skips blank lines between the readings" {
-  REFRESH_PLANS=$'\nfirst.json\n  \nsecond.json\n\t\n' run "${RECORD}" run post_verify
+  REFRESH_ONLY_PLANS=$'\nfirst.json\n  \nsecond.json\n\t\n' run "${RECORD}" run post_verify
   [ "${status}" -eq 0 ]
   stage_call post_verify | grep -q -- "--refresh-plan=first.json --refresh-plan=second.json "
+}
+
+@test "post_verify trims the spaces around each reading's path" {
+  REFRESH_ONLY_PLANS=$'  first.json\t\n second.json  ' run "${RECORD}" run post_verify
+  [ "${status}" -eq 0 ]
+  stage_call post_verify | grep -q -- "--refresh-plan=first.json --refresh-plan=second.json "
+}
+
+@test "a reading's path with a control character inside it is refused" {
+  REFRESH_ONLY_PLANS=$'first\tcopy.json\nsecond.json' run "${RECORD}" run post_verify
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The refresh-only-plans input must be one line, with no tab or other control character."* ]]
 }
 
 @test "post_verify needs exactly two readings" {
   local readings
   for readings in "" "first.json" $'first.json\nsecond.json\nthird.json'; do
-    REFRESH_PLANS="${readings}" run "${RECORD}" run post_verify
+    REFRESH_ONLY_PLANS="${readings}" run "${RECORD}" run post_verify
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"The refresh-plans input must name two readings, one per line, in the order they were taken."* ]]
+    [[ "${output}" == *"The refresh-only-plans input must name two refresh-only plans, one per line, in the order they were taken."* ]]
   done
   ! stage_call post_verify || false
 }
@@ -387,9 +432,9 @@ stage_call() {
 }
 
 @test "post_verify refuses a reading that is not a file" {
-  REFRESH_PLANS=$'first.json\nnowhere.json' run "${RECORD}" run post_verify
+  REFRESH_ONLY_PLANS=$'first.json\nnowhere.json' run "${RECORD}" run post_verify
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The refresh-plans input names no file: 'nowhere.json'."* ]]
+  [[ "${output}" == *"The refresh-only-plans input names no file: 'nowhere.json'."* ]]
   ! stage_call post_verify || false
 }
 
@@ -397,7 +442,7 @@ stage_call() {
   echo 1 > "${MARKS}/exit-post_verify"
   run "${RECORD}" run post_verify
   [ "${status}" -eq 1 ]
-  grep -q "Result: exit 1." "${GITHUB_STEP_SUMMARY}"
+  grep -q "Result: failed." "${GITHUB_STEP_SUMMARY}"
 }
 
 # --- mode --------------------------------------------------------------------
@@ -484,10 +529,10 @@ stage_call() {
   ! stage_call plan || false
 }
 
-@test "a unit list the CLI cannot give stops the step with one error" {
+@test "a unit list the CLI cannot give stops the step with one error, and the CLI's own code" {
   touch "${MARKS}/no-units"
   run "${RECORD}" run plan
-  [ "${status}" -eq 1 ]
+  [ "${status}" -eq 3 ]
   [[ "${output}" == *"The CLI could not list the units."* ]]
   [[ "${output}" != *"The stack has no unit"* ]]
 }
@@ -512,7 +557,7 @@ stage_call() {
 @test "the summary names the unit and stage, and shows the CLI's output escaped" {
   run "${RECORD}" run plan
   grep -q "^## Iltero record: network, plan$" "${GITHUB_STEP_SUMMARY}"
-  grep -q "<summary>network: state-check</summary>" "${GITHUB_STEP_SUMMARY}"
+  grep -q "<summary>network: state check</summary>" "${GITHUB_STEP_SUMMARY}"
   grep -q "plan &lt;checked&gt; for network" "${GITHUB_STEP_SUMMARY}"
 }
 
@@ -530,7 +575,7 @@ stage_call() {
 @test "the unit's record gets a report, in the artifact and the summary" {
   run "${RECORD}" run plan
   [ "${status}" -eq 0 ]
-  local reports="${RUNNER_TEMP}/iltero-record-iac/production/reports"
+  local reports="${RUNNER_TEMP}/iltero-record-iac/production/${STACK_FOLDER}/reports"
   grep -qx "report-directory=${reports}" "${GITHUB_OUTPUT}"
   [ -f "${reports}/network/record-report.html" ]
   grep -q "<summary>network: report</summary>" "${GITHUB_STEP_SUMMARY}"
@@ -586,27 +631,27 @@ stage_call() {
   done
 }
 
-@test "an environment that cannot name an artifact needs an artifact name" {
+@test "an environment with a space is refused before anything runs" {
   ENVIRONMENT="prod env" run "${RECORD}" run plan
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The default artifact name 'iltero-records-prod env-network' is not a valid artifact name. Set the artifact-name input."* ]]
+  [[ "${output}" == *"cannot name a directory or a file. Use only letters, digits"* ]]
 }
 
 @test "the records artifact is named after the environment and the unit unless a name is given" {
   run "${RECORD}" run plan
-  grep -qx "artifact-name=iltero-records-production-network" "${GITHUB_OUTPUT}"
+  grep -qx "artifact-name=iltero-records-production-network-attempt-1" "${GITHUB_OUTPUT}"
   : > "${GITHUB_OUTPUT}"
   ARTIFACT_NAME="network-production" run "${RECORD}" run plan
-  grep -qx "artifact-name=network-production" "${GITHUB_OUTPUT}"
+  grep -qx "artifact-name=network-production-attempt-1" "${GITHUB_OUTPUT}"
 }
 
-@test "an artifact name that looks like an option is kept as given" {
+@test "an artifact name that looks like an option is kept, with the attempt added" {
   local name
   for name in -n -e -E; do
     : > "${GITHUB_OUTPUT}"
     ARTIFACT_NAME="${name}" run "${RECORD}" run plan
     [ "${status}" -eq 0 ]
-    grep -qx -- "artifact-name=${name}" "${GITHUB_OUTPUT}"
+    grep -qx -- "artifact-name=${name}-attempt-1" "${GITHUB_OUTPUT}"
   done
 }
 
@@ -626,4 +671,40 @@ stage_call() {
     [ "${status}" -eq 0 ]
     grep -qx -- "records-directory=${STACK}/${name}" "${GITHUB_OUTPUT}"
   done
+}
+
+@test "each stack has its own default records folder, which every stage of the stack shares" {
+  run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  grep -qx "records-directory=${RECORDS}" "${GITHUB_OUTPUT}"
+  cp -R "${STACK}" "${BATS_TEST_TMPDIR}/second-stack"
+  cd "${BATS_TEST_TMPDIR}/second-stack"
+  local second
+  second="$(stack_folder_name)"
+  [ "${second}" != "${STACK_FOLDER}" ]
+  : > "${GITHUB_OUTPUT}"
+  run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  grep -qx "records-directory=${RUNNER_TEMP}/iltero-records/production/${second}" "${GITHUB_OUTPUT}"
+  [ -f "${RECORDS}/units/network/car.json" ]
+}
+
+@test "every file input a stage does not read is refused, so no step seems to record a file it ignored" {
+  local stage pair variable input
+  declare -A read_by=(
+    [plan]="plan saved-plan"
+    [pre_deploy]=""
+    [post_deploy]="plan saved-plan apply-log state"
+    [post_verify]="refresh-only-plans state"
+  )
+  for stage in plan pre_deploy post_deploy post_verify; do
+    for pair in PLAN:plan SAVED_PLAN:saved-plan APPLY_LOG:apply-log STATE:state REFRESH_ONLY_PLANS:refresh-only-plans; do
+      variable="${pair%%:*}"
+      input="${pair#*:}"
+      [[ " ${read_by[${stage}]} " != *" ${input} "* ]] || continue
+      env "${variable}=other-file" "${RECORD}" run "${stage}" > "${BATS_TEST_TMPDIR}/refused.txt" 2>&1 && return 1
+      grep -qF "Stage ${stage} does not read the ${input} input. Remove it from this step." "${BATS_TEST_TMPDIR}/refused.txt"
+    done
+  done
+  ! grep -q "^iltero iac check" "${STUB_LOG}" || false
 }

@@ -9,8 +9,8 @@ branding:
 inputs:
   environment:
     description: >-
-      The environment to check the change against. Empty: the CLI finds it from the pull request's target branch.
-      Set it when the target branch deploys to several environments.
+      The environment to check the change against. When it is empty, the CLI finds it from the pull request's target
+      branch. Set it when the target branch deploys to several environments.
     required: false
     default: ""
   working-directory:
@@ -19,7 +19,7 @@ inputs:
     default: "."
   registry-host:
     description: >-
-      Host name of Iltero Platform's private module registry, from which terraform init downloads private modules.
+      Host name of Iltero Platform's private module registry, from which the IaC tool downloads private modules.
       Leave empty when the stack uses no private modules. When it is set, the project must be linked to Iltero
       Platform, and the job needs id-token: write.
     required: false
@@ -36,19 +36,25 @@ inputs:
       with -comment added.
     required: false
     default: iltero-preview
-  terraform-version:
+  tool:
     description: >-
-      The Terraform version to install and run. Only versions listed in scripts/iac/terraform.sha256 are accepted.
+      The infrastructure-as-code (IaC) tool the stack uses, to install and run. Supported: terraform.
     required: false
-    default: "1.16.5"
+    default: terraform
+  tool-version:
+    description: >-
+      The version of the tool to install and run. When the input is empty, the action installs the version it pins as
+      the tool's default. The action accepts only versions whose checksums it pins.
+    required: false
+    default: ""
 
 outputs:
-  terraform-version:
-    description: The Terraform version installed.
-    value: ${{ steps.terraform.outputs.terraform-version }}
-  terraform-path:
-    description: Absolute path of the Terraform binary.
-    value: ${{ steps.terraform.outputs.terraform-path }}
+  tool-version:
+    description: The version of the IaC tool installed.
+    value: ${{ steps.tool.outputs.tool-version }}
+  tool-path:
+    description: Absolute path of the IaC tool's binary.
+    value: ${{ steps.tool.outputs.tool-path }}
   environment:
     description: The environment the change is checked against.
     value: ${{ steps.environment.outputs.environment }}
@@ -67,23 +73,26 @@ runs:
     - name: Check the event and the job
       shell: bash
       env:
+        TOOL: ${{ inputs.tool }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
         UPLOAD_RECORDS: ${{ inputs.upload-records }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/preview.sh" check "${ARTIFACT_NAME}"'
 
-    - name: Install Terraform
-      id: terraform
+    - name: Install the IaC tool
+      id: tool
       shell: bash
       env:
-        TERRAFORM_VERSION: ${{ inputs.terraform-version }}
-      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/install-terraform.sh" "${TERRAFORM_VERSION}"'
+        TOOL: ${{ inputs.tool }}
+        TOOL_VERSION: ${{ inputs.tool-version }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/iac/install-tool.sh" "${TOOL}" "${TOOL_VERSION}"'
 
     - name: Find the environment
       id: environment
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
+        TOOL: ${{ inputs.tool }}
         ENVIRONMENT: ${{ inputs.environment }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         REGISTRY_HOST: ${{ inputs.registry-host }}
@@ -94,6 +103,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
+        TOOL: ${{ inputs.tool }}
         ENVIRONMENT: ${{ steps.environment.outputs.environment }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         REGISTRY_HOST: ${{ inputs.registry-host }}

@@ -13,9 +13,9 @@
 # Run from the stack's working directory. In a project linked to the server,
 # the plan stage's check opens the run on the server for the pipeline run and
 # environment, each later stage joins it, and the action sends each stage's
-# record. A project with no platform section in .iltero/config.yml records
-# locally: no run, no upload, and no pre-deploy stage. On a pull request
-# event, plan runs as a local preview, linked or not.
+# record. A project not linked to the server records locally: no run, no
+# upload, and no pre-deploy stage. On a pull request event, plan runs as a
+# local preview, linked or not.
 #
 # The CLI keeps each unit's record in RECORDS_DIRECTORY. Pre-deploy reads the
 # plan stage's record from it. When pre_deploy runs in a different job from
@@ -30,8 +30,8 @@
 #   STATE                      The state after the apply, from `terraform show -json`. Post-verify
 #                              takes the same file as post-deploy.
 #   STATE_UNREADABLE           true or false. True: Terraform could not read the state after the apply.
-#   REFRESH_PLANS              Two readings of the deployed resources, one path per line, in the
-#                              order they were taken. Each is a refresh-only plan as JSON.
+#   REFRESH_ONLY_PLANS         Two refresh-only plans as JSON, one path per line, in the order
+#                              they were taken: two readings of the deployed resources.
 #   RECORDS_DIRECTORY          Where the CLI keeps the records. Empty: a directory for the environment
 #                              in RUNNER_TEMP.
 #   ARTIFACT_NAME              The records artifact's name. Empty: iltero-records-<environment>-<unit>.
@@ -59,6 +59,7 @@ cmd_check() {
   local stage="$1"
   check_stage_input "${stage}"
   [[ -z "${ARTIFACT_NAME:-}" ]] || check_artifact_name "${ARTIFACT_NAME}"
+  require_retention_days
   cli_path > /dev/null
 }
 
@@ -68,6 +69,33 @@ require_file() {
   local path_value="$2"
   [[ -n "${path_value}" ]] || die "The ${input} input is required for stage ${STAGE}."
   [[ -f "${path_value}" ]] || die "The ${input} input names no file: '${path_value}'."
+}
+
+# The file inputs of record-iac, as VARIABLE:input, and the inputs each stage
+# reads.
+readonly RECORD_FILE_INPUTS=(PLAN:plan SAVED_PLAN:saved-plan APPLY_LOG:apply-log STATE:state REFRESH_ONLY_PLANS:refresh-only-plans)
+readonly PLAN_STAGE_INPUTS="plan saved-plan"
+readonly PRE_DEPLOY_STAGE_INPUTS=""
+readonly POST_DEPLOY_STAGE_INPUTS="plan saved-plan apply-log state"
+readonly POST_VERIFY_STAGE_INPUTS="refresh-only-plans state"
+
+# Stops when the step gives a file input that STAGE does not read, so the
+# step never seems to record a file it ignored.
+refuse_unused_inputs() {
+  local used pair variable input
+  case "${STAGE}" in
+    plan) used="${PLAN_STAGE_INPUTS}" ;;
+    pre_deploy) used="${PRE_DEPLOY_STAGE_INPUTS}" ;;
+    post_deploy) used="${POST_DEPLOY_STAGE_INPUTS}" ;;
+    post_verify) used="${POST_VERIFY_STAGE_INPUTS}" ;;
+    *) die "Unknown stage '${STAGE}'." ;;
+  esac
+  for pair in "${RECORD_FILE_INPUTS[@]}"; do
+    variable="${pair%%:*}"
+    input="${pair#*:}"
+    [[ -z "${!variable:-}" || " ${used} " == *" ${input} "* ]] \
+      || die "Stage ${STAGE} does not read the ${input} input. Remove it from this step."
+  done
 }
 
 # Runs the CLI's check of STAGE for the unit. Returns the CLI's exit code.
@@ -112,12 +140,14 @@ record_event() {
     post_verify)
       local readings=() line
       while IFS= read -r line; do
-        [[ -z "${line//[[:space:]]/}" ]] || readings+=("${line}")
-      done <<< "${REFRESH_PLANS:-}"
+        line="$(trim "${line}")"
+        require_one_line refresh-only-plans "${line}"
+        [[ -z "${line}" ]] || readings+=("${line}")
+      done <<< "${REFRESH_ONLY_PLANS:-}"
       [[ "${#readings[@]}" -eq 2 ]] \
-        || die "The refresh-plans input must name two readings, one per line, in the order they were taken. It names ${#readings[@]}."
-      require_file refresh-plans "${readings[0]}"
-      require_file refresh-plans "${readings[1]}"
+        || die "The refresh-only-plans input must name two refresh-only plans, one per line, in the order they were taken. It names ${#readings[@]}."
+      require_file refresh-only-plans "${readings[0]}"
+      require_file refresh-only-plans "${readings[1]}"
       # The CLI checks that this is the state post-deploy read, and reads it
       # only for the checks that the plan stage left until after the apply.
       # The action cannot tell whether the plan left any, so it always
@@ -137,6 +167,7 @@ cmd_run() {
   require_true_or_false state-unreadable "${STATE_UNREADABLE:-}"
   [[ "${STATE_UNREADABLE}" == false || "${STAGE}" == post_deploy ]] \
     || die "The state-unreadable input applies only to the post_deploy stage."
+  refuse_unused_inputs
   [[ -n "${UNIT:-}" ]] || die "The unit input is required."
   check_unit_name "${UNIT}"
   local artifact
@@ -148,16 +179,22 @@ cmd_run() {
     # The CLI opens or joins the run on the server with the job's identity token.
     [[ "${linked}" == false ]] || require_id_token
   fi
-  set_server_args "${linked}"
+  set_server_options "${linked}"
 
-  # Each environment has its own work directory, so its reports stay apart.
-  local work_root="${RUNNER_TEMP}/iltero-record-iac/${ENVIRONMENT}"
+  # Each environment and stack has its own work folder and default records
+  # folder, so two stacks in one job keep their records and reports apart. Every
+  # stage of one stack shares them, so a later stage reads the record of an
+  # earlier stage.
+  local temp stack
+  temp="$(runner_temp)" || exit 1
+  stack="$(stack_work_folder_name)" || die "The action could not name the stack's work folder."
+  local work_root="${temp}/iltero-record-iac/${ENVIRONMENT}/${stack}"
   local units="${work_root}/units.tsv"
   local dir
   mkdir -p "${work_root}"
   list_checked_units "${units}"
   dir="$(unit_dir "${UNIT}" "${units}")"
-  local out="${RECORDS_DIRECTORY:-${RUNNER_TEMP}/iltero-records/${ENVIRONMENT}}"
+  local out="${RECORDS_DIRECTORY:-${temp}/iltero-records/${ENVIRONMENT}/${stack}}"
   # A relative path starts with ./, so no command reads it as an option.
   [[ "${out}" == /* ]] || out="./${out}"
   local work="${work_root}/units/${UNIT}/${STAGE}"
@@ -174,7 +211,7 @@ cmd_run() {
   fi
 
   # A linked project's run is found by its stack and environment, at every stage.
-  local run_args=(--unit="${UNIT}" --out="${out}" --environment="${ENVIRONMENT}" ${SERVER_ARGS[@]+"${SERVER_ARGS[@]}"})
+  local run_args=(--unit="${UNIT}" --out="${out}" --environment="${ENVIRONMENT}" ${SERVER_OPTIONS[@]+"${SERVER_OPTIONS[@]}"})
   # A pull request's plan is a local preview, never recorded on the server.
   ! is_pull_request_event || run_args+=(--local)
   local status=0 result
@@ -182,22 +219,27 @@ cmd_run() {
     # Pre-deploy checks facts only the server holds.
     [[ -f "${out}/units/${UNIT}/car.json" ]] \
       || die "The records directory holds no record of unit '${UNIT}'. Run the plan stage first. In another job, download the plan job's records artifact and pass its directory as records-directory."
-    echo "::notice::A project with no platform section does not run the pre-deploy stage. Nothing was checked."
     result="$(local_pre_deploy_result "${work}" "${out}" "${UNIT}")" || status=$?
-    [[ "${status}" -eq 0 ]] || result="$(record_scope_failure "${status}")"
+    [[ "${status}" -ne 0 ]] \
+      || echo "::notice::A project not linked to the server does not run the pre-deploy stage, and this unit's record does not require it. Nothing was checked."
+    [[ "${status}" -eq 0 || "${result}" == "${PRE_DEPLOY_CANNOT_RUN_RESULT}" ]] || result="$(record_scope_failure "${status}")"
   else
     STATE_CHECK_FAILED=false
     record_event "${dir}" "${work}" "${run_args[@]}" || status=$?
-    result="exit ${status}"
-    [[ "${STATE_CHECK_FAILED}" == false ]] || result="state check exit ${status}"
-    [[ "${STATE_UNREADABLE}" == false ]] || result+=", state not read"
+    if [[ "${STATE_CHECK_FAILED}" == true ]]; then
+      result="state check failed"
+    elif [[ "${STATE_UNREADABLE}" == true ]]; then
+      result="$(post_deploy_result "${status}" 1)"
+    else
+      result="$(check_result "${status}")"
+    fi
   fi
 
   local details="${work}/details.md" step report_missing=0
   : > "${details}"
   for step in state-check "in-scope-${STAGE}" "${STAGE}"; do
     [[ -f "${work}/${step}.txt" ]] || continue
-    append_details_block "${details}" "${UNIT}: ${step//_/-}" "${work}/${step}.txt"
+    append_details_block "${details}" "${UNIT}: $(details_title "${step}")" "${work}/${step}.txt"
   done
   if [[ "${report}" == true && -f "${out}/units/${UNIT}/car.json" ]]; then
     write_report "${UNIT}" "${out}/units/${UNIT}" "${reports}" "${details}" "${work}/report.txt" || report_missing=1
