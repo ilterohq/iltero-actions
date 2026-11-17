@@ -201,3 +201,9 @@ TERRAFORM_CHECKSUMS="${REPO_ROOT}/scripts/iac/tools/terraform/checksums.sha256"
   ! grep -q 'id-token' <<< "${job}" || false
   [ "$(grep -c 'persist-credentials: false' <<< "${job}")" -eq "$(grep -c 'actions/checkout@' <<< "${job}")" ]
 }
+
+@test "a failure of the end-to-end CI job does not fail the workflow while the CLI's repository is private" {
+  local ci="${REPO_ROOT}/.github/workflows/ci.yml" job
+  job="$(awk '/^  [a-z-]+:$/ { inside = ($1 == "end-to-end:") } inside' "${ci}")"
+  grep -qx '    continue-on-error: true' <<< "${job}"
+}

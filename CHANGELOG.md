@@ -349,10 +349,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deploy` and `close` run only on `push`, `workflow_dispatch` and `schedule` events. On any other event, the step
   stops with "This action runs only on push, workflow_dispatch and schedule events, not on '...' events. Start the
   workflow with one of them." Pull request events keep their own message.
-- The IaC tool runs in a session of its own. When it cannot start, the step fails with "The IaC tool could not start:
-  ...". When it exits, the action stops every process that the tool or its providers left running. When it cannot stop
-  them all within 30 seconds, the step fails with "Some processes the IaC tool left running could not be stopped
-  within 30 seconds."
+- The IaC tool runs in a session of its own. When it cannot start, the step fails with "The infrastructure-as-code (IaC)
+  tool could not start: ...". When it exits, the action stops every process that the tool or its providers left running.
+  When it cannot stop them all within 30 seconds, the step fails with "Some processes the infrastructure-as-code (IaC)
+  tool left running could not be stopped within 30 seconds."
 - Terraform reads a new, empty Terraform CLI configuration file for each call, and none from the runner's home folder.
 - The action fingerprints its tools and the files the step relies on before and after each Terraform call. When any of
   them changed, the step stops with "The action's tools or scripts changed while Terraform ran, so the step stops. Run
