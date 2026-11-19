@@ -24,12 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example, `ILT.AWS.S3.PUBLIC_ACCESS_BLOCKED` is now `ILT.IAC.RESOURCE.AWS.S3.PUBLIC_ACCESS_BLOCKED`. A project's own
   identifiers follow the same order and must not start with `ILT`. The CLI stops on a file that breaks either rule,
   and the step fails.
-- Four new settings under `assertions` in `.iltero/config.yml`, which `iltero init` writes: `scanner_bindings`,
+- Four new settings under `assertions` in `.iltero/config.yml`, which `iltero init` writes: `scanner_check_mapping`,
   `required_scanners`, `local_exceptions` and `values_known_after_deployment`. Some values in a plan are known only
   after the apply, such as an identifier the cloud assigns. With `values_known_after_deployment: postpone`, the plan
   check leaves a check that reads such a value to the post-verify stage, when the record requires that stage. The
   post-verify stage decides it from the state file that the post-deploy stage checked. With `block`, the plan check
   stops on it, and the step fails. A governed run postpones nothing.
+- `iac_tool` setting in `.iltero/config.yml`: the infrastructure-as-code tool whose files the project's IaC checks
+  read. The installed CLI reads only `terraform`. `iltero init --iac-tool` writes it. A project that checks only images
+  leaves it out. The CLI refuses an IaC check in a project whose configuration file names no tool, and the step fails.
+- A repository can hold several projects, each in its own folder with its own `.iltero/config.yml`. Give each action
+  that folder, relative to the repository root, as `project-directory`. The folder must be committed. The CLI refuses a
+  project folder that the commit of its repository does not hold as a folder, and the step fails.
 - Starter assertions are the assertions shipped with Iltero. They apply only in a run that Iltero Platform did not
   open, such as a preview. With them on, the plan check reports that something was not checked when the plan holds no
   resource for one of them. It reports the same when the plan holds a CloudTrail, AWS Config or IAM policy resource
@@ -48,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `application` and `environment` | The image deploy run of that application and environment |
 
   With neither, the step stops with "Give the environment input, the application input, or both." It also takes
-  `working-directory` (`.` by default).
+  `project-directory` (`.` by default).
 - `preview` action. It plans each unit of a pull request with no credentials and checks each plan locally. When a unit
   fails its check, or `preview` could not plan it, the step fails.
 - `deploy` action. It plans, checks and applies each unit of a stack, and records each deployment: in a governed run
@@ -67,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `verify` action. It builds each unit's record bundle with `iltero record build`, a folder that holds the record and
   every file it cites. It then checks with `iltero record verify` that the record and its files are unchanged. The
   step fails when a unit's bundle does not build or does not verify, when a unit has no record bundle or more than
-  one, or when the CLI did not write a unit's report. `records-directory` may be relative to `working-directory`. The
+  one, or when the CLI did not write a unit's report. `records-directory` may be relative to `project-directory`. The
   optional `unit` input names one unit, as `iltero units list` prints it. The action then builds, verifies and uploads
   only that unit's bundle, and keeps its reports in a directory of their own. A name that breaks the unit-name rule
   stops the step with "The unit name '...' is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-',
@@ -137,6 +143,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   do not run on '...' events. Run them on pull_request events for a pull request, or after the merge."
   It refuses `pull_request_review` and `pull_request_review_comment` events with "record-iac does not run on ...
   events. Run it on pull_request events, where it checks the plan locally."
+- `scan-reports` input of `record-iac`, for the `plan` stage. It takes the reports of scanners that checked the plan
+  as JSON, the file the `plan` input names, one per line: the scanner (`checkov` or `trivy`), a space, then the path
+  of its JSON report, at most one report for each scanner. The action trims the spaces around each line, skips blank
+  lines, and passes each report to the CLI in the order given. A line that names another scanner or no report stops
+  the step with "Each line of the scan-reports input must be a scanner (checkov trivy), a space and the report's path.
+  One line is '...'." A report that is not a file stops it with "The scan-reports input names no file: '...'." At any
+  other stage, the input stops the step with "Stage ... does not read the scan-reports input. Remove it from this
+  step." The input is for a project not linked to Iltero Platform, or for `pull_request` events. In a linked project,
+  on any other event, the CLI refuses the reports and the step fails: the run's settings on Iltero Platform decide
+  which checks run.
+- `examples/iac/own-terraform.yml` scans the plan with Checkov 3.3.8 and Trivy 0.72.0, scanners that check a plan for
+  security problems, and gives both reports to the plan stage through `scan-reports`. Each scanner runs in its
+  container image, named by its digest, with no network and only the plan mounted, so it gets none of the job's files
+  or cloud credentials. Neither scan stops the job on a finding, since the CLI gives the verdict. Every example uses
+  the same Trivy release, 0.72.0.
 - Example `examples/iac/own-terraform.yml` for a project not linked to Iltero Platform. It runs Terraform itself and
   records each stage with `record-iac`, on the runner. Its `pre_deploy` step runs no check, because that stage checks
   facts that only Iltero Platform holds. The step fails when the unit's record still requires the stage. A last step
@@ -189,9 +210,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The example runs three jobs in a governed build run. The first builds the image from the Git repository at the
   pushed commit, for each CPU architecture in `IMAGE_PLATFORMS` (`linux/amd64,linux/arm64` by default), and pushes it
   to the GitHub container registry. It stops unless `IMAGE_PLATFORMS` lists one or more platforms: "IMAGE_PLATFORMS
-  must list one or more platforms, such as linux/amd64, separated by commas with no spaces." The second scans the
-  pushed image by its digest, once for each architecture, with read access to the registry only. The third signs in to
-  AWS with a records role, records the image with every report, keeps the record in the build run's artifact store
+  must list one or more platforms, such as linux/amd64, separated by commas with no spaces." The second reads the
+  pushed image's index (the list of the image's architectures, each with its own digest), and scans the image of each
+  architecture by its digest, so each report names exactly the image it scanned. It has read access to the registry
+  only. It stops when the index the build job kept does not match the pushed image's digest: "The index the build job
+  kept does not match the digest of the pushed image." It stops unless the index lists exactly one image for each
+  architecture: "The image's index must list exactly one image for ...". The third signs in to AWS with a records
+  role, records the image with every report, keeps the record in the build run's artifact store
   (`store-records: true`), and closes the build run.
 - Example `examples/image/build.yml` for a project not linked to Iltero Platform. It builds and scans an image in
   three jobs, as `examples/image/governed-build.yml` does. The scan job fails the workflow when any architecture has a
@@ -292,7 +317,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a unit's report would, the summary reads "The report of unit ... is too long for the job summary. It is in the
   report artifact."
 - `record-iac`, `record-image` and `verify` take a relative `records-directory` as a directory under
-  `working-directory`, also one that looks like an option, such as `-`. The `records-directory` output of `record-iac`
+  `project-directory`, also one that looks like an option, such as `-`. The `records-directory` output of `record-iac`
   and `record-image` gives its absolute path. `verify` refuses an empty `records-directory` with "The records
   directory is empty. Pass the records-directory output of the deploy or record-iac action.", and a missing one with
   "The records directory '...' does not exist. Pass the records-directory output of the deploy or record-iac action."
@@ -335,6 +360,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `deploy`, `preview` | `terraform-version` input | `tool-version` input |
   | `deploy`, `preview` | `terraform-version` output | `tool-version` output |
   | `deploy`, `preview` | `terraform-path` output | `tool-path` output |
+  | `close`, `deploy`, `preview`, `record-iac`, `record-image`, `verify` | `working-directory` input | `project-directory` input |
 
 - The reference workflows in `examples/` give every job a time limit: 180 minutes for a deploy job, 10 for a close or
   comment job, and 60 for the others. `examples/iac/deploy.yml` and `examples/iac/own-terraform.yml` say to list the
@@ -385,7 +411,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unit`, and the step fails. When Terraform fails, the log shows its output, then "Terraform could not plan the unit.
   Its output is above."
 - `deploy`, `preview`, `verify`, `record-iac` and `record-image` keep each stack's files in a work folder of its own,
-  one for each `working-directory`, so two stacks in one job keep their records and reports apart. The
+  one for each `project-directory`, so two stacks in one job keep their records and reports apart. The
   `records-directory` output of `deploy` and `preview` names that stack's folder. None of `deploy`, `verify` and
   `preview` uploads or checks a record or report that an earlier step in the job wrote.
 - `deploy` and `preview` give Terraform the job's proxy and certificate settings when the job sets them:
@@ -395,10 +421,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through which Terraform manages one cloud or service. Terraform uses a cached provider only when the unit's lock
   file records its checksum.
 - When `records-directory` is empty, `record-iac` keeps the records in a directory of its own for each environment and
-  `working-directory`, shared by every stage of that stack. `record-image` keeps them in one directory for each
-  `working-directory`'s builds, and one for each `working-directory` and environment's deployments. Give every stage
-  of a stack the same `working-directory`, or the same `records-directory`, so a later stage finds the earlier stage's
-  record.
+  `project-directory`, shared by every stage of the stack in that environment. `record-image` keeps them in one
+  directory for the builds of each `project-directory`, and one for the deployments of each `project-directory` and
+  environment. Give every stage of a stack the same `project-directory`, or the same `records-directory`, so a later
+  stage finds the earlier stage's record.
 - When the Iltero CLI fails at one of these points, the step ends with the CLI's own exit code, not 1, and shows one
   of these messages after the CLI's own:
 

@@ -21,8 +21,8 @@ inputs:
   unit:
     description: The unit's name, as `iltero units list` prints it.
     required: true
-  working-directory:
-    description: The stack's directory, relative to the repository root. File inputs are relative to it.
+  project-directory:
+    description: The project's directory, relative to the repository root. File inputs are relative to it.
     required: false
     default: "."
   plan:
@@ -35,6 +35,22 @@ inputs:
     description: >-
       The saved plan file, from `terraform plan -out`. Required at plan and post_deploy. Leave it empty at the other
       stages.
+    required: false
+    default: ""
+  scan-reports:
+    description: >-
+      Plan only. Reports of scanners, tools that check the plan for security problems. One per line: the scanner
+      (checkov or trivy), a space, then the path of its JSON report. At most one report for each scanner. Scan the
+      file the plan input names, and write each scanner's JSON output to a file of its own. For Checkov: `checkov -f
+      PLAN --framework terraform_plan --output json --soft-fail > checkov.json`. `--soft-fail` keeps a failed check
+      from failing the scan step, so the CLI gives the verdict. Never add `--quiet`, which leaves out the checks that
+      passed. For Trivy: `trivy config --include-non-failures --skip-check-update --format json PLAN > trivy.json`.
+      `--skip-check-update` keeps the checks that come with the Trivy release, so a plan is checked the same way each
+      time. Run each scanner where it cannot reach the job's files or cloud credentials.
+      examples/iac/own-terraform.yml runs each scanner in a container with no network and only the plan mounted. Set
+      it only in a project not linked to Iltero Platform, or on pull_request events. In a linked project, on any other
+      event, the CLI refuses the reports and the step fails: the run's settings on Iltero Platform decide which checks
+      run. Leave it empty at the other stages.
     required: false
     default: ""
   apply-log:
@@ -70,9 +86,9 @@ inputs:
   records-directory:
     description: >-
       Where the CLI keeps the records. When it is empty, the action uses a directory of its own for each environment
-      and stack (working-directory), under the runner's temporary directory. Every stage of that stack uses it, so
-      give every stage the same working-directory. A relative path is relative to working-directory. pre_deploy reads
-      the plan stage's record from it. When pre_deploy runs in a different job from plan, download the plan job's
+      and project-directory, under the runner's temporary directory. Every stage of the stack in that environment uses
+      it, so give every stage the same project-directory. A relative path is relative to project-directory. pre_deploy
+      reads the plan stage's record from it. When pre_deploy runs in a different job from plan, download the plan job's
       records artifact and pass its directory here.
     required: false
     default: ""
@@ -93,18 +109,18 @@ inputs:
     default: "false"
   artifact-name:
     description: >-
-      Name of the artifact that holds the records. The action adds -attempt-<attempt> to the name, where <attempt> is
-      the pipeline run's attempt number, so a re-run keeps the records of earlier attempts. When the input is empty, the name
-      is iltero-records-<environment>-<unit>-attempt-<attempt>. The artifact-name output gives the full name. Each step replaces the artifact with the records in
-      records-directory, so two jobs that record the same environment and unit from different records directories need
-      different names.
+      Name of the artifact that holds the records. The action adds -attempt-<attempt> to the name, where <attempt>
+      is the pipeline run's attempt number, so a re-run keeps the records of earlier attempts. When the input is
+      empty, the name is iltero-records-<environment>-<unit>-attempt-<attempt>. The artifact-name output gives the
+      full name. Each step replaces the artifact with the records in records-directory, so two jobs that record
+      the same environment and unit from different records directories need different names.
     required: false
     default: ""
 
   retention-days:
     description: >-
-      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the input is empty, the
-      repository's own artifact retention setting applies.
+      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the
+      input is empty, the repository's own artifact retention setting applies.
     required: false
     default: ""
 
@@ -133,13 +149,14 @@ runs:
     - name: Record the stage
       id: record
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ inputs.project-directory }}
       env:
         STAGE: ${{ inputs.stage }}
         ENVIRONMENT: ${{ inputs.environment }}
         UNIT: ${{ inputs.unit }}
         PLAN: ${{ inputs.plan }}
         SAVED_PLAN: ${{ inputs.saved-plan }}
+        SCAN_REPORTS: ${{ inputs.scan-reports }}
         APPLY_LOG: ${{ inputs.apply-log }}
         STATE: ${{ inputs.state }}
         STATE_UNREADABLE: ${{ inputs.state-unreadable }}

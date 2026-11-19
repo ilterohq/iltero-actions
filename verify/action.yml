@@ -21,8 +21,8 @@ inputs:
       Use it after record-iac, which records one unit.
     required: false
     default: ""
-  working-directory:
-    description: The stack's directory, relative to the repository root.
+  project-directory:
+    description: The project's directory, relative to the repository root.
     required: false
     default: "."
   write-report:
@@ -44,8 +44,8 @@ inputs:
 
   retention-days:
     description: >-
-      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the input is empty, the
-      repository's own artifact retention setting applies.
+      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the
+      input is empty, the repository's own artifact retention setting applies.
     required: false
     default: ""
 
@@ -70,7 +70,7 @@ runs:
     - name: Build and verify each record
       id: verify
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ inputs.project-directory }}
       env:
         ENVIRONMENT: ${{ inputs.environment }}
         RECORDS_DIRECTORY: ${{ inputs.records-directory }}

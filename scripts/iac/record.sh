@@ -10,7 +10,7 @@
 #                                and that setup ran.
 #   iac/record.sh run STAGE      Run the CLI's check of STAGE for UNIT; write the job summary.
 #
-# Run from the stack's working directory. In a project linked to the server,
+# Run from the project's directory. In a project linked to the server,
 # the plan stage's check opens the run on the server for the pipeline run and
 # environment, each later stage joins it, and the action sends each stage's
 # record. A project not linked to the server records locally: no run, no
@@ -26,6 +26,8 @@
 #   UNIT                       The unit's name, as `iltero units list` prints it.
 #   PLAN                       The saved plan as JSON, from `terraform show -json`.
 #   SAVED_PLAN                 The saved plan file, from `terraform plan -out`.
+#   SCAN_REPORTS               Plan only. Scan reports of the plan as JSON (PLAN), one per line: the scanner's
+#                              name, a space, the report's path.
 #   APPLY_LOG                  The output of `terraform apply -json`.
 #   STATE                      The state after the apply, from `terraform show -json`. Post-verify
 #                              takes the same file as post-deploy.
@@ -49,6 +51,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
 
 # The CLI's stages record-iac records.
 readonly STAGES=(plan pre_deploy post_deploy post_verify)
+# The scanners whose reports of a plan the CLI reads.
+readonly SCANNERS=(checkov trivy)
 
 # Stops unless record-iac records STAGE on the job's event.
 check_stage_input() {
@@ -68,13 +72,14 @@ require_file() {
   local input="$1"
   local path_value="$2"
   [[ -n "${path_value}" ]] || die "The ${input} input is required for stage ${STAGE}."
-  [[ -f "${path_value}" ]] || die "The ${input} input names no file: '${path_value}'."
+  require_named_file "${input}" "${path_value}"
 }
 
 # The file inputs of record-iac, as VARIABLE:input, and the inputs each stage
 # reads.
-readonly RECORD_FILE_INPUTS=(PLAN:plan SAVED_PLAN:saved-plan APPLY_LOG:apply-log STATE:state REFRESH_ONLY_PLANS:refresh-only-plans)
-readonly PLAN_STAGE_INPUTS="plan saved-plan"
+readonly RECORD_FILE_INPUTS=(PLAN:plan SAVED_PLAN:saved-plan SCAN_REPORTS:scan-reports APPLY_LOG:apply-log STATE:state
+  REFRESH_ONLY_PLANS:refresh-only-plans)
+readonly PLAN_STAGE_INPUTS="plan saved-plan scan-reports"
 readonly PRE_DEPLOY_STAGE_INPUTS=""
 readonly POST_DEPLOY_STAGE_INPUTS="plan saved-plan apply-log state"
 readonly POST_VERIFY_STAGE_INPUTS="refresh-only-plans state"
@@ -108,6 +113,7 @@ record_event() {
     plan)
       require_file plan "${PLAN:-}"
       require_file saved-plan "${SAVED_PLAN:-}"
+      add_scan_report_options "${SCAN_REPORTS:-}" "${SCANNERS[@]}"
       # The state check reads the job's own TF_DATA_DIR when it is set.
       local status=0
       state_check "${dir}" "${work}" || status=$?
@@ -115,7 +121,8 @@ record_event() {
         STATE_CHECK_FAILED=true
         return "${status}"
       fi
-      check_stage "${work}" plan --plan="${PLAN}" --saved-plan="${SAVED_PLAN}" "${run_args[@]}"
+      check_stage "${work}" plan --plan="${PLAN}" --saved-plan="${SAVED_PLAN}" \
+        ${SCAN_REPORT_OPTIONS[@]+"${SCAN_REPORT_OPTIONS[@]}"} "${run_args[@]}"
       ;;
     pre_deploy)
       check_stage "${work}" pre_deploy "${run_args[@]}"

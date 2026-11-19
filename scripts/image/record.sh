@@ -13,7 +13,7 @@
 #                                  and that setup ran.
 #   image/record.sh run STAGE      Run the CLI's check of STAGE for UNIT; write the job summary.
 #
-# Run from the project's working directory. In a project linked to the
+# Run from the project's directory. In a project linked to the
 # server, the plan stage's check opens or joins the build run of the pipeline
 # run for APPLICATION, and each deployment stage's check opens or joins the
 # image deploy run for APPLICATION and ENVIRONMENT. Each check sends the
@@ -74,13 +74,6 @@ cmd_check() {
   cli_path > /dev/null
 }
 
-# Stops unless the input INPUT, whose value is PATH_VALUE, names a file.
-require_named_file() {
-  local input="$1"
-  local path_value="$2"
-  [[ -f "${path_value}" ]] || die "The ${input} input names no file: '${path_value}'."
-}
-
 # Stops unless the input INPUT, whose value is VALUE, is given for STAGE.
 require_input() {
   local input="$1"
@@ -111,17 +104,8 @@ add_file_options() {
     [[ -n "${line}" ]] || continue
     add_file_option test-reports --test-report "${line}"
   done <<< "${TEST_REPORTS:-}"
-  local scanner report
-  while IFS= read -r line; do
-    line="$(trim "${line}")"
-    [[ -n "${line}" ]] || continue
-    scanner="${line%% *}"
-    report="$(trim "${line#* }")"
-    [[ " ${SCANNERS[*]} " == *" ${scanner} "* && "${report}" != "${line}" && -n "${report}" ]] \
-      || die "Each line of the scan-reports input must be a scanner (${SCANNERS[*]}), a space and the report's path. One line is '${line}'."
-    require_named_file scan-reports "${report}"
-    CLI_OPTIONS+=(--scanner="${scanner}" --scanner-report="${report}")
-  done <<< "${SCAN_REPORTS:-}"
+  add_scan_report_options "${SCAN_REPORTS:-}" "${SCANNERS[@]}"
+  CLI_OPTIONS+=(${SCAN_REPORT_OPTIONS[@]+"${SCAN_REPORT_OPTIONS[@]}"})
   add_file_option workload-before-pods-listing --workload-before-pods-listing "${WORKLOAD_BEFORE_PODS_LISTING:-}"
   add_file_option pods --pods "${PODS:-}"
   add_file_option pod-owners --pod-owners "${POD_OWNERS:-}"
@@ -179,7 +163,7 @@ cmd_run() {
   # records are also kept apart for each environment.
   local temp stack
   temp="$(runner_temp)" || exit 1
-  stack="$(stack_work_folder_name)" || die "The action could not name the stack's work folder."
+  stack="$(stack_work_folder_name)" || die "The action could not name the project's work folder."
   local default_out="${temp}/iltero-image-records/${stack}" default_artifact="iltero-image-records-${UNIT}"
   if [[ "${STAGE}" != plan ]]; then
     default_out="${temp}/iltero-image-deployment-records/${ENVIRONMENT}/${stack}"

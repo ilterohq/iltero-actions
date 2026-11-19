@@ -8,7 +8,7 @@
 #   iac/verify.sh run RECORDS_DIRECTORY  For each unit: iltero record build, then
 #                                        iltero record verify.
 #
-# Run from the stack's working directory, with the RECORDS_DIRECTORY the
+# Run from the project's directory, with the RECORDS_DIRECTORY the
 # deploy or record-iac action wrote. Every unit is checked, or only UNIT when
 # it is set; the step fails when any unit fails. When WRITE_REPORT is true, the
 # CLI also writes a report of each unit's record bundle.

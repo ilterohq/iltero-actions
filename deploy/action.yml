@@ -10,8 +10,8 @@ inputs:
   environment:
     description: The environment to deploy.
     required: true
-  working-directory:
-    description: The stack's directory, relative to the repository root.
+  project-directory:
+    description: The project's directory, relative to the repository root.
     required: false
     default: "."
   registry-host:
@@ -38,10 +38,11 @@ inputs:
     default: "false"
   artifact-name:
     description: >-
-      Name of the artifact that holds the records. The action adds -attempt-<attempt> to the name, where <attempt> is
-      the pipeline run's attempt number, so a re-run keeps the records of earlier attempts. When the input is empty, the name
-      is iltero-deploy-<environment>-attempt-<attempt>. The artifact-name output gives the full name. Two deploy steps in one pipeline run (on GitHub, one workflow run) that
-      deploy the same environment need different names.
+      Name of the artifact that holds the records. The action adds -attempt-<attempt> to the name, where <attempt>
+      is the pipeline run's attempt number, so a re-run keeps the records of earlier attempts. When the input is
+      empty, the name is iltero-deploy-<environment>-attempt-<attempt>. The artifact-name output gives the full
+      name. Two deploy steps in one pipeline run (on GitHub, one workflow run) that deploy the same environment
+      need different names.
     required: false
     default: ""
   tool:
@@ -58,8 +59,8 @@ inputs:
 
   retention-days:
     description: >-
-      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the input is empty, the
-      repository's own artifact retention setting applies.
+      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the
+      input is empty, the repository's own artifact retention setting applies.
     required: false
     default: ""
 
@@ -109,7 +110,7 @@ runs:
     - name: Deploy each unit
       id: deploy
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ inputs.project-directory }}
       env:
         TOOL: ${{ inputs.tool }}
         ENVIRONMENT: ${{ inputs.environment }}

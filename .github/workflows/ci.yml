@@ -281,16 +281,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # The CLI records the commit of the Git repository that holds the
-      # project's .iltero/config.yml. This step makes the test stack a Git
-      # repository of its own, with one commit, on main: the branch the stack's
-      # e2e environment is mapped to.
-      - name: Make the test stack a Git repository of its own
-        run: |
-          git -C "${STACK}" init -q -b main
-          git -C "${STACK}" add -A
-          git -C "${STACK}" -c user.name=ci -c user.email=ci@example.invalid commit -q -m "Test stack"
-
       # These steps run the actions from this checkout. zizmor asks for
       # GitHub's newer "$/" form of these paths, which actionlint rejects.
       - name: Set up Iltero
@@ -301,7 +291,7 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: ./preview # zizmor: ignore[self-repository]
         with:
-          working-directory: ${{ env.STACK }}
+          project-directory: ${{ env.STACK }}
           environment: e2e
 
       - name: Check the preview's outputs
@@ -361,7 +351,7 @@ jobs:
           stage: plan
           environment: e2e
           unit: root
-          working-directory: ${{ env.STACK }}
+          project-directory: ${{ env.STACK }}
           plan: ${{ runner.temp }}/e2e-plan/plan.json
           saved-plan: ${{ runner.temp }}/e2e-plan/tfplan
           retention-days: 1

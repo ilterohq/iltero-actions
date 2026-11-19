@@ -23,7 +23,7 @@ inputs:
       environment, it closes the image deploy run.
     required: false
     default: ""
-  working-directory:
+  project-directory:
     description: >-
       The project's directory, relative to the repository root. Its .iltero/config.yml links the project to Iltero
       Platform and names the stack.
@@ -39,7 +39,7 @@ runs:
 
     - name: Close the run
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ inputs.project-directory }}
       env:
         ENVIRONMENT: ${{ inputs.environment }}
         APPLICATION: ${{ inputs.application }}

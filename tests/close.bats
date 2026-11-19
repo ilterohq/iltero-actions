@@ -143,10 +143,10 @@ EOF
   [ "${status}" -eq 1 ]
 }
 
-@test "the close action closes the run from the stack's working directory" {
+@test "the close action closes the run from the project directory" {
   run awk '/- name: Close the run/ { inside = 1; next } inside && /working-directory:/ { sub(/^ +/, ""); print; exit }' \
     "${REPO_ROOT}/close/action.yml"
-  [ "${output}" = 'working-directory: ${{ inputs.working-directory }}' ]
+  [ "${output}" = 'working-directory: ${{ inputs.project-directory }}' ]
 }
 
 @test "a line of the CLI's report cannot act as a workflow command" {
