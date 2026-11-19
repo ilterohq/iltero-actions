@@ -470,7 +470,7 @@ step_script() {
 }
 
 # Puts a stand-in trivy first on PATH. It logs its arguments to TRIVY_LOG, one
-# call per line, and fails a call that names the platform in TRIVY_FAILS_ON.
+# call per line, and fails a call that names the image in TRIVY_FAILS_ON.
 fake_trivy() {
   mkdir -p "${BATS_TEST_TMPDIR}/bin"
   cat > "${BATS_TEST_TMPDIR}/bin/trivy" <<'SH'
@@ -523,20 +523,102 @@ SH
   done
 }
 
-@test "each image build example keeps one Trivy report of the pushed image for each architecture" {
+# Writes an image index like the one buildx pushes: one image for each of
+# linux/amd64, linux/arm64 (with the variant v8, which IMAGE_PLATFORMS need not
+# name), linux/arm/v6 and linux/arm/v7, and two attestation manifests, whose
+# platform is unknown/unknown. Prints the reference of the pushed index.
+image_index() {
+  mkdir -p "${BATS_TEST_TMPDIR}/build"
+  cat > "${BATS_TEST_TMPDIR}/build/index.json" <<JSON
+{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": [
+  {"digest": "sha256:$(printf 'a%.0s' {1..64})", "platform": {"os": "linux", "architecture": "amd64"}},
+  {"digest": "sha256:$(printf 'b%.0s' {1..64})", "platform": {"os": "linux", "architecture": "arm64", "variant": "v8"}},
+  {"digest": "sha256:$(printf 'f%.0s' {1..64})", "platform": {"os": "linux", "architecture": "arm", "variant": "v6"}},
+  {"digest": "sha256:$(printf 'c%.0s' {1..64})", "platform": {"os": "linux", "architecture": "arm", "variant": "v7"}},
+  {"digest": "sha256:$(printf 'd%.0s' {1..64})", "platform": {"os": "unknown", "architecture": "unknown"},
+   "annotations": {"vnd.docker.reference.type": "attestation-manifest"}},
+  {"digest": "sha256:$(printf 'e%.0s' {1..64})", "platform": {"os": "unknown", "architecture": "unknown"},
+   "annotations": {"vnd.docker.reference.type": "attestation-manifest"}}
+]}
+JSON
+  pushed_index
+}
+
+# Prints the reference of the index in the build folder, by the file's digest.
+pushed_index() {
+  printf 'ghcr.io/o/r@sha256:%s' "$(sha256sum "${BATS_TEST_TMPDIR}/build/index.json" | cut -d' ' -f1)"
+}
+
+# The image of one architecture in the index image_index writes.
+indexed_image() {
+  printf 'ghcr.io/o/r@sha256:%s' "$(printf "${1}%.0s" {1..64})"
+}
+
+@test "each image build example finds the image of each architecture in the pushed image's index, never an attestation manifest" {
+  local example script pushed
+  pushed="$(image_index)"
+  for example in $(build_examples); do
+    script="$(step_script "${example}" 'Find the image of each architecture')"
+    [ -n "${script}" ]
+    RUNNER_TEMP="${BATS_TEST_TMPDIR}" IMAGE_PLATFORMS=linux/amd64,linux/arm64,linux/arm/v7,linux/arm64/v8 PUSHED="${pushed}" \
+      run bash -eo pipefail -c "${script}"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${BATS_TEST_TMPDIR}/images.txt")" = "$(printf '%s\n' "linux/amd64 $(indexed_image a)" \
+      "linux/arm64 $(indexed_image b)" "linux/arm/v7 $(indexed_image c)" "linux/arm64/v8 $(indexed_image b)")" ]
+    job_lines "${example}" scan | grep -qxF '          PUSHED: ${{ needs.build.outputs.pushed }}'
+    # The scan job reads the index the build job read from the registry, the one the record keeps.
+    job_lines "${example}" scan | grep -A2 'actions/download-artifact@' | grep -qxF '          name: image-build'
+  done
+}
+
+@test "each image build example stops unless the index lists exactly one image for an architecture" {
+  local example script platform pushed
+  pushed="$(image_index)"
+  for example in $(build_examples); do
+    script="$(step_script "${example}" 'Find the image of each architecture')"
+    # linux/arm names two images, linux/arm/v5 and linux/s390x none, unknown/unknown only attestation manifests.
+    for platform in linux/arm linux/arm/v5 linux/s390x unknown/unknown; do
+      RUNNER_TEMP="${BATS_TEST_TMPDIR}" IMAGE_PLATFORMS="linux/amd64,${platform}" PUSHED="${pushed}" \
+        run bash -eo pipefail -c "${script}"
+      [ "${status}" -eq 1 ] || { echo "accepted '${platform}'"; false; }
+      [[ "${output}" == *"::error::The image's index must list exactly one image for ${platform}."* ]] || false
+    done
+    # A plain image manifest, pushed with no index, lists no image either.
+    printf '%s' '{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json", "layers": []}' \
+      > "${BATS_TEST_TMPDIR}/build/index.json"
+    RUNNER_TEMP="${BATS_TEST_TMPDIR}" IMAGE_PLATFORMS=linux/amd64 PUSHED="$(pushed_index)" run bash -eo pipefail -c "${script}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"::error::The image's index must list exactly one image for linux/amd64."* ]] || false
+    pushed="$(image_index)"
+  done
+}
+
+@test "each image build example stops when the index the build job kept does not match the pushed image's digest" {
+  local example script
+  image_index > /dev/null
+  for example in $(build_examples); do
+    script="$(step_script "${example}" 'Find the image of each architecture')"
+    RUNNER_TEMP="${BATS_TEST_TMPDIR}" IMAGE_PLATFORMS=linux/amd64 PUSHED="ghcr.io/o/r@sha256:$(printf '0%.0s' {1..64})" \
+      run bash -eo pipefail -c "${script}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"::error::The index the build job kept does not match the digest of the pushed image."* ]] || false
+    [ ! -e "${BATS_TEST_TMPDIR}/images.txt" ]
+  done
+}
+
+@test "each image build example keeps one Trivy report for each architecture, of that architecture's image" {
   local example script
   fake_trivy
   for example in $(build_examples); do
     script="$(step_script "${example}" 'Scan each architecture')"
     [ -n "${script}" ]
+    printf '%s\n' "linux/amd64 $(indexed_image a)" "linux/arm/v7 $(indexed_image c)" > "${BATS_TEST_TMPDIR}/images.txt"
     : > "${TRIVY_LOG}"
-    RUNNER_TEMP="${BATS_TEST_TMPDIR}" IMAGE_PLATFORMS=linux/amd64,linux/arm64 PUSHED=ghcr.io/o/r@sha256:abc \
-      run bash -eo pipefail -c "${script}"
+    RUNNER_TEMP="${BATS_TEST_TMPDIR}" run bash -eo pipefail -c "${script}"
     [ "${status}" -eq 0 ]
     [ "$(cat "${TRIVY_LOG}")" = "$(printf '%s\n' \
-      "image --platform linux/amd64 --format json --output ${BATS_TEST_TMPDIR}/scan/trivy-linux-amd64.json ghcr.io/o/r@sha256:abc" \
-      "image --platform linux/arm64 --format json --output ${BATS_TEST_TMPDIR}/scan/trivy-linux-arm64.json ghcr.io/o/r@sha256:abc")" ]
-    job_lines "${example}" scan | grep -qxF '          PUSHED: ${{ needs.build.outputs.pushed }}'
+      "image --format json --output ${BATS_TEST_TMPDIR}/scan/trivy-linux-amd64.json $(indexed_image a)" \
+      "image --format json --output ${BATS_TEST_TMPDIR}/scan/trivy-linux-arm-v7.json $(indexed_image c)")" ]
     job_lines "${example}" scan | grep -qxF '          path: ${{ runner.temp }}/scan'
   done
 }
@@ -546,9 +628,9 @@ SH
   fake_trivy
   for example in $(build_examples); do
     script="$(step_script "${example}" 'Scan each architecture')"
+    printf '%s\n' "linux/amd64 $(indexed_image a)" "linux/arm64 $(indexed_image b)" > "${BATS_TEST_TMPDIR}/images.txt"
     : > "${TRIVY_LOG}"
-    TRIVY_FAILS_ON=linux/amd64 RUNNER_TEMP="${BATS_TEST_TMPDIR}" IMAGE_PLATFORMS=linux/amd64,linux/arm64 PUSHED=ghcr.io/o/r@sha256:abc \
-      run bash -eo pipefail -c "${script}"
+    TRIVY_FAILS_ON="$(indexed_image a)" RUNNER_TEMP="${BATS_TEST_TMPDIR}" run bash -eo pipefail -c "${script}"
     [ "${status}" -ne 0 ]
     [ "$(wc -l < "${TRIVY_LOG}")" -eq 1 ]
     # The step fails before the upload, which has no condition of its own, so the record job of the example with no account does not run.
@@ -589,7 +671,7 @@ SH
   ! grep -qE 'application:|APPLICATION|ILTERO_API_URL|id-token|store-records:' "${example}" || false
 }
 
-@test "each image build example scans and reads the index of the pushed image, by its digest" {
+@test "each image build example reads the index of the pushed image by its digest" {
   local example
   for example in $(build_examples); do
     grep -qF 'docker buildx imagetools inspect --raw "${PUSHED}"' "${example}"
@@ -602,7 +684,7 @@ SH
   for example in $(build_examples); do
     grep -qF 'build-metadata: ${{ runner.temp }}/build/metadata.json' "${example}"
     grep -qF 'image-index: ${{ runner.temp }}/build/index.json' "${example}"
-    [ "$(grep -cE '^          name: image-(build|scan)$' "${example}")" -eq 4 ]
+    [ "$(grep -cE '^          name: image-(build|scan)$' "${example}")" -eq 5 ]
   done
 }
 
@@ -654,16 +736,16 @@ SH
   gate="$(step_script "${example}" 'Stop on vulnerabilities at the chosen severities')"
   [ -n "${gate}" ]
   fake_trivy
-  # Every architecture is checked, vulnerabilities only, with the databases the reports were read with.
-  IMAGE_PLATFORMS=linux/amd64,linux/arm64 FAIL_ON_SCAN_SEVERITIES=CRITICAL,HIGH PUSHED=ghcr.io/o/r@sha256:abc \
-    run bash -eo pipefail -c "${gate}"
+  printf '%s\n' "linux/amd64 $(indexed_image a)" "linux/arm64 $(indexed_image b)" > "${BATS_TEST_TMPDIR}/images.txt"
+  # Every architecture's image is checked, vulnerabilities only, with the databases the reports were read with.
+  RUNNER_TEMP="${BATS_TEST_TMPDIR}" FAIL_ON_SCAN_SEVERITIES=CRITICAL,HIGH run bash -eo pipefail -c "${gate}"
   [ "${status}" -eq 0 ]
   [ "$(cat "${TRIVY_LOG}")" = "$(printf '%s\n' \
-    'image --platform linux/amd64 --scanners vuln --severity CRITICAL,HIGH --exit-code 1 --skip-db-update --skip-java-db-update ghcr.io/o/r@sha256:abc' \
-    'image --platform linux/arm64 --scanners vuln --severity CRITICAL,HIGH --exit-code 1 --skip-db-update --skip-java-db-update ghcr.io/o/r@sha256:abc')" ]
+    "image --scanners vuln --severity CRITICAL,HIGH --exit-code 1 --skip-db-update --skip-java-db-update $(indexed_image a)" \
+    "image --scanners vuln --severity CRITICAL,HIGH --exit-code 1 --skip-db-update --skip-java-db-update $(indexed_image b)")" ]
   # A finding in one architecture fails the step, after every architecture is checked.
   : > "${TRIVY_LOG}"
-  TRIVY_FAILS_ON=linux/amd64 IMAGE_PLATFORMS=linux/amd64,linux/arm64 FAIL_ON_SCAN_SEVERITIES=CRITICAL PUSHED=ghcr.io/o/r@sha256:abc \
+  TRIVY_FAILS_ON="$(indexed_image a)" RUNNER_TEMP="${BATS_TEST_TMPDIR}" FAIL_ON_SCAN_SEVERITIES=CRITICAL \
     run bash -eo pipefail -c "${gate}"
   [ "${status}" -eq 1 ]
   [ "$(wc -l < "${TRIVY_LOG}")" -eq 2 ]
@@ -854,5 +936,71 @@ deployment_order() {
     [[ "${post_deploy}" == *"{0}/network-state.json"* ]]
     [ "${post_verify}" = '          state: ${{ runner.temp }}/network-state.json' ]
     grep -qF 'terraform show -json > "${RUNNER_TEMP}/network-state.json"' "${example}"
+  done
+}
+
+# Prints the step named NAME of the workflow FILE, up to the next step.
+step_named() {
+  awk -v name="      - name: $2" '$0 == name { inside = 1; print; next } inside && /^      (- |#)/ { exit } inside' "$1"
+}
+
+@test "the own-Terraform example with no account scans the plan as JSON with Checkov and Trivy, each in its own container, before the plan stage" {
+  local example="${REPO_ROOT}/examples/iac/own-terraform.yml" plan checkov trivy record
+  run step_named "${example}" "Scan the plan with Checkov"
+  [[ "${output}" =~ bridgecrew/checkov:[0-9.]+@sha256:[0-9a-f]{64}\ \\ ]]
+  [[ "${output}" == *'-f /scan/plan.json --framework terraform_plan --output json --soft-fail \'* ]]
+  [[ "${output}" == *'> "${RUNNER_TEMP}/network-checkov.json"'* ]]
+  run step_named "${example}" "Scan the plan with Trivy"
+  [[ "${output}" =~ aquasec/trivy:[0-9.]+@sha256:[0-9a-f]{64}\ \\ ]]
+  [[ "${output}" == *'config --include-non-failures --skip-check-update --format json /scan/plan.json \'* ]]
+  [[ "${output}" == *'> "${RUNNER_TEMP}/network-trivy.json"'* ]]
+  ! grep -qE -- '--quiet|--exit-code' "${example}" || false
+  ! grep -q 'aquasecurity/setup-trivy' "${example}" || false
+  plan="$(grep -n 'terraform show -json "${RUNNER_TEMP}/network.tfplan"' "${example}" | cut -d: -f1)"
+  checkov="$(grep -n 'name: Scan the plan with Checkov' "${example}" | cut -d: -f1)"
+  trivy="$(grep -n 'name: Scan the plan with Trivy' "${example}" | cut -d: -f1)"
+  record="$(grep -n '^          stage: plan$' "${example}" | cut -d: -f1)"
+  [ "${plan}" -lt "${checkov}" ]
+  [ "${checkov}" -lt "${trivy}" ]
+  [ "${trivy}" -lt "${record}" ]
+}
+
+@test "each scanner of the own-Terraform example with no account runs with no network, only the plan mounted, and no other container setting" {
+  local example="${REPO_ROOT}/examples/iac/own-terraform.yml" scanner image
+  for scanner in Checkov Trivy; do
+    [ "${scanner}" = Checkov ] && image='bridgecrew/checkov:' || image='aquasec/trivy:'
+    run step_named "${example}" "Scan the plan with ${scanner}"
+    run awk -v image="${image}" 'index($0, image) { exit } /^          / && !/^          run: \|$/' <<< "${output}"
+    [ "${output}" = '          docker run --rm --network none \'$'\n''            --volume "${RUNNER_TEMP}/network-plan.json:/scan/plan.json:ro" \' ]
+  done
+}
+
+@test "the own-Terraform example with no account gives the plan stage both scan reports, and no other stage any" {
+  local example="${REPO_ROOT}/examples/iac/own-terraform.yml"
+  run awk '/^          stage: plan$/ { inside = 1; next } inside && /^      - / { exit } inside' "${example}"
+  [[ "${output}" == *'          scan-reports: |'$'\n''            checkov ${{ runner.temp }}/network-checkov.json'$'\n''            trivy ${{ runner.temp }}/network-trivy.json'* ]]
+  [ "$(grep -c 'scan-reports:' "${example}")" -eq 1 ]
+}
+
+# In a governed run, the CLI refuses scanner reports: the run's settings on the server decide which checks run.
+@test "the governed own-Terraform example runs no scanner and gives record-iac no scan reports" {
+  local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
+  ! grep -qiE 'scan-reports|checkov|trivy' "${example}" || false
+}
+
+@test "every example uses the same Trivy release, and names it at each install" {
+  local installs versions images
+  installs="$(cat "${REPO_ROOT}"/examples/*/*.yml | grep -c 'aquasecurity/setup-trivy@')"
+  versions="$(grep -h -A2 'aquasecurity/setup-trivy@' "${REPO_ROOT}"/examples/*/*.yml | awk '$1 == "version:" { sub(/^v/, "", $2); print $2 }')"
+  [ "$(grep -c . <<< "${versions}")" -eq "${installs}" ]
+  images="$(grep -ho 'aquasec/trivy:[0-9.]*' "${REPO_ROOT}"/examples/*/*.yml | sed 's|.*:||')"
+  [ -n "${images}" ]
+  [[ "$(printf '%s\n%s\n' "${versions}" "${images}" | sort -u)" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+@test "the examples that run Checkov or Trivy in a container all use one image of each, named by its version and digest" {
+  local image
+  for image in bridgecrew/checkov aquasec/trivy; do
+    [[ "$(grep -ho "${image}:[^ ]*" "${REPO_ROOT}"/examples/*/*.yml | sort -u)" =~ ^${image}:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}$ ]]
   done
 }

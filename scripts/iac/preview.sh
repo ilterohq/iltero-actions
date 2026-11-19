@@ -14,7 +14,7 @@
 #   iac/preview.sh run ENVIRONMENT      Plan and check every unit; write the job summary and the
 #                                       pull request comment that the comment action posts.
 #
-# Run from the stack's working directory. The units, and their order, are the
+# Run from the project's directory. The units, and their order, are the
 # ones `iltero units list` prints, as for deploy and verify.
 #
 # A unit that reads other units' remote state can declare the tool's

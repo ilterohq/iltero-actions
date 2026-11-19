@@ -47,7 +47,7 @@ inputs:
       (.iltero/units.json).
     required: false
     default: root
-  working-directory:
+  project-directory:
     description: The project's directory, relative to the repository root. File inputs are relative to it.
     required: false
     default: "."
@@ -76,9 +76,9 @@ inputs:
     default: ""
   scan-reports:
     description: >-
-      Plan only. Scan reports of the pushed image, read from its registry by its digest. One per line: the scanner
-      (trivy or grype), a space, then the path of its JSON report. For an image built for several CPU architectures,
-      give one report for each architecture.
+      Plan only. Reports of scanners, tools that check an image for known vulnerabilities. Scan the pushed image, read
+      from its registry by its digest. One per line: the scanner (trivy or grype), a space, then the path of its JSON
+      report. For an image built for several CPU architectures, give one report for each architecture.
     required: false
     default: ""
   cluster-id:
@@ -126,8 +126,8 @@ inputs:
   records-directory:
     description: >-
       Where the CLI keeps the records. When it is empty, the action uses a directory under the runner's temporary
-      directory, one for each working-directory's builds and one for each working-directory and environment's
-      deployments, so give every stage the same working-directory. A relative path is relative to working-directory.
+      directory, one for the builds of each project-directory and one for the deployments of each project-directory
+      and environment, so give every stage the same project-directory. A relative path is relative to project-directory.
       Do not reuse the records directory of record-iac or deploy. Each deployment needs a records directory with no
       record of its unit. Every stage after pre_deploy reads the record from it. When a later stage runs in a
       different job, download the records artifact of the earlier job and pass its directory here.
@@ -143,20 +143,21 @@ inputs:
     default: "false"
   artifact-name:
     description: >-
-      Name of the artifact that holds the records. The action adds -attempt-<attempt> to the name, where <attempt> is
-      the pipeline run's attempt number, so a re-run keeps the records of earlier attempts. When the input is empty, the name
-      is iltero-image-records-<unit>-attempt-<attempt> for plan, and
-      iltero-image-deployment-records-<environment>-<unit>-attempt-<attempt> for a deployment stage. The artifact-name
-      output gives the full name. Each step replaces the artifact with the records in records-directory. Image builds
-      in the same pipeline run (on GitHub, the same workflow run) need different unit values or different artifact
-      names, and so do separate deployments of the same unit to the same environment.
+      Name of the artifact that holds the records. The action adds -attempt-<attempt> to the name, where <attempt>
+      is the pipeline run's attempt number, so a re-run keeps the records of earlier attempts. When the input is
+      empty, the name is iltero-image-records-<unit>-attempt-<attempt> for plan, and
+      iltero-image-deployment-records-<environment>-<unit>-attempt-<attempt> for a deployment stage. The
+      artifact-name output gives the full name. Each step replaces the artifact with the records in
+      records-directory. Image builds in the same pipeline run (on GitHub, the same workflow run) need different
+      unit values or different artifact names, and so do separate deployments of the same unit to the same
+      environment.
     required: false
     default: ""
 
   retention-days:
     description: >-
-      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the input is empty, the
-      repository's own artifact retention setting applies.
+      The number of days GitHub keeps the artifacts this action uploads, a whole number of 1 or more. When the
+      input is empty, the repository's own artifact retention setting applies.
     required: false
     default: ""
 
@@ -182,7 +183,7 @@ runs:
     - name: Record the image
       id: record
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ inputs.project-directory }}
       env:
         STAGE: ${{ inputs.stage }}
         IMAGE: ${{ inputs.image }}

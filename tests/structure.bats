@@ -152,6 +152,22 @@ TERRAFORM_CHECKSUMS="${REPO_ROOT}/scripts/iac/tools/terraform/checksums.sha256"
   [ -z "${bad}" ] || { echo "${bad}"; false; }
 }
 
+@test "every action that runs in the project takes its directory as project-directory, '.' by default, and runs its steps there" {
+  local action file
+  for action in close deploy preview record-iac record-image verify; do
+    file="${REPO_ROOT}/${action}/action.yml"
+    grep -q '^  project-directory:$' "${file}" || { echo "${action} has no project-directory input"; false; }
+    awk '/^  project-directory:$/ { inside = 1; next } inside && /^  [^ ]/ { exit } inside && /^    default:/ { print $2 }' \
+      "${file}" | grep -qx '"\."' || { echo "${action}'s project-directory does not default to '.'"; false; }
+    [ "$(grep -c 'working-directory: ${{ inputs.project-directory }}' "${file}")" -ge 1 ] \
+      || { echo "${action} does not run in project-directory"; false; }
+    [ "$(grep -c '^ *working-directory:' "${file}")" = "$(grep -c 'working-directory: ${{ inputs.project-directory }}' "${file}")" ] \
+      || { echo "${action} has a step that does not run in project-directory"; false; }
+  done
+  run grep -rn 'inputs\.working-directory\|^  working-directory:' "${REPO_ROOT}"/*/action.yml
+  [ "${status}" -eq 1 ]
+}
+
 @test "every tool adapter is supported, and every supported tool has an adapter that defines the whole interface" {
   local adapters supported tool
   adapters="$(cd "${REPO_ROOT}/scripts/iac/tools" && ls -d -- */ | tr -d / | sort | paste -sd' ' -)"

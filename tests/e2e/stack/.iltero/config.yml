@@ -1,10 +1,11 @@
 version: 1
+iac_tool: terraform
 assertions:
   paths:
     - assertions
   include_starter_assertions: false
   custom_policies: []
-  scanner_bindings: null
+  scanner_check_mapping: null
   required_scanners: []
   local_exceptions: null
   values_known_after_deployment: postpone

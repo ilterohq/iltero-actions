@@ -13,8 +13,8 @@ inputs:
       branch. Set it when the target branch deploys to several environments.
     required: false
     default: ""
-  working-directory:
-    description: The stack's directory, relative to the repository root.
+  project-directory:
+    description: The project's directory, relative to the repository root.
     required: false
     default: "."
   registry-host:
@@ -90,7 +90,7 @@ runs:
     - name: Find the environment
       id: environment
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ inputs.project-directory }}
       env:
         TOOL: ${{ inputs.tool }}
         ENVIRONMENT: ${{ inputs.environment }}
@@ -101,7 +101,7 @@ runs:
     - name: Plan and check each unit
       id: preview
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ inputs.project-directory }}
       env:
         TOOL: ${{ inputs.tool }}
         ENVIRONMENT: ${{ steps.environment.outputs.environment }}

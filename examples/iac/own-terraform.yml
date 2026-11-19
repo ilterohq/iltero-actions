@@ -5,8 +5,9 @@
 #
 # A push to main deploys one unit to production. The job runs its own
 # terraform plan and apply. Iltero steps between them record each stage:
-#   plan         after terraform plan, from the saved plan: stops the job
-#                when a check fails, before anything is applied;
+#   plan         after terraform plan, from the saved plan and the Checkov
+#                and Trivy reports: stops the job when a check fails, before
+#                anything is applied;
 #   pre_deploy   before terraform apply: runs no check here, and stops the
 #                job when the unit's record still requires the stage;
 #   post_deploy  after terraform apply, also when the apply failed;
@@ -100,6 +101,29 @@ jobs:
           terraform init -input=false -lockfile=readonly
           terraform plan -input=false -out="${RUNNER_TEMP}/network.tfplan"
           terraform show -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-plan.json"
+      # Scanners check the plan for security problems. Neither scan stops the
+      # job on a finding: the plan stage checks the reports against Iltero's
+      # assertions, and the CLI gives the verdict. Each scanner runs in its own
+      # container, from an image pinned by its digest, with no network. It sees
+      # only the plan as JSON, never the job's files or cloud credentials.
+      - name: Scan the plan with Checkov
+        run: |
+          docker run --rm --network none \
+            --volume "${RUNNER_TEMP}/network-plan.json:/scan/plan.json:ro" \
+            bridgecrew/checkov:3.3.8@sha256:c64ffb6d6fc8087c896341a2c697770a04a1cf558db04fa7b8129d8ca6bce336 \
+            -f /scan/plan.json --framework terraform_plan --output json --soft-fail \
+            > "${RUNNER_TEMP}/network-checkov.json"
+      # --skip-check-update keeps the checks that come with the Trivy release,
+      # so a plan is checked the same way each time. Trivy then logs an ERROR line
+      # that ends "Falling back to embedded checks". It is expected: those embedded
+      # checks are the release's own.
+      - name: Scan the plan with Trivy
+        run: |
+          docker run --rm --network none \
+            --volume "${RUNNER_TEMP}/network-plan.json:/scan/plan.json:ro" \
+            aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f \
+            config --include-non-failures --skip-check-update --format json /scan/plan.json \
+            > "${RUNNER_TEMP}/network-trivy.json"
       - id: record-plan
         uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
         with:
@@ -108,6 +132,9 @@ jobs:
           unit: network
           plan: ${{ runner.temp }}/network-plan.json
           saved-plan: ${{ runner.temp }}/network.tfplan
+          scan-reports: |
+            checkov ${{ runner.temp }}/network-checkov.json
+            trivy ${{ runner.temp }}/network-trivy.json
       - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
         with:
           stage: pre_deploy

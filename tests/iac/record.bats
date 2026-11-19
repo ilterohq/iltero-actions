@@ -254,6 +254,32 @@ stage_call() {
   ! stage_call plan || false
 }
 
+@test "plan passes each scan report to the CLI, in the order given, after the saved plan" {
+  echo '{}' > checkov.json
+  echo '{}' > trivy.json
+  SCAN_REPORTS=$'  checkov   checkov.json  \n\ntrivy trivy.json\n' run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  stage_call plan | grep -qx "iltero iac check --stage=plan --plan=plan.json --saved-plan=tfplan --scanner=checkov --scanner-report=checkov.json --scanner=trivy --scanner-report=trivy.json --unit=network --out=${RECORDS} --environment=production --upload"
+}
+
+@test "plan refuses a scan-reports line that does not name checkov or trivy and a report" {
+  local line
+  echo '{}' > report.json
+  for line in 'grype report.json' 'checkov' 'Checkov report.json' 'checkov:report.json'; do
+    SCAN_REPORTS="${line}" run "${RECORD}" run plan
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Each line of the scan-reports input must be a scanner (checkov trivy), a space and the report's path. One line is '${line}'."* ]]
+  done
+  ! stage_call plan || false
+}
+
+@test "plan refuses a scan report that is not a file" {
+  SCAN_REPORTS="checkov missing.json" run "${RECORD}" run plan
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The scan-reports input names no file: 'missing.json'."* ]]
+  ! stage_call plan || false
+}
+
 @test "record-iac runs no Terraform" {
   run "${RECORD}" run plan
   run "${RECORD}" run post_deploy
@@ -692,13 +718,13 @@ stage_call() {
 @test "every file input a stage does not read is refused, so no step seems to record a file it ignored" {
   local stage pair variable input
   declare -A read_by=(
-    [plan]="plan saved-plan"
+    [plan]="plan saved-plan scan-reports"
     [pre_deploy]=""
     [post_deploy]="plan saved-plan apply-log state"
     [post_verify]="refresh-only-plans state"
   )
   for stage in plan pre_deploy post_deploy post_verify; do
-    for pair in PLAN:plan SAVED_PLAN:saved-plan APPLY_LOG:apply-log STATE:state REFRESH_ONLY_PLANS:refresh-only-plans; do
+    for pair in PLAN:plan SAVED_PLAN:saved-plan SCAN_REPORTS:scan-reports APPLY_LOG:apply-log STATE:state REFRESH_ONLY_PLANS:refresh-only-plans; do
       variable="${pair%%:*}"
       input="${pair#*:}"
       [[ " ${read_by[${stage}]} " != *" ${input} "* ]] || continue

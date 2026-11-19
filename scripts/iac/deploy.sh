@@ -6,7 +6,7 @@
 #   iac/deploy.sh check            Refuse untrusted and pull request events; check that setup ran.
 #   iac/deploy.sh run ENVIRONMENT  Deploy every unit; write the job summary.
 #
-# Run from the stack's working directory. In a project linked to the server,
+# Run from the project's directory. In a project linked to the server,
 # the plan stage's check opens the run on the server for the pipeline run and
 # environment, each later stage joins it, and the deploy sends each stage's
 # record. A project not linked to the server deploys locally: no run, no

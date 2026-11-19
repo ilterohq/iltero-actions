@@ -25,6 +25,38 @@ run_cli_logged() {
   return "${status}"
 }
 
+# Stops unless the input INPUT, whose value is PATH_VALUE, names a file.
+require_named_file() {
+  local input="$1"
+  local path_value="$2"
+  [[ -f "${path_value}" ]] || die "The ${input} input names no file: '${path_value}'."
+}
+
+# The CLI options for the scan-reports input, which add_scan_report_options
+# fills.
+SCAN_REPORT_OPTIONS=()
+
+# Adds to SCAN_REPORT_OPTIONS the CLI's options for REPORTS, the value of the
+# scan-reports input: one report per line, the scanner's name, a space, then
+# the report's path. Blank lines are skipped. Stops on a line whose scanner is
+# not one of SCANNERS, or whose report is not a file.
+add_scan_report_options() {
+  local reports="$1"
+  shift
+  local scanners=("$@")
+  local line scanner report
+  while IFS= read -r line; do
+    line="$(trim "${line}")"
+    [[ -n "${line}" ]] || continue
+    scanner="${line%% *}"
+    report="$(trim "${line#* }")"
+    [[ " ${scanners[*]} " == *" ${scanner} "* && "${report}" != "${line}" && -n "${report}" ]] \
+      || die "Each line of the scan-reports input must be a scanner (${scanners[*]}), a space and the report's path. One line is '${line}'."
+    require_named_file scan-reports "${report}"
+    SCAN_REPORT_OPTIONS+=(--scanner="${scanner}" --scanner-report="${report}")
+  done <<< "${reports}"
+}
+
 # Runs one stage of the CLI's check of a KIND of change (iac or image), with
 # the CLI's remaining arguments. Prints its output and keeps a copy in
 # WORK/STAGE.txt. Returns the CLI's exit code.
