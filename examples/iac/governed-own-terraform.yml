@@ -5,9 +5,10 @@
 # A push to main deploys one unit to production. The job runs its own
 # terraform plan and apply. Iltero steps between them record each stage:
 #   plan         after terraform plan, from the saved plan;
-#   pre_deploy   before terraform apply: stops the job when a blocking check
-#                fails, before anything is applied. Required in a governed
-#                run to a production environment;
+#   pre_deploy   before terraform apply, after the job plans again: stops
+#                the job when a blocking check fails, before anything is
+#                applied. Required when the governed run expects it, which
+#                a run to production always does;
 #   post_deploy  after terraform apply, also when the apply failed;
 #   post_verify  after post_deploy: checks that the deployed resources
 #                still match what the apply left, from two readings of
@@ -15,16 +16,32 @@
 #                refresh-only plan. Never apply one: it writes what it
 #                reads into the state, so drift no longer shows.
 # The plan stage's check opens the run on Iltero Platform, and each later
-# stage joins it. The close job closes the run when the deploy job
-# succeeded. A run whose deploy failed or was cancelled stays open, so a
-# re-run of the failed job joins it.
+# stage joins it. Iltero Platform accepts post_deploy only from the job that
+# ran pre_deploy, so keep pre_deploy, the apply and post_deploy in one job.
+# The close job closes the run when the deploy job succeeded. When the deploy
+# job failed or was cancelled, a re-run of it opens a new run, which plans
+# and applies again, and the earlier run ends. When the job failed before
+# any unit went past its plan stage, the re-run joins the earlier run.
 #
 # Plan, apply, state and reading files stay in the runner's temporary
 # directory, never in the checked-out repository. The readings can hold
-# secret values: never upload or keep them. The record keeps only their
-# digests. The pre_deploy step reads the plan stage's record from the records
-# directory. A pre_deploy step in another job must download the records
-# artifact and pass its directory as records-directory.
+# secret values: never upload or keep them. The record keeps no copy of
+# them, only a fingerprint of each reading. The pre_deploy step reads the
+# plan stage's record from the records directory.
+#
+# The Plan again step plans the unit a second time, just before pre_deploy,
+# with the same configuration and variables, into a file of its own. It first
+# waits one second, because Terraform dates a plan to the second and the CLI
+# refuses a new plan that is not newer than the checked plan. pre_deploy gets
+# the new plan as replan. The CLI compares it with the checked plan and
+# records only the result. The job never applies the new plan: the Apply step
+# applies the saved plan.
+#
+# A pre_deploy step in another job must download the records artifact and pass
+# its directory as records-directory. That job must also plan again, just
+# before pre_deploy, and give the saved-plan, plan and replan inputs.
+# saved-plan names the saved plan file the job will apply, plan names the plan
+# rendered from it with terraform show -json, and replan names the new plan.
 #
 # Each record-iac step sets store-records, so the CLI also keeps the stage's
 # record and every file it cites in the run's artifact store: the Amazon
@@ -39,14 +56,25 @@
 # to S3 in the bucket's region. The role, the bucket and its key are in one
 # AWS account.
 #
+# Terraform runs with a scrubbed environment, so Terraform and its providers
+# see only the variables in a list. Each of the five steps that run terraform
+# defines a scrubbed function. The function runs one command with only the
+# variables in its keep= list and the job's TF_VAR_ variables, which set the
+# Terraform configuration's input variables. The step's other commands keep
+# every variable. The list holds PATH, HOME, TF_DATA_DIR, the AWS credentials
+# and settings, and the proxy and certificate settings. To pass another
+# variable your Terraform reads, such as another cloud's credentials, add it
+# to the keep= list in all five steps. A step whose list lacks it runs
+# Terraform without it.
+#
 # Commit each unit's Terraform lock file, .terraform.lock.hcl, which records
 # the provider versions the unit uses. terraform init uses the file as
 # committed and never changes it.
 #
 # Values the owner replaces:
-#   the actions commit (each 0000000000000000000000000000000000000000 is a
-#   placeholder for the 40-character ID of the iltero-actions commit you use,
-#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   the actions release (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character commit ID of the iltero-actions release
+#   you use, and each # v0.3.0 comment a placeholder for its version),
 #   the environment's name and branch, the GitHub deployment environment, the
 #   deploy role's Amazon Resource Name (ARN) and region, the unit's name and
 #   directory, and ILTERO_API_URL, which must be the same address as
@@ -94,9 +122,27 @@ jobs:
       - name: Plan
         working-directory: units/network
         run: |
-          terraform init -input=false -lockfile=readonly
-          terraform plan -input=false -out="${RUNNER_TEMP}/network.tfplan"
-          terraform show -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-plan.json"
+          # Terraform runs with a scrubbed environment: it gets only the
+          # variables in this list and the job's TF_VAR_ variables. To pass
+          # another variable, see the comments at the top of this file.
+          scrubbed() (
+            keep=(PATH HOME TF_DATA_DIR
+              AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION
+              AWS_PROFILE AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE AWS_CA_BUNDLE
+              HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR)
+            remove=()
+            while IFS= read -r -d '' entry; do
+              name="${entry%%=*}"
+              # Keep a variable that is in the list or starts with TF_VAR_.
+              [[ " ${keep[*]} " == *" ${name} "* || "${name}" == TF_VAR_* ]] || remove+=(-u "${name}")
+            done < <(env -0)
+            # Stop when the environment could not be read.
+            wait "$!"
+            exec env "${remove[@]}" "$@"
+          )
+          scrubbed terraform init -input=false -lockfile=readonly
+          scrubbed terraform plan -input=false -out="${RUNNER_TEMP}/network.tfplan"
+          scrubbed terraform show -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-plan.json"
       - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
         with:
           stage: plan
@@ -105,22 +151,89 @@ jobs:
           store-records: true
           plan: ${{ runner.temp }}/network-plan.json
           saved-plan: ${{ runner.temp }}/network.tfplan
+      - name: Plan again
+        working-directory: units/network
+        run: |
+          # Terraform runs with a scrubbed environment: it gets only the
+          # variables in this list and the job's TF_VAR_ variables. To pass
+          # another variable, see the comments at the top of this file.
+          scrubbed() (
+            keep=(PATH HOME TF_DATA_DIR
+              AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION
+              AWS_PROFILE AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE AWS_CA_BUNDLE
+              HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR)
+            remove=()
+            while IFS= read -r -d '' entry; do
+              name="${entry%%=*}"
+              # Keep a variable that is in the list or starts with TF_VAR_.
+              [[ " ${keep[*]} " == *" ${name} "* || "${name}" == TF_VAR_* ]] || remove+=(-u "${name}")
+            done < <(env -0)
+            # Stop when the environment could not be read.
+            wait "$!"
+            exec env "${remove[@]}" "$@"
+          )
+          # Terraform dates a plan to the second, and the CLI refuses a new
+          # plan that is not newer than the checked plan.
+          sleep 1
+          scrubbed terraform plan -input=false -out="${RUNNER_TEMP}/network-replan.tfplan"
+          scrubbed terraform show -json "${RUNNER_TEMP}/network-replan.tfplan" > "${RUNNER_TEMP}/network-replan.json"
       - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
         with:
           stage: pre_deploy
           environment: production
           unit: network
           store-records: true
+          plan: ${{ runner.temp }}/network-plan.json
+          saved-plan: ${{ runner.temp }}/network.tfplan
+          replan: ${{ runner.temp }}/network-replan.json
 
       - id: apply
         name: Apply
         working-directory: units/network
-        run: terraform apply -input=false -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-apply.ndjson"
+        run: |
+          # Terraform runs with a scrubbed environment: it gets only the
+          # variables in this list and the job's TF_VAR_ variables. To pass
+          # another variable, see the comments at the top of this file.
+          scrubbed() (
+            keep=(PATH HOME TF_DATA_DIR
+              AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION
+              AWS_PROFILE AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE AWS_CA_BUNDLE
+              HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR)
+            remove=()
+            while IFS= read -r -d '' entry; do
+              name="${entry%%=*}"
+              # Keep a variable that is in the list or starts with TF_VAR_.
+              [[ " ${keep[*]} " == *" ${name} "* || "${name}" == TF_VAR_* ]] || remove+=(-u "${name}")
+            done < <(env -0)
+            # Stop when the environment could not be read.
+            wait "$!"
+            exec env "${remove[@]}" "$@"
+          )
+          scrubbed terraform apply -input=false -json "${RUNNER_TEMP}/network.tfplan" > "${RUNNER_TEMP}/network-apply.ndjson"
       - id: state
         name: Read the state
         if: ${{ !cancelled() && steps.apply.outcome != 'skipped' }}
         working-directory: units/network
-        run: terraform show -json > "${RUNNER_TEMP}/network-state.json"
+        run: |
+          # Terraform runs with a scrubbed environment: it gets only the
+          # variables in this list and the job's TF_VAR_ variables. To pass
+          # another variable, see the comments at the top of this file.
+          scrubbed() (
+            keep=(PATH HOME TF_DATA_DIR
+              AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION
+              AWS_PROFILE AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE AWS_CA_BUNDLE
+              HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR)
+            remove=()
+            while IFS= read -r -d '' entry; do
+              name="${entry%%=*}"
+              # Keep a variable that is in the list or starts with TF_VAR_.
+              [[ " ${keep[*]} " == *" ${name} "* || "${name}" == TF_VAR_* ]] || remove+=(-u "${name}")
+            done < <(env -0)
+            # Stop when the environment could not be read.
+            wait "$!"
+            exec env "${remove[@]}" "$@"
+          )
+          scrubbed terraform show -json > "${RUNNER_TEMP}/network-state.json"
       - if: ${{ !cancelled() && steps.apply.outcome != 'skipped' }}
         uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
         with:
@@ -140,11 +253,29 @@ jobs:
       - name: Read the deployed resources back
         working-directory: units/network
         run: |
-          terraform plan -input=false -refresh-only -lock-timeout=5m -out="${RUNNER_TEMP}/network-first.tfplan"
-          terraform show -json "${RUNNER_TEMP}/network-first.tfplan" > "${RUNNER_TEMP}/network-first.json"
+          # Terraform runs with a scrubbed environment: it gets only the
+          # variables in this list and the job's TF_VAR_ variables. To pass
+          # another variable, see the comments at the top of this file.
+          scrubbed() (
+            keep=(PATH HOME TF_DATA_DIR
+              AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION
+              AWS_PROFILE AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE AWS_CA_BUNDLE
+              HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR)
+            remove=()
+            while IFS= read -r -d '' entry; do
+              name="${entry%%=*}"
+              # Keep a variable that is in the list or starts with TF_VAR_.
+              [[ " ${keep[*]} " == *" ${name} "* || "${name}" == TF_VAR_* ]] || remove+=(-u "${name}")
+            done < <(env -0)
+            # Stop when the environment could not be read.
+            wait "$!"
+            exec env "${remove[@]}" "$@"
+          )
+          scrubbed terraform plan -input=false -refresh-only -lock-timeout=5m -out="${RUNNER_TEMP}/network-first.tfplan"
+          scrubbed terraform show -json "${RUNNER_TEMP}/network-first.tfplan" > "${RUNNER_TEMP}/network-first.json"
           sleep 60
-          terraform plan -input=false -refresh-only -lock-timeout=5m -out="${RUNNER_TEMP}/network-second.tfplan"
-          terraform show -json "${RUNNER_TEMP}/network-second.tfplan" > "${RUNNER_TEMP}/network-second.json"
+          scrubbed terraform plan -input=false -refresh-only -lock-timeout=5m -out="${RUNNER_TEMP}/network-second.tfplan"
+          scrubbed terraform show -json "${RUNNER_TEMP}/network-second.tfplan" > "${RUNNER_TEMP}/network-second.json"
       - uses: ilterohq/iltero-actions/record-iac@0000000000000000000000000000000000000000 # v0.3.0
         with:
           stage: post_verify

@@ -1,7 +1,7 @@
 name: Iltero Verify
 description: >-
   Build the record bundle of each unit, or of one unit: a folder that holds the unit's record and every file the
-  record cites. Then check that the record and its files are unchanged.
+  record cites. Then check that the record is consistent with itself and with the files it cites.
 author: Iltero
 
 branding:

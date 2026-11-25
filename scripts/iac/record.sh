@@ -15,17 +15,25 @@
 # environment, each later stage joins it, and the action sends each stage's
 # record. A project not linked to the server records locally: no run, no
 # upload, and no pre-deploy stage. On a pull request event, plan runs as a
-# local preview, linked or not.
+# local preview, linked or not. In a linked project, the plan stage runs
+# iltero scanners install after the state check and before its check, which
+# puts the scanners the CLI pins in the scanner folder, inside the tools
+# folder. The stage runs them when the run's settings require them.
 #
 # The CLI keeps each unit's record in RECORDS_DIRECTORY. Pre-deploy reads the
 # plan stage's record from it. When pre_deploy runs in a different job from
-# plan, that job needs the plan job's records directory.
+# plan, that job needs the plan job's records directory. That job also gives
+# SAVED_PLAN, the saved plan file it will apply, PLAN, the plan rendered from
+# it with `terraform show -json`, and REPLAN, a new plan made just before the
+# apply.
 #
 # Environment:
 #   ENVIRONMENT                The environment the change deploys to.
 #   UNIT                       The unit's name, as `iltero units list` prints it.
 #   PLAN                       The saved plan as JSON, from `terraform show -json`.
 #   SAVED_PLAN                 The saved plan file, from `terraform plan -out`.
+#   REPLAN                     Pre-deploy only. A new plan as JSON, made in the job that applies, just before the
+#                              apply. It is never applied.
 #   SCAN_REPORTS               Plan only. Scan reports of the plan as JSON (PLAN), one per line: the scanner's
 #                              name, a space, the report's path.
 #   APPLY_LOG                  The output of `terraform apply -json`.
@@ -77,10 +85,10 @@ require_file() {
 
 # The file inputs of record-iac, as VARIABLE:input, and the inputs each stage
 # reads.
-readonly RECORD_FILE_INPUTS=(PLAN:plan SAVED_PLAN:saved-plan SCAN_REPORTS:scan-reports APPLY_LOG:apply-log STATE:state
-  REFRESH_ONLY_PLANS:refresh-only-plans)
+readonly RECORD_FILE_INPUTS=(PLAN:plan SAVED_PLAN:saved-plan REPLAN:replan SCAN_REPORTS:scan-reports APPLY_LOG:apply-log
+  STATE:state REFRESH_ONLY_PLANS:refresh-only-plans)
 readonly PLAN_STAGE_INPUTS="plan saved-plan scan-reports"
-readonly PRE_DEPLOY_STAGE_INPUTS=""
+readonly PRE_DEPLOY_STAGE_INPUTS="plan saved-plan replan"
 readonly POST_DEPLOY_STAGE_INPUTS="plan saved-plan apply-log state"
 readonly POST_VERIFY_STAGE_INPUTS="refresh-only-plans state"
 
@@ -103,11 +111,13 @@ refuse_unused_inputs() {
   done
 }
 
-# Runs the CLI's check of STAGE for the unit. Returns the CLI's exit code.
+# Runs the CLI's check of STAGE for the unit. LINKED is true in a project
+# linked to the server. Returns the CLI's exit code.
 record_event() {
   local dir="$1"
   local work="$2"
-  shift 2
+  local linked="$3"
+  shift 3
   local run_args=("$@")
   case "${STAGE}" in
     plan)
@@ -121,11 +131,28 @@ record_event() {
         STATE_CHECK_FAILED=true
         return "${status}"
       fi
+      [[ "${linked}" == false ]] || install_scanners "${work}/scanners-install.txt"
       check_stage "${work}" plan --plan="${PLAN}" --saved-plan="${SAVED_PLAN}" \
         ${SCAN_REPORT_OPTIONS[@]+"${SCAN_REPORT_OPTIONS[@]}"} "${run_args[@]}"
       ;;
     pre_deploy)
-      check_stage "${work}" pre_deploy "${run_args[@]}"
+      # Optional: the plan rendered from the saved plan file the job will
+      # apply, that file, and a new plan made just before the apply. A later
+      # job that applies the plan gives all three.
+      local plan_args=()
+      if [[ -n "${PLAN:-}" ]]; then
+        require_named_file plan "${PLAN}"
+        plan_args+=(--plan="${PLAN}")
+      fi
+      if [[ -n "${SAVED_PLAN:-}" ]]; then
+        require_named_file saved-plan "${SAVED_PLAN}"
+        plan_args+=(--saved-plan="${SAVED_PLAN}")
+      fi
+      if [[ -n "${REPLAN:-}" ]]; then
+        require_named_file replan "${REPLAN}"
+        plan_args+=(--replan="${REPLAN}")
+      fi
+      check_stage "${work}" pre_deploy ${plan_args[@]+"${plan_args[@]}"} "${run_args[@]}"
       ;;
     post_deploy)
       require_file plan "${PLAN:-}"
@@ -222,17 +249,21 @@ cmd_run() {
   # A pull request's plan is a local preview, never recorded on the server.
   ! is_pull_request_event || run_args+=(--local)
   local status=0 result
-  if [[ "${STAGE}" == pre_deploy && "${linked}" == false ]]; then
-    # Pre-deploy checks facts only the server holds.
+  if [[ "${STAGE}" == pre_deploy ]]; then
     [[ -f "${out}/units/${UNIT}/car.json" ]] \
       || die "The records directory holds no record of unit '${UNIT}'. Run the plan stage first. In another job, download the plan job's records artifact and pass its directory as records-directory."
+  fi
+  if [[ "${STAGE}" == pre_deploy && "${linked}" == false ]]; then
+    # Pre-deploy checks facts only the server holds, so it reads no file here.
+    [[ -z "${PLAN:-}" && -z "${SAVED_PLAN:-}" && -z "${REPLAN:-}" ]] \
+      || die "In a project not linked to the server, pre_deploy does not read the plan, saved-plan or replan input. Remove them from this step."
     result="$(local_pre_deploy_result "${work}" "${out}" "${UNIT}")" || status=$?
     [[ "${status}" -ne 0 ]] \
       || echo "::notice::A project not linked to the server does not run the pre-deploy stage, and this unit's record does not require it. Nothing was checked."
     [[ "${status}" -eq 0 || "${result}" == "${PRE_DEPLOY_CANNOT_RUN_RESULT}" ]] || result="$(record_scope_failure "${status}")"
   else
     STATE_CHECK_FAILED=false
-    record_event "${dir}" "${work}" "${run_args[@]}" || status=$?
+    record_event "${dir}" "${work}" "${linked}" "${run_args[@]}" || status=$?
     if [[ "${STATE_CHECK_FAILED}" == true ]]; then
       result="state check failed"
     elif [[ "${STATE_UNREADABLE}" == true ]]; then
@@ -240,11 +271,24 @@ cmd_run() {
     else
       result="$(check_result "${status}")"
     fi
+    if [[ "${status}" -eq 0 && "${linked}" == true && ("${STAGE}" == pre_deploy || "${STAGE}" == post_verify) ]]; then
+      # The CLI also exits 0, and checks nothing, when the server says the
+      # environment's policy leaves the stage out. Ask the CLI whether the
+      # unit's record requires the stage, so the summary does not read
+      # "passed" for a stage that checked nothing.
+      local required
+      required="$(record_requires_stage "${work}" "${out}" "${UNIT}" "${STAGE}")" || status=$?
+      if [[ "${status}" -ne 0 ]]; then
+        result="$(record_scope_failure "${status}")"
+      elif [[ "${required}" == false ]]; then
+        result="not required"
+      fi
+    fi
   fi
 
   local details="${work}/details.md" step report_missing=0
   : > "${details}"
-  for step in state-check "in-scope-${STAGE}" "${STAGE}"; do
+  for step in state-check "${STAGE}" "in-scope-${STAGE}"; do
     [[ -f "${work}/${step}.txt" ]] || continue
     append_details_block "${details}" "${UNIT}: $(details_title "${step}")" "${work}/${step}.txt"
   done

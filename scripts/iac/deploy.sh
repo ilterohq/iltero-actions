@@ -12,13 +12,19 @@
 # record. A project not linked to the server deploys locally: no run, no
 # upload and no pre-deploy stage.
 #
+# In a linked project, the deploy first runs iltero scanners install, which
+# puts the scanners the CLI pins in the scanner folder, inside the tools
+# folder. A stage runs them when the run's settings require them.
+#
 # For each unit, in the order `iltero units list` prints:
 #   1. the tool's init, with a registry token when REGISTRY_HOST is set;
 #   2. iltero state check, which refuses a unit that keeps its state in its
 #      working directory;
 #   3. the tool's plan, saved, and its JSON;
 #   4. iltero iac check --stage plan;
-#   5. iltero iac check --stage pre_deploy (linked projects only);
+#   5. the tool's plan again, as JSON, then iltero iac check --stage
+#      pre_deploy with it (linked projects only, when the unit's record
+#      requires the stage);
 #   6. the tool's apply of the saved plan;
 #   7. the state after the apply, as JSON;
 #   8. iltero iac check --stage post_deploy, also after a failed apply.
@@ -57,6 +63,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/tool.sh"
 # CLI. The deploy waits one second more, because the shell's clock and the
 # tool's timestamps count whole seconds.
 readonly READING_INTERVAL_SECONDS=60
+# Terraform dates a plan to the second, and the CLI refuses a new plan that is
+# not newer than the checked plan. When the first plan finished in the current
+# second, the deploy waits this long before it plans again.
+readonly REPLAN_WAIT_SECONDS=1
 
 cmd_check() {
   refuse_untrusted_event
@@ -158,6 +168,8 @@ deploy_unit() {
     echo "::error::${TOOL_DISPLAY_NAME} could not plan unit '${name}'."
     return "${status}"
   fi
+  local planned_at
+  planned_at="$(date +%s)" || return 1
   # The saved plan and its JSON, which the CLI checks, are fingerprinted
   # together, so the apply can confirm that neither changed after the check.
   local checked_plan
@@ -172,11 +184,38 @@ deploy_unit() {
   [[ "${status}" -eq 0 ]] || return "${status}"
 
   # Pre-deploy checks facts only the server holds, so it runs only in a
-  # linked project.
+  # linked project, and only when the unit's record requires it.
   if [[ "${linked}" == true ]]; then
-    check_stage "${work}" pre_deploy "${run_args[@]}" || status=$?
-    UNIT_RESULTS[1]="$(check_result "${status}")"
-    [[ "${status}" -eq 0 ]] || return "${status}"
+    local required
+    required="$(record_requires_stage "${work}" "${out}" "${name}" pre_deploy)" || status=$?
+    if [[ "${status}" -ne 0 ]]; then
+      UNIT_RESULTS[1]="$(record_scope_failure "${status}")"
+      return "${status}"
+    fi
+    if [[ "${required}" == true ]]; then
+      # When the server says a later job applies the plan, the CLI compares
+      # a new plan, made just before the apply, with the checked one. In a
+      # run that plans and applies in one job, it sets the new plan aside.
+      # The deploy cannot tell which the server says, so it always plans
+      # again. It still applies only the saved plan.
+      [[ "$(date +%s)" -gt "${planned_at}" ]] || sleep "${REPLAN_WAIT_SECONDS}"
+      pause_commands
+      tool_replan "${work}" "${dir}" "${work}/replan.json" 2>&1 || status=$?
+      resume_commands
+      if [[ "${status}" -ne 0 ]]; then
+        UNIT_RESULTS[1]="${tool_failed}"
+        echo "::error::${TOOL_DISPLAY_NAME} could not plan unit '${name}' again before the pre-deploy check."
+        return "${status}"
+      fi
+      # Pass the plan stage's files, so the CLI can check they are the ones
+      # the plan stage checked.
+      check_stage "${work}" pre_deploy "${plan_files[@]}" --replan="${work}/replan.json" "${run_args[@]}" \
+        || status=$?
+      UNIT_RESULTS[1]="$(check_result "${status}")"
+      [[ "${status}" -eq 0 ]] || return "${status}"
+    else
+      UNIT_RESULTS[1]="not required"
+    fi
   else
     UNIT_RESULTS[1]="$(local_pre_deploy_result "${work}" "${out}" "${name}")" || status=$?
     if [[ "${status}" -ne 0 ]]; then
@@ -349,6 +388,9 @@ cmd_run() {
   # list fails its checks, the step writes no output, and the upload steps
   # do not run.
   list_checked_units "${units}"
+  # Install the scanners before the IaC tool first runs, so that the check on
+  # the tools folder also covers the scanners from then on.
+  [[ "${linked}" == false ]] || install_scanners "${work_root}/scanners-install.txt"
   write_output records-directory "${out}"
   write_output artifact-name "${artifact}"
   write_output readings-directory "${work_root}/readings"

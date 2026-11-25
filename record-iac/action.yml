@@ -11,9 +11,15 @@ inputs:
     description: >-
       The stage to record: plan (after terraform plan), pre_deploy (before terraform apply), post_deploy (after
       terraform apply, also when the apply failed) or post_verify (after post_deploy, a check that the deployed
-      resources still match what the apply left). A governed run to a production environment needs pre_deploy before
-      post_deploy. On pull_request events, record-iac records only plan, and checks it locally. record-iac refuses
-      pull request review events.
+      resources still match what the apply left). A governed run expects pre_deploy unless the environment's policy
+      leaves it out. A governed run to a production environment always expects it. Record it before post_deploy.
+      Otherwise post_deploy records the apply and then fails. In a governed run, record post_deploy in the job that
+      recorded pre_deploy. At pre_deploy, record-iac stops when records-directory holds no record of the unit. In a
+      project not linked to Iltero Platform, it then asks the CLI whether the unit's record from plan requires the
+      stage. When the record does not require it, record-iac checks nothing and reports not required. In a linked
+      project, when the check at pre_deploy or post_verify passes, record-iac asks the CLI whether the unit's record
+      requires the stage, and reports not required when it does not. On pull_request events, record-iac records only
+      plan, and checks it locally. record-iac refuses pull request review events.
     required: true
   environment:
     description: The environment the change deploys to.
@@ -27,14 +33,32 @@ inputs:
     default: "."
   plan:
     description: >-
-      The saved plan as JSON, from `terraform show -json`. Required at plan and post_deploy. Leave it empty at the
-      other stages.
+      The saved plan as JSON, from `terraform show -json`. Required at plan and post_deploy. Optional at pre_deploy in
+      a project linked to Iltero Platform. There it names the plan rendered from the file in saved-plan. The CLI
+      refuses a plan other than the one the plan stage checked. A job that applies a plan made in an earlier job must
+      give plan, saved-plan and replan. Leave it empty at post_verify, and at pre_deploy in a project not linked to
+      Iltero Platform.
     required: false
     default: ""
   saved-plan:
     description: >-
-      The saved plan file, from `terraform plan -out`. Required at plan and post_deploy. Leave it empty at the other
-      stages.
+      The saved plan file, from `terraform plan -out`. Required at plan and post_deploy. Optional at pre_deploy in a
+      project linked to Iltero Platform. There it names the saved plan file this job will apply, and plan names the
+      plan rendered from it. The CLI refuses a file other than the one the plan stage checked. A job that applies a
+      plan made in an earlier job must give plan, saved-plan and replan. Leave it empty at post_verify, and at
+      pre_deploy in a project not linked to Iltero Platform.
+    required: false
+    default: ""
+  replan:
+    description: >-
+      Only at pre_deploy, in a project linked to Iltero Platform. A new plan as JSON, made in the job that applies,
+      just before pre_deploy: run `terraform plan -out=FILE` with the same configuration and variables as the plan,
+      then `terraform show -json FILE`. Terraform dates a plan to the second, and the CLI refuses a new plan that is
+      not newer than the checked plan, or that was made after pre_deploy started. So start the new plan at least one
+      second after the plan finished. Keep both files in the runner's temporary directory, apart from the saved plan,
+      and never apply them. The CLI compares the new plan with the checked plan and records only the result. A job
+      that applies a plan made in an earlier job must give it, with plan and saved-plan. replan needs plan. Leave it
+      empty at the other stages, and at pre_deploy in a project not linked to Iltero Platform.
     required: false
     default: ""
   scan-reports:
@@ -88,8 +112,11 @@ inputs:
       Where the CLI keeps the records. When it is empty, the action uses a directory of its own for each environment
       and project-directory, under the runner's temporary directory. Every stage of the stack in that environment uses
       it, so give every stage the same project-directory. A relative path is relative to project-directory. pre_deploy
-      reads the plan stage's record from it. When pre_deploy runs in a different job from plan, download the plan job's
-      records artifact and pass its directory here.
+      reads the plan stage's record from it, and the step stops when it holds no record of the unit. When pre_deploy
+      runs in a different job from plan, download the plan job's records artifact and pass its directory here. That
+      job must also give the saved-plan, plan and replan inputs. saved-plan names the saved plan file the job will
+      apply, plan names the plan rendered from it with `terraform show -json`, and replan names the new plan the job
+      makes just before pre_deploy.
     required: false
     default: ""
   write-report:
@@ -156,6 +183,7 @@ runs:
         UNIT: ${{ inputs.unit }}
         PLAN: ${{ inputs.plan }}
         SAVED_PLAN: ${{ inputs.saved-plan }}
+        REPLAN: ${{ inputs.replan }}
         SCAN_REPORTS: ${{ inputs.scan-reports }}
         APPLY_LOG: ${{ inputs.apply-log }}
         STATE: ${{ inputs.state }}

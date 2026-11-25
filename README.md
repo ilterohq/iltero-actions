@@ -7,7 +7,7 @@ GitHub Actions that run [Iltero](https://iltero.io) in a GitHub workflow. They i
 checks each change and writes a record of it, the Change Assurance Record: what was checked, against which inputs, and
 with which result.
 
-This repository has no release. Pin each action to a commit, as [`docs/README.md`](docs/README.md) explains.
+Pin each action to the commit SHA of a release, as [`docs/README.md`](docs/README.md) explains.
 
 ## Terms
 
@@ -48,7 +48,7 @@ and whether the environment is production. The `close` action closes the run.
 | `record-iac` | Record one stage of one unit's Terraform change in a job that runs Terraform itself: after plan, before apply, after apply, or a check of the deployed resources after the apply |
 | `record-image` | Record one stage of a container image's change. The `plan` stage records the image a build pushed, in the same pipeline run as the build. The deployment stages record the image before and after its deployment to an environment, and check the workload's pods after the rollout |
 | `close` | Close the governed run of this pipeline run on Iltero Platform: the change run of a stack and environment, the build run of an application, or the image deploy run of an application and environment |
-| `verify` | Build the record bundle of each unit, or of one named unit, and check that the record and its files are unchanged |
+| `verify` | Build the record bundle of each unit, or of one named unit, and check that the record is consistent with itself and with the files it cites |
 | `preview` | Install the IaC tool, then plan and check each unit on a pull request, locally and with no cloud credential or Iltero secret, and write the pull request comment |
 | `comment` | Post the preview's comment on the pull request, and update it on each push |
 

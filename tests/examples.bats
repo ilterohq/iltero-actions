@@ -254,8 +254,26 @@ record_iac_events() {
   awk '/uses: ilterohq\/iltero-actions\/record-iac@/ { inside = 1; next } inside && /^          stage: / { print $2; inside = 0 }' "$1"
 }
 
-@test "the governed own-Terraform example records plan, pre_deploy, post_deploy and post_verify, in that order, as production needs" {
+@test "the governed own-Terraform example records plan, pre_deploy, post_deploy and post_verify, in that order, as a governed run that expects pre_deploy needs" {
   [ "$(record_iac_events "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" | tr '\n' ' ')" = "plan pre_deploy post_deploy post_verify " ]
+}
+
+@test "the governed own-Terraform example plans again into its own file between the plan and pre_deploy stages, gives that plan to pre_deploy, and applies only the saved plan" {
+  local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml" plan_stage replan pre_deploy apply
+  run step_named "${example}" "Plan again"
+  [[ "${output}" == *'scrubbed terraform plan -input=false -out="${RUNNER_TEMP}/network-replan.tfplan"'* ]]
+  [[ "${output}" == *'scrubbed terraform show -json "${RUNNER_TEMP}/network-replan.tfplan" > "${RUNNER_TEMP}/network-replan.json"'* ]]
+  plan_stage="$(grep -n '^          stage: plan$' "${example}" | cut -d: -f1)"
+  replan="$(grep -n 'name: Plan again' "${example}" | cut -d: -f1)"
+  pre_deploy="$(grep -n '^          stage: pre_deploy$' "${example}" | cut -d: -f1)"
+  apply="$(grep -n 'name: Apply' "${example}" | cut -d: -f1)"
+  [ "${plan_stage}" -lt "${replan}" ]
+  [ "${replan}" -lt "${pre_deploy}" ]
+  [ "${pre_deploy}" -lt "${apply}" ]
+  [ "$(grep -c '^          replan: ' "${example}")" -eq 1 ]
+  sed -n "${pre_deploy},${apply}p" "${example}" | grep -qxF '          replan: ${{ runner.temp }}/network-replan.json'
+  [ "$(grep -cE '^ +scrubbed terraform apply ' "${example}")" -eq 1 ]
+  grep -qF 'scrubbed terraform apply -input=false -json "${RUNNER_TEMP}/network.tfplan"' "${example}"
 }
 
 @test "the own-Terraform example with no account records plan, pre_deploy, post_deploy and post_verify, in that order" {
@@ -278,10 +296,10 @@ header_text() {
   sed -n '/^[^#]/q; s/^# \{0,1\}//p' "$1" | tr '\n' ' '
 }
 
-@test "the examples that deploy Terraform with no account tell the owner to list pre_deploy as out of scope" {
+@test "the examples that deploy Terraform with no account say the CLI leaves the pre-deploy stage out of the record's scope" {
   local file
   for file in iac/deploy.yml iac/own-terraform.yml; do
-    header_text "${REPO_ROOT}/examples/${file}" | grep -qF 'List pre_deploy under stages.out_of_scope in .iltero/config.yml'
+    header_text "${REPO_ROOT}/examples/${file}" | grep -qF "so the CLI leaves it out of the record's scope in this project."
   done
 }
 
@@ -380,7 +398,7 @@ deployment_examples() {
   for example in $(own_terraform_examples); do
     # Command lines only: a comment may show a path pattern such as <prefix>.
     ! grep -vE '^ *#' "${example}" | grep -E -- '-out=|> ' | grep -v RUNNER_TEMP || false
-    ! grep -E '^          (plan|saved-plan|apply-log|state): ' "${example}" | grep -v 'runner.temp' || false
+    ! grep -E '^          (plan|saved-plan|replan|apply-log|state): ' "${example}" | grep -v 'runner.temp' || false
     grep -q '^          refresh-only-plans: |$' "${example}"
     ! grep -A2 '^          refresh-only-plans: |$' "${example}" | tail -n +2 | grep -v 'runner.temp' || false
   done
@@ -583,13 +601,20 @@ indexed_image() {
       [ "${status}" -eq 1 ] || { echo "accepted '${platform}'"; false; }
       [[ "${output}" == *"::error::The image's index must list exactly one image for ${platform}."* ]] || false
     done
-    # A plain image manifest, pushed with no index, lists no image either.
+  done
+}
+
+@test "each image build example stops when the build pushed a single image rather than an index" {
+  local example script
+  mkdir -p "${BATS_TEST_TMPDIR}/build"
+  for example in $(build_examples); do
+    script="$(step_script "${example}" 'Find the image of each architecture')"
     printf '%s' '{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json", "layers": []}' \
       > "${BATS_TEST_TMPDIR}/build/index.json"
     RUNNER_TEMP="${BATS_TEST_TMPDIR}" IMAGE_PLATFORMS=linux/amd64 PUSHED="$(pushed_index)" run bash -eo pipefail -c "${script}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"::error::The image's index must list exactly one image for linux/amd64."* ]] || false
-    pushed="$(image_index)"
+    [[ "${output}" == *"::error::The build pushed a single image, not an index. Keep the provenance attestation that Docker Buildx adds by default, or list more than one platform in IMAGE_PLATFORMS."* ]] || false
+    [ ! -e "${BATS_TEST_TMPDIR}/images.txt" ]
   done
 }
 
@@ -891,13 +916,74 @@ deployment_order() {
   grep -qx '          environment: production' <<< "${close}"
 }
 
+# Prints each definition of the scrubbed function in the example FILE, one
+# definition per line with its lines joined.
+scrubbed_definitions() {
+  awk '/^          scrubbed\(\) \($/ { inside = 1; text = "" }
+    inside { text = text $0 " " }
+    inside && /^          \)$/ { print text; inside = 0 }' "$1"
+}
+
+# Prints, for each step of the example FILE that runs scrubbed terraform,
+# "yes" when the step defines scrubbed and "no" when it does not.
+steps_defining_scrubbed() {
+  awk '/^      - / { if (runs) print (defines ? "yes" : "no"); runs = 0; defines = 0 }
+    /^ +scrubbed terraform / { runs = 1 }
+    /^          scrubbed\(\) \($/ { defines = 1 }
+    END { if (runs) print (defines ? "yes" : "no") }' "$1"
+}
+
+@test "the governed own-Terraform example runs every Terraform command with a scrubbed environment" {
+  local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
+  # Every command line that runs terraform, leaving out comment lines and the
+  # setup step's settings, runs it once, through scrubbed.
+  grep -qE "^ +scrubbed terraform " "${example}"
+  ! grep -E "^ +[^#]*\bterraform [a-z-]" "${example}" | grep -vqE "^ +scrubbed terraform " || false
+  ! grep -E "^ +scrubbed terraform .*\bterraform " "${example}" || false
+  # Every step that runs scrubbed terraform defines scrubbed, and every
+  # definition is the same.
+  [ -n "$(steps_defining_scrubbed "${example}")" ]
+  [ "$(steps_defining_scrubbed "${example}" | sort -u)" = "yes" ]
+  [ "$(scrubbed_definitions "${example}" | sort -u | wc -l)" -eq 1 ]
+  # The list names no GITHUB_, ACTIONS_ or RUNNER_ variable.
+  ! scrubbed_definitions "${example}" | grep -qE '\b(ACTIONS|GITHUB|RUNNER)' || false
+}
+
+# Prints the first definition of the scrubbed function in the example FILE,
+# as a step's shell runs it.
+first_scrubbed_definition() {
+  awk '/^          scrubbed\(\) \($/ { inside = 1 }
+    inside { sub(/^          /, ""); print }
+    inside && /^\)$/ { exit }' "$1"
+}
+
+@test "the governed own-Terraform example's scrubbed function gives Terraform only its list and the TF_VAR_ variables" {
+  local definition
+  definition="$(first_scrubbed_definition "${REPO_ROOT}/examples/iac/governed-own-terraform.yml")"
+  run env -i PATH="${PATH}" HOME="${HOME}" TF_DATA_DIR=/data TF_VAR_region=eu AWS_ACCESS_KEY_ID=key \
+    GITHUB_TOKEN=token ACTIONS_ID_TOKEN_REQUEST_TOKEN=token RUNNER_TEMP=/temp 'A-B=1' $'MULTI_LINE=a\nb' \
+    bash --noprofile --norc -eo pipefail -c "${definition}"$'\n''scrubbed env | cut -d= -f1 | sort'
+  [ "${status}" -eq 0 ]
+  [ "$(tr '\n' ' ' <<< "${output}")" = "AWS_ACCESS_KEY_ID HOME PATH TF_DATA_DIR TF_VAR_region " ]
+}
+
+@test "the governed own-Terraform example's scrubbed function passes the command's exit code, and stops when the environment cannot be read" {
+  local definition
+  definition="$(first_scrubbed_definition "${REPO_ROOT}/examples/iac/governed-own-terraform.yml")"
+  run bash --noprofile --norc -eo pipefail -c "${definition}"$'\n''scrubbed sh -c "exit 7"'
+  [ "${status}" -eq 7 ]
+  # A stand-in for env that cannot list the environment.
+  run bash --noprofile --norc -eo pipefail -c 'env() { [[ "$1" != -0 ]] || return 3; command env "$@"; }'$'\n'"${definition}"$'\n''scrubbed echo ran'
+  [ "${status}" -eq 3 ]
+  [[ "${output}" != *ran* ]]
+}
+
 @test "the examples that run Terraform themselves use the committed lock file" {
-  local example file
-  for example in own-terraform governed-own-terraform; do
-    file="${REPO_ROOT}/examples/iac/${example}.yml"
+  local file
+  for file in $(own_terraform_examples); do
     # Each command line that runs terraform init, leaving out comment lines.
-    grep -qE "^ +terraform init" "${file}"
-    ! grep -E "^ +terraform init" "${file}" | grep -vqF -- "-lockfile=readonly" || false
+    grep -qE "^ +(scrubbed )?terraform init" "${file}"
+    ! grep -E "^ +(scrubbed )?terraform init" "${file}" | grep -vqF -- "-lockfile=readonly" || false
   done
 }
 

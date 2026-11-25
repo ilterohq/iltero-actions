@@ -29,9 +29,9 @@
 # cluster, replace them with the steps that give kubectl its credentials.
 #
 # Values the owner replaces:
-#   the actions commit (each 0000000000000000000000000000000000000000 is a
-#   placeholder for the 40-character ID of the iltero-actions commit you use,
-#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   the actions release (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character commit ID of the iltero-actions release
+#   you use, and each # v0.3.0 comment a placeholder for its version),
 #   the GitHub deployment environment, the deploy role's Amazon Resource Name
 #   (ARN), region and cluster name, and the workload's namespace, name,
 #   container and label selector.

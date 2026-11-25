@@ -24,13 +24,19 @@ setup() {
   ln -s "$(command -v python3)" "${TOOLS}/venv/bin/python"
 
   # A stand-in for the CLI. MARKS/exit-check holds the image check's exit
-  # code. The check writes the unit's record.
+  # code. The check writes the unit's record. MARKS/in-scope-exit holds the
+  # exit code of `record in-scope`, 0 (in scope) when it is not there.
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
 echo "iltero $*" >> "${STUB_LOG}"
 case "$1 $2" in
   "config show")
     echo "{\"linked\": ${LINKED}}"
+    exit 0
+    ;;
+  "record in-scope")
+    echo "::warning::scope <answer> for $3"
+    [[ ! -e "${MARKS}/in-scope-exit" ]] || exit "$(cat "${MARKS}/in-scope-exit")"
     exit 0
     ;;
 esac
@@ -319,10 +325,19 @@ check_call() {
   ! check_call || false
 }
 
-@test "a unit name that breaks the unit-name rule is refused" {
+@test "a unit name that cannot name a directory is refused" {
   UNIT="../api" run "${RECORD}" run plan
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The unit name '../api' is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."* ]]
+  [[ "${output}" == *"The unit name '../api' cannot name a directory or a file. Use only letters, digits, '.', '_' and '-', and not '.' or '..' alone."* ]]
+}
+
+@test "a unit name that can name a directory goes to the CLI, which applies its own rule for unit names" {
+  local name
+  for name in Api.v2 -api; do
+    : > "${STUB_LOG}"
+    UNIT="${name}" run "${RECORD}" run plan
+    check_call | grep -qF -- " --unit=${name} "
+  done
 }
 
 @test "the check runs the evaluator setup installed" {
@@ -445,6 +460,75 @@ STUB
     ENVIRONMENT=production WORKLOAD_AFTER_PODS_LISTING=after.json run "${RECORD}" run post_verify
   [ "${status}" -eq 0 ]
   ! check_call | grep -q -- "--pod-owners" || false
+}
+
+# Runs the post_verify stage with the cluster and the readings of the workload.
+run_post_verify() {
+  IMAGE="" CLUSTER_ID="${CLUSTER}" WORKLOAD_BEFORE_PODS_LISTING=before.json PODS=pods.json \
+    ENVIRONMENT=production WORKLOAD_AFTER_PODS_LISTING=after.json run "${RECORD}" run post_verify
+}
+
+@test "a linked post_verify that the record leaves out reads not required in the summary" {
+  echo 3 > "${MARKS}/in-scope-exit"
+  run_post_verify
+  [ "${status}" -eq 0 ]
+  grep -qx "iltero record in-scope ${DEPLOYMENTS}/units/root --stage=post_verify" "${STUB_LOG}"
+  [ "$(grep -E "^iltero (image check|record in-scope) " "${STUB_LOG}" | cut -d" " -f2-3)" == $'image check\nrecord in-scope' ]
+  grep -q "^Result: not required\.$" "${GITHUB_STEP_SUMMARY}"
+  [ "$(grep -o "<summary>root: [^<]*</summary>" "${GITHUB_STEP_SUMMARY}")" == $'<summary>root: image check, post-verify</summary>\n<summary>root: is the post-verify stage required?</summary>' ]
+}
+
+@test "the CLI's answer to whether the record requires post_verify is shown with workflow commands paused" {
+  echo 3 > "${MARKS}/in-scope-exit"
+  run_post_verify
+  [ "${status}" -eq 0 ]
+  commands_paused_around "::warning::scope <answer> for ${DEPLOYMENTS}/units/root"
+}
+
+@test "a linked post_verify that the record requires reads passed in the summary" {
+  run_post_verify
+  [ "${status}" -eq 0 ]
+  grep -q "^iltero record in-scope " "${STUB_LOG}"
+  grep -q "^Result: passed\.$" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a linked post_verify that fails does not ask whether the record requires the stage" {
+  echo 2 > "${MARKS}/exit-check"
+  run_post_verify
+  [ "${status}" -eq 2 ]
+  ! grep -q "record in-scope" "${STUB_LOG}" || false
+  grep -q "^Result: failed\.$" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a linked post_verify that passed fails when the CLI then says the record does not verify" {
+  echo 9 > "${MARKS}/in-scope-exit"
+  run_post_verify
+  [ "${status}" -eq 9 ]
+  [[ "${output}" == *"The CLI could not say whether the record of unit 'root' requires the post-verify stage."* ]]
+  grep -q "^Result: record does not verify\.$" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a linked post_verify that passed fails when the CLI then cannot read the record" {
+  echo 5 > "${MARKS}/in-scope-exit"
+  run_post_verify
+  [ "${status}" -eq 5 ]
+  grep -q "^Result: record unreadable\.$" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a post_verify in a project not linked to the server does not ask whether the record requires the stage" {
+  LINKED=false APPLICATION="" run_post_verify
+  [ "${status}" -eq 0 ]
+  ! grep -q "record in-scope" "${STUB_LOG}" || false
+  grep -q "^Result: passed\.$" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a linked pre_deploy or post_deploy does not ask whether the record requires the stage" {
+  local stage
+  for stage in pre_deploy post_deploy; do
+    IMAGE="${DEPLOYED}" ENVIRONMENT=production run "${RECORD}" run "${stage}"
+    [ "${status}" -eq 0 ]
+  done
+  ! grep -q "record in-scope" "${STUB_LOG}" || false
 }
 
 @test "every deployment stage needs the environment" {

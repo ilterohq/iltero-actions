@@ -6,14 +6,15 @@
 # For each unit whose record requires the post-verify stage, it then checks
 # that the deployed resources still match what the apply left. The plan
 # stage's check opens the run on Iltero Platform, and each later stage joins
-# it. The close job closes the run when the deploy job succeeded. A run whose
-# deploy failed or was cancelled stays open, so a re-run of the failed job
-# joins it.
+# it. The close job closes the run when the deploy job succeeded. When the
+# deploy job failed or was cancelled, a re-run of it opens a new run, which
+# plans and applies again, and the earlier run ends. When the job failed
+# before any unit went past its plan stage, the re-run joins the earlier run.
 #
 # Values the owner replaces:
-#   the actions commit (each 0000000000000000000000000000000000000000 is a
-#   placeholder for the 40-character ID of the iltero-actions commit you use,
-#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   the actions release (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character commit ID of the iltero-actions release
+#   you use, and each # v0.3.0 comment a placeholder for its version),
 #   each environment's name, branch, GitHub deployment environment, deploy
 #   role's Amazon Resource Name (ARN) and region, and ILTERO_API_URL, which
 #   must be the same address as platform.api_url in .iltero/config.yml. The

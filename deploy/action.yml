@@ -84,7 +84,8 @@ outputs:
     description: >-
       The directory that holds the two readings of the deployed resources for each unit whose record requires the
       post-verify stage, as <unit>/first.json and <unit>/second.json. The readings can hold secret values. The action
-      does not upload them. Do not keep them: the record keeps only their digests.
+      does not upload them. Do not keep them. The record keeps no copy of them. In a governed run it keeps a
+      fingerprint of each; in a project not linked to Iltero Platform, it keeps none.
     value: ${{ steps.deploy.outputs.readings-directory }}
 
 runs:

@@ -207,8 +207,23 @@ cmd_run() {
   # summary says the step checked as advice.
   [[ "${as_advice}" == false || "${status}" -ne 0 ]] \
     || result="checked as advice. Any failed or undecided assertions are listed below, and they do not fail the step"
+  if [[ "${status}" -eq 0 && "${linked}" == true && "${STAGE}" == post_verify ]]; then
+    # The CLI also exits 0, and checks nothing, when the server says the
+    # environment's policy leaves the stage out. Ask the CLI whether the
+    # unit's record requires the stage, so the summary does not read
+    # "passed" for a stage that checked nothing.
+    local required
+    required="$(record_requires_stage "${work}" "${out}" "${UNIT}" "${STAGE}")" || status=$?
+    if [[ "${status}" -ne 0 ]]; then
+      result="$(record_scope_failure "${status}")"
+    elif [[ "${required}" == false ]]; then
+      result="not required"
+    fi
+  fi
   : > "${details}"
   append_details_block "${details}" "${UNIT}: image check, ${STAGE//_/-}" "${work}/${STAGE}.txt"
+  [[ ! -f "${work}/in-scope-${STAGE}.txt" ]] \
+    || append_details_block "${details}" "${UNIT}: is the ${STAGE//_/-} stage required?" "${work}/in-scope-${STAGE}.txt"
   {
     echo "## Iltero image record: $(markdown_escape "${UNIT}"), ${STAGE//_/-}"
     echo

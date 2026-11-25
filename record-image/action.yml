@@ -14,10 +14,11 @@ inputs:
       The stage to record: plan (after the build pushed the image, before any deployment uses it), pre_deploy (before
       the deployment), post_deploy (after the deployment) or post_verify (after the rollout, a check of what the
       workload's pods run). In a project linked to Iltero Platform, plan runs in the build run of the application, and
-      each deployment stage runs in the image deploy run of the application and the environment. On pull_request
-      events, record-image records only plan, and checks it locally and as advice: failed or undecided assertions do
-      not fail the step. An undecided assertion is one the CLI had too little information to pass or fail.
-      record-image refuses pull request review events.
+      each deployment stage runs in the image deploy run of the application and the environment. In a linked project,
+      when the check at post_verify passes, record-image asks the CLI whether the unit's record requires the stage,
+      and reports not required when it does not. On pull_request events, record-image records only plan, and checks
+      it locally and as advice: failed or undecided assertions do not fail the step. An undecided assertion is one
+      the CLI had too little information to pass or fail. record-image refuses pull request review events.
     required: true
   image:
     description: >-

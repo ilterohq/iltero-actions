@@ -356,13 +356,15 @@ jobs:
           saved-plan: ${{ runner.temp }}/e2e-plan/tfplan
           retention-days: 1
 
-      # The report lists the assertions the plan was checked against, so the
-      # test stack's assertion must be in it.
+      # The report lists each assertion the plan was checked against, with the
+      # number of resources it applied to. The test stack's assertion must have
+      # applied to the marker, its one resource.
       - name: Check that the record was written and checked the assertion
         env:
           RECORDS: ${{ steps.record.outputs.records-directory }}
           REPORTS: ${{ steps.record.outputs.report-directory }}
+          EXPECTED_REPORT_ROW: "| `EXAMPLE.IAC.RESOURCE.TERRAFORM.DATA.INPUT_SET` | `1.0.0` | The input of the test marker is e2e | 1 |"
         run: |
           [[ -f "${RECORDS}/units/root/car.json" ]] || { echo "::error::record-iac wrote no record for unit root."; exit 1; }
-          grep -qF EXAMPLE.IAC.RESOURCE.TERRAFORM.DATA.INPUT_SET "${REPORTS}/root/record-report.md" \
-            || { echo "::error::The record's report does not list the test stack's assertion."; exit 1; }
+          grep -qF "${EXPECTED_REPORT_ROW}" "${REPORTS}/root/record-report.md" \
+            || { echo "::error::The record's report does not show the test stack's assertion checking the marker."; exit 1; }
