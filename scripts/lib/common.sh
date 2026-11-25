@@ -11,6 +11,10 @@ shopt -u patsub_replacement 2> /dev/null || true
 # CLI and its evaluator, and where deploy and preview install Terraform. Every
 # action finds the tools here, by absolute path.
 readonly ILTERO_TOOLS_DIRECTORY_NAME="iltero-tools"
+# The scanner folder, inside the tools folder, where the CLI keeps the
+# scanners it installs. The runner empties it for each job, so no scanner is
+# kept between jobs.
+readonly SCANNER_DIRECTORY_NAME="scanners"
 
 # Characters for patterns, listed one by one: a range such as a-z can also
 # match capital letters, depending on the locale.
@@ -28,15 +32,20 @@ readonly COMMIT_PATTERN="^[${LOWERCASE_HEX_DIGITS}]{40}$"
 # A SHA-256 digest: 64 lowercase hexadecimal digits.
 # shellcheck disable=SC2034
 readonly SHA256_PATTERN="^[${LOWERCASE_HEX_DIGITS}]{64}$"
-# The unit-name rule the CLI applies: 1 to 64 lowercase letters, digits, "_"
-# or "-", not starting with "-".
-# shellcheck disable=SC2034
-readonly UNIT_NAME_PATTERN="^[${LOWERCASE_LETTERS}0-9_][${LOWERCASE_LETTERS}0-9_-]{0,63}$"
+# Succeeds when NAME can name a directory, a file and an artifact: it follows
+# PORTABLE_NAME_PATTERN, and is not "." or "..".
+is_portable_name() {
+  local name="$1"
+  [[ "${name}" =~ ${PORTABLE_NAME_PATTERN} && "${name}" != . && "${name}" != .. ]]
+}
 
-# Stops unless NAME follows the unit-name rule.
+# Stops unless the unit name NAME can name a directory, a file and an
+# artifact, as the actions name a unit's work folder, records and artifacts
+# after it. The CLI applies its own rule for unit names.
 check_unit_name() {
   local name="$1"
-  [[ "${name}" =~ ${UNIT_NAME_PATTERN} ]] || die "The unit name '${name}' is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."
+  is_portable_name "${name}" \
+    || die "The unit name '${name}' cannot name a directory or a file. Use only letters, digits, '.', '_' and '-', and not '.' or '..' alone."
 }
 
 # Prints LINE without the spaces at its start and end.
@@ -92,12 +101,12 @@ require_one_line() {
 
 # Stops unless ENVIRONMENT can name a directory, a file and an artifact, as
 # the actions name records directories, artifacts and a unit's settings files
-# after it: it follows PORTABLE_NAME_PATTERN, and is not "." or "..".
+# after it.
 require_environment_name() {
   local environment="$1"
   [[ -n "${environment}" ]] || die "The environment input is required."
   require_one_line environment "${environment}"
-  [[ "${environment}" =~ ${PORTABLE_NAME_PATTERN} && "${environment}" != . && "${environment}" != .. ]] \
+  is_portable_name "${environment}" \
     || die "The environment '${environment}' cannot name a directory or a file. Use only letters, digits, '.', '_' and '-', and not '.' or '..' alone."
 }
 
@@ -119,6 +128,13 @@ tools_dir() {
   local temp
   temp="$(runner_temp)" || return 1
   echo "${temp}/${ILTERO_TOOLS_DIRECTORY_NAME}"
+}
+
+# Prints the absolute path of the scanner folder.
+scanner_dir() {
+  local tools
+  tools="$(tools_dir)" || return 1
+  echo "${tools}/${SCANNER_DIRECTORY_NAME}"
 }
 
 # Prints the runner's folder for temporary files, or stops when the runner

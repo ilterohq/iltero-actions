@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Only the latest release receives security fixes. This repository has no release.
+Only the latest release receives security fixes.
 
 ## Reporting a Vulnerability
 
@@ -47,5 +47,5 @@ The following are **out of scope**:
 
 - Use OpenID Connect (OIDC) for cloud provider authentication. Never store long-lived cloud keys as secrets
 - Enable GitHub branch protection on your main branch
-- Pin every action to a full commit SHA (the commit's 40-character ID) and review the pins regularly
+- Pin every action to the commit SHA of a release (the commit's 40-character ID), and review the pins regularly
 - Use least-privilege permissions in workflow files

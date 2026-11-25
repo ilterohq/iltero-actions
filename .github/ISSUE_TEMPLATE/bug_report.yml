@@ -48,8 +48,8 @@ body:
     id: action-version
     attributes:
       label: Action Version
-      description: The full commit SHA of iltero-actions that your workflow pins.
-      placeholder: "0000000000000000000000000000000000000000"
+      description: The iltero-actions release your workflow pins, as the comment after each `uses:` line names it.
+      placeholder: "v0.3.0"
     validations:
       required: true
 

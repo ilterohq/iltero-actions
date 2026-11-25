@@ -6,18 +6,17 @@
 # nothing to Iltero. The last step builds each unit's record bundle, checks
 # it, and uploads the record bundles.
 #
-# List pre_deploy under stages.out_of_scope in .iltero/config.yml. The
-# pre-deploy stage checks facts that only Iltero Platform holds, so the deploy
-# step fails before the apply when a unit's record requires it.
+# The pre-deploy stage checks facts that only Iltero Platform holds, so the
+# CLI leaves it out of the record's scope in this project.
 #
 # List the folders of the project's own assertions under assertions.paths in
 # .iltero/config.yml, and leave assertions.include_starter_assertions false.
 # The starter assertions are the ones shipped with Iltero.
 #
 # Values the owner replaces:
-#   the actions commit (each 0000000000000000000000000000000000000000 is a
-#   placeholder for the 40-character ID of the iltero-actions commit you use,
-#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   the actions release (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character commit ID of the iltero-actions release
+#   you use, and each # v0.3.0 comment a placeholder for its version),
 #   the branch, the environment, and the deploy role's Amazon Resource Name
 #   (ARN) and region.
 

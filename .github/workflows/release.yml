@@ -15,9 +15,9 @@
 #      version with a suffix is published as a pre-release.
 # A run started on another branch publishes nothing: every job shows as skipped.
 #
-# Pinning: there are no moving major tags. Pin to the release's full commit SHA,
+# Pinning: there are no moving major tags. Pin to the commit SHA of a release,
 # with its version as a comment:
-#     uses: ilterohq/iltero-actions/<action>@<commit-sha>  # v0.3.0
+#     uses: ilterohq/iltero-actions/<action>@<release-commit-sha>  # v0.3.0
 #
 # Published tags are immutable: a repository ruleset blocks moving or deleting them.
 # =============================================================================

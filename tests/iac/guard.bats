@@ -30,6 +30,8 @@ sys.exit(int(code[0]) if code else 0)
 STUB
   chmod +x "${TOOLS}/bin/terraform"
   # A stand-in for env that records any call with arguments.
+  # The stub's variables expand when it runs, not here.
+  # shellcheck disable=SC2016
   stub env 'if [[ $# -gt 0 ]]; then echo "env $*" >> "${STUB_LOG}"; fi; exec /usr/bin/env "$@"'
   export JOB_SECRET="job-secret"
   source "${REPO_ROOT}/scripts/lib/common.sh"
@@ -154,6 +156,19 @@ STUB
   [ "${status}" -ne 0 ]
   [[ "${output}" == *"::error::The action's tools or scripts changed while Terraform ran, so the step stops."* ]]
   [[ "${output}" != *"carried on"* ]]
+}
+
+@test "the step stops when the tool changes a scanner the CLI installed" {
+  local package="${TOOLS}/scanners/checkov/0123456789abcdef/packages/checkov"
+  mkdir -p "${package}"
+  echo 'original' > "${package}/main.py"
+  printf '#!/bin/bash\necho changed >> "%s"\n' "${package}/main.py" > "${TOOLS}/bin/terraform"
+  run bash -c "source '${REPO_ROOT}/scripts/lib/common.sh'; source '${REPO_ROOT}/scripts/iac/lib/guard.sh'; source '${REPO_ROOT}/scripts/iac/lib/tool.sh'; load_tool terraform; (terraform_run '${BATS_TEST_TMPDIR}/work' -- plan) || true; echo carried on"
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"::error::The action's tools or scripts changed while Terraform ran, so the step stops."* ]]
+  [[ "${output}" != *"carried on"* ]]
+  # The CLI keeps its scanners in that folder.
+  [ "$(scanner_dir)" = "${TOOLS}/scanners" ]
 }
 
 @test "the step stops when the tool adds a command to a folder on PATH" {

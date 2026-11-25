@@ -263,12 +263,12 @@ aws_unit() {
   [ "$(grep -o -- '--unit=[a-z]*' "${STUB_LOG}" | tr '\n' ' ')" == "--unit=network --unit=compute " ]
 }
 
-@test "a unit that breaks the unit-name rule is refused" {
-  aws_unit units/Network
-  echo '[{"name": "Network", "working_directory": "units/Network"}]' > "${UNITS_JSON}"
+@test "a unit whose name cannot name a directory is refused" {
+  aws_unit units/network
+  echo '[{"name": "net work", "working_directory": "units/network"}]' > "${UNITS_JSON}"
   run "${PREVIEW}" run production
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."* ]]
+  [[ "${output}" == *"The unit name 'net work' cannot name a directory or a file. Use only letters, digits, '.', '_' and '-', and not '.' or '..' alone."* ]]
   # No output is written, so the upload step does not run.
   ! grep -q "^records-directory=" "${GITHUB_OUTPUT}" || false
 }

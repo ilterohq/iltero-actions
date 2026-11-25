@@ -17,9 +17,9 @@ setup() {
   export STATE_UNREADABLE="false"
   export UNIT="network"
   : > "${GITHUB_STEP_SUMMARY}"
-  # The step for one stage gets only the inputs that stage reads, as a
-  # workflow would pass them. This wrapper clears the file inputs set below
-  # that the stage does not read, when they still hold their default value.
+  # The step for one stage gets only the inputs its step gives, as a workflow
+  # would pass them. This wrapper clears the file inputs set below that the
+  # stage's step does not give, when they still hold their default value.
   RECORD="${BATS_TEST_TMPDIR}/record-stage.sh"
   cat > "${RECORD}" << STAGE
 #!/bin/bash
@@ -45,12 +45,21 @@ STAGE
   mkdir -p "${TOOLS}/venv/bin" "${MARKS}"
   ln -s "$(command -v python3)" "${TOOLS}/venv/bin/python"
 
-  # A stand-in for the CLI. MARKS/exit-<stage> holds a stage's exit code and
-  # MARKS/exit-state the state check's. MARKS/no-report makes the report exit
-  # 5 without writing. Each stage writes the unit's record.
+  # A stand-in for the CLI. MARKS/exit-<stage> holds a stage's exit code,
+  # MARKS/exit-scanners the scanner install's, MARKS/exit-state the state
+  # check's and MARKS/in-scope-exit the answer of `record in-scope`.
+  # MARKS/no-report makes the report exit 5 without writing. Each stage writes
+  # the unit's record, which expects pre_deploy with MARKS/expects-pre-deploy,
+  # and post_verify with MARKS/expects-post-verify.
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
 echo "iltero $*" >> "${STUB_LOG}"
+if [[ "$1 $2" == "scanners install" ]]; then
+  echo "scanners install ILTERO_CACHE_DIR=${ILTERO_CACHE_DIR}" >> "${STUB_LOG}"
+  echo "Trivy <installed>"
+  [[ ! -e "${MARKS}/exit-scanners" ]] || exit "$(cat "${MARKS}/exit-scanners")"
+  exit 0
+fi
 if [[ "$1 $2" == "record in-scope" ]]; then
   echo "::error::injected by the record"
   [[ ! -e "${MARKS}/in-scope-exit" ]] || exit "$(cat "${MARKS}/in-scope-exit")"
@@ -104,6 +113,8 @@ done
 mkdir -p "${out}/units/${unit}"
 if [[ -e "${MARKS}/expects-pre-deploy" ]]; then
   echo '{"expected_stages": ["plan", "pre_deploy", "post_deploy"]}' > "${out}/units/${unit}/car.json"
+elif [[ -e "${MARKS}/expects-post-verify" ]]; then
+  echo '{"expected_stages": ["plan", "post_deploy", "post_verify"]}' > "${out}/units/${unit}/car.json"
 else
   echo '{"expected_stages": ["plan", "post_deploy"]}' > "${out}/units/${unit}/car.json"
 fi
@@ -257,9 +268,11 @@ stage_call() {
 @test "plan passes each scan report to the CLI, in the order given, after the saved plan" {
   echo '{}' > checkov.json
   echo '{}' > trivy.json
-  SCAN_REPORTS=$'  checkov   checkov.json  \n\ntrivy trivy.json\n' run "${RECORD}" run plan
+  # The CLI refuses scan reports in a project linked to the server, outside pull
+  # requests, so this test runs unlinked.
+  LINKED=false SCAN_REPORTS=$'  checkov   checkov.json  \n\ntrivy trivy.json\n' run "${RECORD}" run plan
   [ "${status}" -eq 0 ]
-  stage_call plan | grep -qx "iltero iac check --stage=plan --plan=plan.json --saved-plan=tfplan --scanner=checkov --scanner-report=checkov.json --scanner=trivy --scanner-report=trivy.json --unit=network --out=${RECORDS} --environment=production --upload"
+  stage_call plan | grep -qx "iltero iac check --stage=plan --plan=plan.json --saved-plan=tfplan --scanner=checkov --scanner-report=checkov.json --scanner=trivy --scanner-report=trivy.json --unit=network --out=${RECORDS} --environment=production"
 }
 
 @test "plan refuses a scan-reports line that does not name checkov or trivy and a report" {
@@ -290,10 +303,106 @@ stage_call() {
 # --- pre_deploy --------------------------------------------------------------
 
 @test "pre_deploy runs the stage with the records directory it is given" {
+  RECORDS_DIRECTORY="${BATS_TEST_TMPDIR}/from-plan-job" run "${RECORD}" run plan
+  : > "${STUB_LOG}"
   RECORDS_DIRECTORY="${BATS_TEST_TMPDIR}/from-plan-job" run "${RECORD}" run pre_deploy
   [ "${status}" -eq 0 ]
   stage_call pre_deploy | grep -qx "iltero iac check --stage=pre_deploy --unit=network --out=${BATS_TEST_TMPDIR}/from-plan-job --environment=production --upload"
   ! grep -q "state check" "${STUB_LOG}" || false
+  # A linked project asks the server first. It asks whether the record
+  # requires the stage only after the CLI passed it, to word the summary.
+  [ "$(grep -E "^iltero (iac check --stage=pre_deploy|record in-scope) " "${STUB_LOG}" | cut -d" " -f2-3)" == $'iac check\nrecord in-scope' ]
+}
+
+@test "a linked pre_deploy that the record leaves out reads not required in the summary" {
+  run "${RECORD}" run plan
+  : > "${GITHUB_STEP_SUMMARY}"
+  run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 0 ]
+  stage_call pre_deploy
+  grep -q "^iltero record in-scope ${RECORDS}/units/network --stage=pre_deploy$" "${STUB_LOG}"
+  grep -q "Result: not required." "${GITHUB_STEP_SUMMARY}"
+  # The details show the check before the question, in the order they ran.
+  [ "$(grep -o "<summary>network: [a-z -]*" "${GITHUB_STEP_SUMMARY}" | head -2)" == $'<summary>network: pre-deploy\n<summary>network: is the pre-deploy stage required' ]
+}
+
+@test "a linked pre_deploy that the record requires reads passed in the summary" {
+  touch "${MARKS}/expects-pre-deploy"
+  run "${RECORD}" run plan
+  : > "${GITHUB_STEP_SUMMARY}"
+  run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 0 ]
+  grep -q "Result: passed." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a linked pre_deploy that fails does not ask whether the record requires the stage" {
+  touch "${MARKS}/expects-pre-deploy"
+  run "${RECORD}" run plan
+  : > "${STUB_LOG}"
+  echo 1 > "${MARKS}/exit-pre_deploy"
+  run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 1 ]
+  ! grep -q "record in-scope" "${STUB_LOG}" || false
+  grep -q "Result: failed." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a linked pre_deploy that passed fails when the CLI then cannot say whether the record requires the stage" {
+  run "${RECORD}" run plan
+  : > "${GITHUB_STEP_SUMMARY}"
+  echo 9 > "${MARKS}/in-scope-exit"
+  run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 9 ]
+  [[ "${output}" == *"The CLI could not say whether the record of unit 'network' requires the pre-deploy stage."* ]]
+  grep -q "Result: record does not verify." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a linked pre_deploy passes the plan, the saved plan and the new plan to the CLI when the step gives them" {
+  run "${RECORD}" run plan
+  : > "${STUB_LOG}"
+  echo '{}' > "${BATS_TEST_TMPDIR}/rendered.json"
+  echo plan > "${BATS_TEST_TMPDIR}/apply.tfplan"
+  echo '{}' > "${BATS_TEST_TMPDIR}/replan.json"
+  PLAN="${BATS_TEST_TMPDIR}/rendered.json" SAVED_PLAN="${BATS_TEST_TMPDIR}/apply.tfplan" REPLAN="${BATS_TEST_TMPDIR}/replan.json" \
+    run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 0 ]
+  stage_call pre_deploy | grep -qF -- "--stage=pre_deploy --plan=${BATS_TEST_TMPDIR}/rendered.json --saved-plan=${BATS_TEST_TMPDIR}/apply.tfplan --replan=${BATS_TEST_TMPDIR}/replan.json "
+}
+
+@test "a linked pre_deploy passes only the plan file its step gives" {
+  run "${RECORD}" run plan
+  : > "${STUB_LOG}"
+  echo plan > "${BATS_TEST_TMPDIR}/apply.tfplan"
+  SAVED_PLAN="${BATS_TEST_TMPDIR}/apply.tfplan" run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 0 ]
+  stage_call pre_deploy | grep -qF -- "--saved-plan=${BATS_TEST_TMPDIR}/apply.tfplan "
+  ! stage_call pre_deploy | grep -qE -- "--(re)?plan=" || false
+}
+
+@test "a linked pre_deploy refuses a plan, saved-plan or replan input that names no file" {
+  run "${RECORD}" run plan
+  PLAN="${BATS_TEST_TMPDIR}/missing.json" run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The plan input names no file: '${BATS_TEST_TMPDIR}/missing.json'."* ]]
+  SAVED_PLAN="${BATS_TEST_TMPDIR}/missing.tfplan" run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The saved-plan input names no file: '${BATS_TEST_TMPDIR}/missing.tfplan'."* ]]
+  REPLAN="${BATS_TEST_TMPDIR}/missing-replan.json" run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The replan input names no file: '${BATS_TEST_TMPDIR}/missing-replan.json'."* ]]
+  ! stage_call pre_deploy || false
+}
+
+@test "a local pre_deploy refuses the plan, saved-plan and replan inputs, which it does not read" {
+  LINKED=false run "${RECORD}" run plan
+  echo '{}' > "${BATS_TEST_TMPDIR}/rendered.json"
+  echo plan > "${BATS_TEST_TMPDIR}/apply.tfplan"
+  echo '{}' > "${BATS_TEST_TMPDIR}/replan.json"
+  local inputs
+  for inputs in "PLAN=${BATS_TEST_TMPDIR}/rendered.json" "SAVED_PLAN=${BATS_TEST_TMPDIR}/apply.tfplan" "REPLAN=${BATS_TEST_TMPDIR}/replan.json"; do
+    LINKED=false env "${inputs}" "${RECORD}" run pre_deploy > "${BATS_TEST_TMPDIR}/refused.txt" 2>&1 && return 1
+    grep -qF "In a project not linked to the server, pre_deploy does not read the plan, saved-plan or replan input. Remove them from this step." "${BATS_TEST_TMPDIR}/refused.txt"
+  done
+  ! grep -q "record in-scope" "${STUB_LOG}" || false
 }
 
 @test "pre_deploy is not required for a local record, and checks nothing" {
@@ -323,10 +432,18 @@ stage_call() {
   grep -q "Result: record does not verify." "${GITHUB_STEP_SUMMARY}"
 }
 
-@test "a unit name that breaks the unit-name rule is refused before the artifact is named" {
+@test "a unit name that cannot name a directory is refused before the artifact is named" {
   UNIT="../x" run "${RECORD}" run plan
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The unit name '../x' is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."* ]]
+  [[ "${output}" == *"The unit name '../x' cannot name a directory or a file. Use only letters, digits, '.', '_' and '-', and not '.' or '..' alone."* ]]
+}
+
+@test "a linked pre_deploy with no record of the unit stops and says where the record comes from" {
+  run "${RECORD}" run pre_deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The records directory holds no record of unit 'network'. Run the plan stage first."* ]]
+  ! grep -q "record in-scope" "${STUB_LOG}" || false
+  ! stage_call pre_deploy || false
 }
 
 @test "a local pre_deploy asks the CLI, keeps its answer and shows it paused and in the summary" {
@@ -348,12 +465,13 @@ stage_call() {
   grep -q "Result: record unreadable." "${GITHUB_STEP_SUMMARY}"
 }
 
-@test "a local pre_deploy whose record requires the stage fails, and says how to leave it out" {
+@test "a local pre_deploy whose record requires the stage fails" {
   touch "${MARKS}/expects-pre-deploy"
   LINKED=false run "${RECORD}" run plan
   LINKED=false run "${RECORD}" run pre_deploy
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"::error::The record of unit 'network' requires the pre-deploy stage, which only a project linked to the server can run. List pre_deploy under stages.out_of_scope in .iltero/config.yml."* ]]
+  [[ "${output}" == *"::error::The record of unit 'network' requires the pre-deploy stage, which only a project linked to the server can run."* ]]
+  [[ "${output}" != *"out_of_scope"* ]]
   ! stage_call pre_deploy || false
   grep -q "Result: required, needs the server." "${GITHUB_STEP_SUMMARY}"
 }
@@ -462,6 +580,35 @@ stage_call() {
   [ "${status}" -eq 1 ]
   [[ "${output}" == *"The refresh-only-plans input names no file: 'nowhere.json'."* ]]
   ! stage_call post_verify || false
+}
+
+@test "a linked post_verify that the record leaves out reads not required in the summary" {
+  run "${RECORD}" run post_verify
+  [ "${status}" -eq 0 ]
+  grep -q "^iltero record in-scope ${RECORDS}/units/network --stage=post_verify$" "${STUB_LOG}"
+  grep -q "Result: not required." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a post_verify in a project not linked to the server reads passed and does not ask whether the record requires the stage" {
+  LINKED=false run "${RECORD}" run post_verify
+  [ "${status}" -eq 0 ]
+  ! grep -q "record in-scope" "${STUB_LOG}" || false
+  grep -q "Result: passed." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a linked post_verify that the record requires reads passed in the summary" {
+  touch "${MARKS}/expects-post-verify"
+  run "${RECORD}" run post_verify
+  [ "${status}" -eq 0 ]
+  grep -q "^iltero record in-scope ${RECORDS}/units/network --stage=post_verify$" "${STUB_LOG}"
+  grep -q "Result: passed." "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a linked post_verify that passed fails when the CLI then cannot say whether the record requires the stage" {
+  echo 2 > "${MARKS}/in-scope-exit"
+  run "${RECORD}" run post_verify
+  [ "${status}" -eq 2 ]
+  grep -q "Result: record unreadable." "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "the post_verify stage's exit code is the step's" {
@@ -719,12 +866,12 @@ stage_call() {
   local stage pair variable input
   declare -A read_by=(
     [plan]="plan saved-plan scan-reports"
-    [pre_deploy]=""
+    [pre_deploy]="plan saved-plan replan"
     [post_deploy]="plan saved-plan apply-log state"
     [post_verify]="refresh-only-plans state"
   )
   for stage in plan pre_deploy post_deploy post_verify; do
-    for pair in PLAN:plan SAVED_PLAN:saved-plan SCAN_REPORTS:scan-reports APPLY_LOG:apply-log STATE:state REFRESH_ONLY_PLANS:refresh-only-plans; do
+    for pair in PLAN:plan SAVED_PLAN:saved-plan REPLAN:replan SCAN_REPORTS:scan-reports APPLY_LOG:apply-log STATE:state REFRESH_ONLY_PLANS:refresh-only-plans; do
       variable="${pair%%:*}"
       input="${pair#*:}"
       [[ " ${read_by[${stage}]} " != *" ${input} "* ]] || continue
@@ -733,4 +880,59 @@ stage_call() {
     done
   done
   ! grep -q "^iltero iac check" "${STUB_LOG}" || false
+}
+
+@test "in a linked project, the plan stage installs the scanners into the tools folder before its check" {
+  export ILTERO_CACHE_DIR="${BATS_TEST_TMPDIR}/elsewhere"
+  run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  [ "$(grep -n '^iltero scanners install$' "${STUB_LOG}" | cut -d: -f1)" -lt "$(grep -n '^iltero iac check --stage=plan ' "${STUB_LOG}" | cut -d: -f1)" ]
+  # The action names the folder itself, whatever the job set.
+  grep -qx "scanners install ILTERO_CACHE_DIR=${TOOLS}/scanners" "${STUB_LOG}"
+  [[ "${output}" == *"::group::Install the scanners"* ]]
+}
+
+@test "the scanners are installed only for the plan stage of a linked project, never on a pull request" {
+  local stage
+  # The pre-deploy stage reads the plan stage's record.
+  run "${RECORD}" run plan
+  : > "${STUB_LOG}"
+  for stage in pre_deploy post_deploy post_verify; do
+    run "${RECORD}" run "${stage}"
+    [ "${status}" -eq 0 ]
+  done
+  LINKED=false run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  GITHUB_EVENT_NAME=pull_request run "${RECORD}" run plan
+  [ "${status}" -eq 0 ]
+  ! grep -q "scanners install" "${STUB_LOG}" || false
+}
+
+@test "a failed scanner install stops the plan stage with the CLI's exit code, before its check" {
+  local code
+  for code in 2 4 7 9; do
+    echo "${code}" > "${MARKS}/exit-scanners"
+    : > "${STUB_LOG}"
+    run "${RECORD}" run plan
+    [ "${status}" -eq "${code}" ]
+    ! grep -q "^iltero iac check " "${STUB_LOG}" || false
+    case "${code}" in
+      9) [[ "${output}" == *"::error::A scanner or the scanner folder failed the Iltero CLI's integrity check against the pinned digests (fingerprints). The CLI's message above names the file or folder. Find out why before you run the job again."* ]] ;;
+      4) [[ "${output}" == *"::error::The Iltero CLI could not install the scanners it pins. The CLI's message above says why. When a download failed, the job must reach github.com, pypi.org and files.pythonhosted.org, through the proxy in HTTPS_PROXY when the runner uses one."* ]] ;;
+      *) [[ "${output}" == *"::error::The Iltero CLI could not install the scanners it pins. The CLI's message above says why."* && "${output}" != *"When a download failed"* ]] ;;
+    esac
+    commands_paused_around "Trivy <installed>"
+  done
+}
+
+@test "the plan stage checks its own inputs and the state before it installs the scanners" {
+  rm tfplan
+  run "${RECORD}" run plan
+  [ "${status}" -ne 0 ]
+  [[ "${output}" == *"saved-plan"* ]]
+  echo 1 > "${MARKS}/exit-state"
+  touch tfplan
+  run "${RECORD}" run plan
+  [ "${status}" -eq 1 ]
+  ! grep -q "scanners install" "${STUB_LOG}" || false
 }

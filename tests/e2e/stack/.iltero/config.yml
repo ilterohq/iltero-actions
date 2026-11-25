@@ -6,7 +6,7 @@ assertions:
   include_starter_assertions: false
   custom_policies: []
   scanner_check_mapping: null
-  required_scanners: []
+  scanner_requirements: []
   local_exceptions: null
   values_known_after_deployment: postpone
 redaction:
@@ -19,5 +19,4 @@ environments:
       name: main
 stages:
   out_of_scope:
-    - pre_deploy
     - post_verify

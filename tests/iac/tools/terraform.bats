@@ -115,6 +115,14 @@ STUB
   [[ "${output}" != *"args plan"* ]]
 }
 
+@test "a plan made again stops when the variables files of the saved plan cannot be read" {
+  mkdir -p "${BATS_TEST_TMPDIR}/work" "${BATS_TEST_TMPDIR}/unit"
+  run tool_replan "${BATS_TEST_TMPDIR}/work" "${BATS_TEST_TMPDIR}/unit" "${BATS_TEST_TMPDIR}/replan.json"
+  [ "${status}" -ne 0 ]
+  [ ! -e "${BATS_TEST_TMPDIR}/replan.json" ]
+  [[ "${output}" != *"args plan"* ]]
+}
+
 @test "the state check gets Terraform's data folder" {
   run tool_state_check_environment "${BATS_TEST_TMPDIR}/work"
   [ "${output}" = "TF_DATA_DIR=${BATS_TEST_TMPDIR}/work/terraform-data" ]

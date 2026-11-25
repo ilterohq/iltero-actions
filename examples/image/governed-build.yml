@@ -53,9 +53,9 @@
 # secret a scanner found.
 #
 # Values the owner replaces:
-#   the actions commit (each 0000000000000000000000000000000000000000 is a
-#   placeholder for the 40-character ID of the iltero-actions commit you use,
-#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   the actions release (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character commit ID of the iltero-actions release
+#   you use, and each # v0.3.0 comment a placeholder for its version),
 #   the application key, IMAGE_PLATFORMS, the records role's Amazon Resource
 #   Name (ARN) and region, and ILTERO_API_URL, which must be the same address
 #   as platform.api_url in .iltero/config.yml. The image name comes from the
@@ -161,6 +161,9 @@ jobs:
           index="${RUNNER_TEMP}/build/index.json"
           [[ "sha256:$(sha256sum "${index}" | cut -d' ' -f1)" == "${PUSHED#*@}" ]] \
             || { echo "::error::The index the build job kept does not match the digest of the pushed image."; exit 1; }
+          # Buildx pushes an index when it adds its default provenance attestation or builds more than one platform.
+          jq -e 'has("manifests")' "${index}" > /dev/null \
+            || { echo "::error::The build pushed a single image, not an index. Keep the provenance attestation that Docker Buildx adds by default, or list more than one platform in IMAGE_PLATFORMS."; exit 1; }
           repository="${PUSHED%@*}"
           IFS=, read -ra platforms <<< "${IMAGE_PLATFORMS}"
           : > "${RUNNER_TEMP}/images.txt"

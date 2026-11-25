@@ -30,11 +30,13 @@ readonly SUPPORTED_TOOLS=(terraform)
 #   tool_apply WORK DIR
 #   tool_read_state WORK DIR
 #   tool_take_reading WORK DIR FILE
+#   tool_replan WORK DIR FILE
 #   tool_preview_plan WORK DIR ENVIRONMENT [TOKEN_PAIR]
 #                                 Set PLANNED_WITHOUT_UPSTREAM to true or false.
 readonly TOOL_INTERFACE_FUNCTIONS=(
   tool_install tool_input_variable_names tool_state_check_environment tool_registry_token_variable
-  tool_check_environment_settings tool_deploy_init tool_deploy_plan tool_apply tool_read_state tool_take_reading tool_preview_plan
+  tool_check_environment_settings tool_deploy_init tool_deploy_plan tool_apply tool_read_state tool_take_reading
+  tool_replan tool_preview_plan
 )
 # The constants every adapter defines.
 #   TOOL_DISPLAY_NAME      The tool's name as a person writes it.

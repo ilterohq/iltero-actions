@@ -30,7 +30,8 @@ setup() {
   # A stand-in for Terraform. It records each call, and its environment at
   # init and plan. A file under MARKS named fail-<command>-<unit> makes that
   # command fail for that unit; fail-refresh-<unit> fails only its readings,
-  # and fail-second-<unit> only its second reading; fail-state-<unit> fails
+  # and fail-second-<unit> only its second reading; fail-replan-<unit> fails
+  # only its plan made again before pre-deploy; fail-state-<unit> fails
   # only the read of the state after the apply; apply-error-<unit> makes the
   # apply log an error, then fail. A plan writes its -out file, unless
   # no-saved-plan-<unit> exists.
@@ -47,6 +48,7 @@ if [[ "\$1" == apply && -e "${MARKS}/apply-error-\${unit}" ]]; then
 fi
 [[ "\$*" != *-refresh-only* || ! -e "${MARKS}/fail-refresh-\${unit}" ]] || exit 1
 [[ "\$*" != *reading-second.tfplan* || ! -e "${MARKS}/fail-second-\${unit}" ]] || exit 1
+[[ "\$*" != *replan.tfplan* || ! -e "${MARKS}/fail-replan-\${unit}" ]] || exit 1
 case "\$1" in
   init | plan)
     env | sort > "${BATS_TEST_TMPDIR}/terraform-env-\$1-\${unit}"; echo "terraform says \$1"
@@ -58,18 +60,27 @@ esac
 STUB
 
   # A stand-in for the CLI. A file under MARKS named exit-<stage>-<unit> holds
-  # the exit code of that stage for that unit; exit-state-<unit> holds the
-  # state check's, and exit-report-<unit> the report's. no-report-<unit> makes
+  # the exit code of that stage for that unit, and exit-scanners the scanner
+  # install's; exit-state-<unit> holds the state check's, and
+  # exit-report-<unit> the report's. no-report-<unit> makes
   # the report exit 5 without writing, and no-markdown-<unit> makes it write
   # only the HTML page. Each stage writes the unit's record, which expects
   # post-verify when expects-post-verify-<unit> exists and is unreadable when
-  # bad-record-<unit> does, and absent when no-record-<unit> does; the report writes
-  # record-report.<format> into --out. With change-plan-<unit>, the plan stage
+  # bad-record-<unit> does, and absent when no-record-<unit> does. The record
+  # leaves pre-deploy out when no-pre-deploy-<unit> exists. in-scope-exit-<stage>
+  # and in-scope-exit-<stage>-<unit> hold the exit code of `record in-scope`.
+  # The report writes record-report.<format> into --out. With change-plan-<unit>, the plan stage
   # changes the saved plan it was given; with change-json-<unit>, it changes
   # the plan's JSON; with remove-plan-<unit>, it removes the saved plan.
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
 echo "iltero $*" >> "${STUB_LOG}"
+if [[ "$1 $2" == "scanners install" ]]; then
+  echo "scanners install ILTERO_CACHE_DIR=${ILTERO_CACHE_DIR}" >> "${STUB_LOG}"
+  echo "Trivy <installed>"
+  [[ ! -e "${MARKS}/exit-scanners" ]] || exit "$(cat "${MARKS}/exit-scanners")"
+  exit 0
+fi
 if [[ "$1 $2" == "state check" ]]; then
   unit="$(basename "${3#--working-directory=}")"
   echo "state check data ${TF_DATA_DIR}" >> "${STUB_LOG}"
@@ -91,7 +102,9 @@ if [[ "$1 $2" == "record report" ]]; then
 fi
 if [[ "$1 $2" == "record in-scope" ]]; then
   echo "::error::injected by the record"
-  [[ ! -e "${MARKS}/in-scope-exit" ]] || exit "$(cat "${MARKS}/in-scope-exit")"
+  for mark in "${MARKS}/in-scope-exit-${4#--stage=}" "${MARKS}/in-scope-exit-${4#--stage=}-${3##*/}"; do
+    [[ ! -e "${mark}" ]] || exit "$(cat "${mark}")"
+  done
   [[ -f "$3/car.json" ]] || exit 5
   python3 -I -c 'import json, sys
 try:
@@ -160,6 +173,10 @@ STUB
   # The stub's variables expand when it runs, not here.
   # shellcheck disable=SC2016
   stub sleep 'echo "sleep $*" >> "${STUB_LOG}"'
+  # A clock that moves on one second at each call, so the deploy never needs
+  # to wait before it plans a unit again.
+  # shellcheck disable=SC2016
+  stub date 'count="$(cat "${MARKS}/clock" 2>/dev/null || echo 1000)"; echo $((count + 1)) > "${MARKS}/clock"; echo "${count}"'
   export MARKS
 
   STACK="${BATS_TEST_TMPDIR}/stack"
@@ -264,12 +281,13 @@ deploy() {
   [[ "${output}" == *"Usage: iac/deploy.sh run ENVIRONMENT"* ]]
 }
 
-@test "a local deploy whose record requires the pre-deploy stage fails before the apply, and says how to leave it out" {
+@test "a local deploy whose record requires the pre-deploy stage fails before the apply" {
   LINKED=false deploy
   [ "${status}" -eq 1 ]
   grep -q "| network | passed | required, needs the server | not run | not run |" "${GITHUB_STEP_SUMMARY}"
   grep -q "<summary>network: is the pre-deploy stage required?</summary>" "${GITHUB_STEP_SUMMARY}"
-  [[ "${output}" == *"::error::The record of unit 'network' requires the pre-deploy stage, which only a project linked to the server can run. List pre_deploy under stages.out_of_scope in .iltero/config.yml."* ]]
+  [[ "${output}" == *"::error::The record of unit 'network' requires the pre-deploy stage, which only a project linked to the server can run."* ]]
+  [[ "${output}" != *"out_of_scope"* ]]
   ! grep -q -- "iac check --stage=pre_deploy" "${STUB_LOG}" || false
   ! grep -q "terraform network apply" "${STUB_LOG}" || false
 }
@@ -329,10 +347,10 @@ deploy() {
   done
 }
 
-@test "a unit list with a bad name, an escaping directory or a missing directory stops before anything runs" {
+@test "a unit list with a name that cannot name a directory, an escaping directory or a missing directory stops before anything runs" {
   local listing
   for listing in \
-    '[{"name": "Network", "working_directory": "units/network"}]' \
+    '[{"name": "net/work", "working_directory": "units/network"}]' \
     '[{"name": "network", "working_directory": "../elsewhere"}]' \
     '[{"name": "network", "working_directory": "/etc"}]' \
     '[{"name": "network", "working_directory": "units/missing"}]' \
@@ -354,12 +372,12 @@ deploy() {
 
 # --- one unit, in order --------------------------------------------------------
 
-@test "each unit is initialized, state checked, planned, checked, pre-deploy checked, applied and post-deploy checked, in that order" {
+@test "each unit is initialized, state checked, planned, checked, planned again, pre-deploy checked, applied and post-deploy checked, in that order" {
   echo '[{"name": "network", "working_directory": "units/network"}]' > "${UNITS_JSON}"
   deploy
   [ "${status}" -eq 0 ]
   run bash -c "grep -oE '^(terraform network [a-z]+|iltero iac check --stage=[a-z_]+|iltero state check)' '${STUB_LOG}' | tr '\n' ','"
-  [ "${output}" = "terraform network init,iltero state check,terraform network plan,terraform network show,iltero iac check --stage=plan,iltero iac check --stage=pre_deploy,terraform network apply,terraform network show,iltero iac check --stage=post_deploy," ]
+  [ "${output}" = "terraform network init,iltero state check,terraform network plan,terraform network show,iltero iac check --stage=plan,terraform network plan,terraform network show,iltero iac check --stage=pre_deploy,terraform network apply,terraform network show,iltero iac check --stage=post_deploy," ]
 }
 
 @test "every stage in a linked project names the environment, joins the run and uploads" {
@@ -367,7 +385,7 @@ deploy() {
   local work="${RUNNER_TEMP}/iltero-deploy/production/${STACK_FOLDER}/units/network"
   local run_args="--unit=network --out=${RUNNER_TEMP}/iltero-deploy/production/${STACK_FOLDER}/out --environment=production --upload"
   grep -qx "iltero iac check --stage=plan --plan=${work}/plan.json --saved-plan=${work}/tfplan ${run_args}" "${STUB_LOG}"
-  grep -qx "iltero iac check --stage=pre_deploy ${run_args}" "${STUB_LOG}"
+  grep -qx "iltero iac check --stage=pre_deploy --plan=${work}/plan.json --saved-plan=${work}/tfplan --replan=${work}/replan.json ${run_args}" "${STUB_LOG}"
   grep -qx "iltero iac check --stage=post_deploy --plan=${work}/plan.json --saved-plan=${work}/tfplan --apply-log=${work}/apply.ndjson --state=${work}/state.json ${run_args}" "${STUB_LOG}"
 }
 
@@ -606,12 +624,98 @@ deploy() {
   grep -q "| network | failed | not run | not run | not run |" "${GITHUB_STEP_SUMMARY}"
 }
 
+@test "before the pre-deploy check, each unit is planned again into its own file, with the saved plan's input variables, and only the saved plan is applied" {
+  echo '[{"name": "network", "working_directory": "units/network"}]' > "${UNITS_JSON}"
+  deploy
+  [ "${status}" -eq 0 ]
+  local work="${RUNNER_TEMP}/iltero-deploy/production/${STACK_FOLDER}/units/network"
+  local plans
+  plans="$(grep "^terraform network plan " "${STUB_LOG}")"
+  [ "$(echo "${plans}" | wc -l)" -eq 2 ]
+  [ "$(echo "${plans}" | head -1 | sed "s| -out=[^ ]*||")" == "$(echo "${plans}" | tail -1 | sed "s| -out=[^ ]*||")" ]
+  echo "${plans}" | tail -1 | grep -q -- " -out=${work}/replan.tfplan"
+  grep -qx "terraform network show -json ${work}/replan.tfplan" "${STUB_LOG}"
+  [ -f "${work}/replan.json" ]
+  grep -qx "terraform network apply -input=false -json -lock-timeout=5m ${work}/tfplan" "${STUB_LOG}"
+}
+
+@test "when the first plan finished in the current second, the deploy waits a second before it plans again" {
+  echo '[{"name": "network", "working_directory": "units/network"}]' > "${UNITS_JSON}"
+  stub date 'echo 1000'
+  deploy
+  [ "${status}" -eq 0 ]
+  run bash -c "grep -oE '^(terraform network (plan|show)|sleep [0-9]+|iltero iac check --stage=(plan|pre_deploy))' '${STUB_LOG}' | tr '\n' ','"
+  [ "${output}" = "terraform network plan,terraform network show,iltero iac check --stage=plan,sleep 1,terraform network plan,terraform network show,iltero iac check --stage=pre_deploy,terraform network show," ]
+}
+
+@test "when the clock has moved on since the first plan finished, the deploy plans again without waiting" {
+  echo '[{"name": "network", "working_directory": "units/network"}]' > "${UNITS_JSON}"
+  deploy
+  [ "${status}" -eq 0 ]
+  ! grep -q "^sleep" "${STUB_LOG}" || false
+  [ "$(grep -c "^terraform network plan " "${STUB_LOG}")" -eq 2 ]
+}
+
+@test "a unit that cannot be planned again stops before the pre-deploy check and the apply" {
+  touch "${MARKS}/fail-replan-network"
+  deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"Terraform could not plan unit 'network' again before the pre-deploy check."* ]]
+  ! grep -q -- "iac check --stage=pre_deploy" "${STUB_LOG}" || false
+  ! grep -q "terraform network apply" "${STUB_LOG}" || false
+  ! grep -q "terraform compute" "${STUB_LOG}" || false
+  grep -q "| network | passed | Terraform failed | not run | not run |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "a unit whose record leaves pre-deploy out, or a local deploy, does not plan again" {
+  touch "${MARKS}/no-pre-deploy-network" "${MARKS}/no-pre-deploy-compute"
+  deploy
+  [ "${status}" -eq 0 ]
+  ! grep -q "replan" "${STUB_LOG}" || false
+  : > "${STUB_LOG}"
+  LINKED=false deploy
+  [ "${status}" -eq 0 ]
+  ! grep -q "replan" "${STUB_LOG}" || false
+}
+
 @test "a failed pre-deploy check stops the deploy before the apply" {
   echo 3 > "${MARKS}/exit-pre_deploy-network"
   deploy
   [ "${status}" -eq 3 ]
   ! grep -q "terraform network apply" "${STUB_LOG}" || false
   grep -q "| network | passed | failed | not run | not run |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "in a linked project, a unit whose record leaves pre-deploy out runs no pre-deploy check and is applied" {
+  touch "${MARKS}/no-pre-deploy-network"
+  deploy
+  [ "${status}" -eq 0 ]
+  grep -q "^iltero record in-scope [^ ]*/network --stage=pre_deploy$" "${STUB_LOG}"
+  ! grep -q -- "iac check --stage=pre_deploy .*--unit=network " "${STUB_LOG}" || false
+  grep -q -- "iac check --stage=pre_deploy .*--unit=compute " "${STUB_LOG}"
+  grep -q "terraform network apply" "${STUB_LOG}"
+  grep -q "| network | passed | not required | applied | passed |" "${GITHUB_STEP_SUMMARY}"
+  grep -q "| compute | passed | passed | applied | passed |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "in a linked project, the unit stops before the apply when the CLI cannot say whether its record requires pre-deploy" {
+  echo 9 > "${MARKS}/in-scope-exit-pre_deploy-network"
+  deploy
+  [ "${status}" -eq 9 ]
+  ! grep -q "terraform compute" "${STUB_LOG}" || false
+  ! grep -q -- "iac check --stage=pre_deploy" "${STUB_LOG}" || false
+  ! grep -q "terraform network apply" "${STUB_LOG}" || false
+  grep -q "| network | passed | record does not verify | not run | not run |" "${GITHUB_STEP_SUMMARY}"
+}
+
+@test "in a linked project, any answer other than in or out of scope stops the unit before the apply with the CLI's code" {
+  echo 5 > "${MARKS}/in-scope-exit-pre_deploy-network"
+  deploy
+  [ "${status}" -eq 5 ]
+  ! grep -q "terraform compute" "${STUB_LOG}" || false
+  ! grep -q -- "iac check --stage=pre_deploy" "${STUB_LOG}" || false
+  ! grep -q "terraform network apply" "${STUB_LOG}" || false
+  grep -q "| network | passed | record unreadable | not run | not run |" "${GITHUB_STEP_SUMMARY}"
 }
 
 @test "a failed apply is still checked after, and fails with the apply's code" {
@@ -838,7 +942,8 @@ deploy() {
 }
 
 @test "a record that does not verify fails the step with the CLI's code" {
-  touch "${MARKS}/bad-record-compute" "${MARKS}/expects-post-verify-network"
+  echo 9 > "${MARKS}/in-scope-exit-post_verify-compute"
+  touch "${MARKS}/expects-post-verify-network"
   deploy
   [ "${status}" -eq 9 ]
   [[ "${output}" == *"The CLI could not say whether the record of unit 'compute' requires the post-verify stage. See the CLI's output in the log."* ]]
@@ -847,7 +952,7 @@ deploy() {
 }
 
 @test "any other answer than in or out of scope stops the step with the CLI's code" {
-  echo 2 > "${MARKS}/in-scope-exit"
+  echo 2 > "${MARKS}/in-scope-exit-post_verify"
   deploy
   [ "${status}" -eq 2 ]
   grep -q "| network | passed | passed | applied | passed | record unreadable |" "${GITHUB_STEP_SUMMARY}"
@@ -1115,10 +1220,38 @@ deploy() {
   ! grep -q "^terraform " "${STUB_LOG}" || false
 }
 
-@test "a unit list that breaks the unit-name rule stops the deploy before any output is written" {
-  echo '[{"name": "Network", "working_directory": "units/network"}]' > "${UNITS_JSON}"
+@test "a unit list with a unit name that cannot name a directory stops the deploy before any output is written" {
+  echo '[{"name": "..", "working_directory": "units/network"}]' > "${UNITS_JSON}"
   deploy
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."* ]]
+  [[ "${output}" == *"The unit name '..' cannot name a directory or a file. Use only letters, digits, '.', '_' and '-', and not '.' or '..' alone."* ]]
   ! grep -qE "^(records-directory|artifact-name|readings-directory|report-directory)=" "${GITHUB_OUTPUT}" || false
+}
+
+# --- scanners ----------------------------------------------------------------
+
+@test "in a linked project, the deploy installs the scanners into the tools folder once, before any Terraform call" {
+  export ILTERO_CACHE_DIR="${BATS_TEST_TMPDIR}/elsewhere"
+  deploy
+  [ "${status}" -eq 0 ]
+  [ "$(grep -c '^iltero scanners install$' "${STUB_LOG}")" -eq 1 ]
+  [ "$(grep -n '^iltero scanners install$' "${STUB_LOG}" | cut -d: -f1)" -lt "$(grep -n '^terraform ' "${STUB_LOG}" | head -1 | cut -d: -f1)" ]
+  # The action names the folder itself, whatever the job set.
+  grep -qx "scanners install ILTERO_CACHE_DIR=${TOOLS}/scanners" "${STUB_LOG}"
+}
+
+@test "the deploy installs no scanners in a project not linked to the server" {
+  touch "${MARKS}/no-pre-deploy-network" "${MARKS}/no-pre-deploy-compute"
+  LINKED=false deploy
+  [ "${status}" -eq 0 ]
+  ! grep -q "scanners install" "${STUB_LOG}" || false
+}
+
+@test "a failed scanner install stops the deploy with the CLI's exit code, before Terraform runs and before any output" {
+  echo 9 > "${MARKS}/exit-scanners"
+  deploy
+  [ "${status}" -eq 9 ]
+  [[ "${output}" == *"::error::A scanner or the scanner folder failed the Iltero CLI's integrity check against the pinned digests (fingerprints)."* ]]
+  ! grep -q "^terraform " "${STUB_LOG}" || false
+  [ ! -s "${GITHUB_OUTPUT}" ]
 }

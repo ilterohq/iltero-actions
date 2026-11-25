@@ -5,10 +5,10 @@
 # from the pull request, posts the result as a comment.
 #
 # A repository owner copies this workflow into .github/workflows/, sets the
-# actions commit, and sets the branches .iltero/config.yml maps to
+# actions release, and sets the branches .iltero/config.yml maps to
 # environments. Each 0000000000000000000000000000000000000000 is a placeholder
-# for the 40-character ID of the iltero-actions commit, and each # v0.3.0
-# comment a placeholder for the version of its release.
+# for the 40-character commit ID of the iltero-actions release, and each
+# "# v0.3.0" comment a placeholder for its version.
 
 name: Iltero preview
 

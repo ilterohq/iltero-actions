@@ -104,10 +104,10 @@ show as "Unverified".
 
 ### Pinning and immutable tags
 
-- There are no floating major tags. Pin each action to a commit SHA:
+- There are no floating major tags. Pin each action to the commit SHA of a release, with its version as a comment:
 
   ```yaml
-  uses: ilterohq/iltero-actions/<action>@<commit-sha>  # v0.3.0
+  uses: ilterohq/iltero-actions/<action>@<release-commit-sha>  # v0.3.0
   ```
 
 - Published tags are immutable. A ruleset blocks moving or deleting a tag, so a version always points at the same

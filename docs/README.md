@@ -3,10 +3,9 @@
 ## Use the actions
 
 1. Copy a workflow from [`examples/`](../examples/README.md) into `.github/workflows/`.
-2. Replace every `0000000000000000000000000000000000000000` with the full commit SHA: the 40-character ID that Git
-   gives each commit. Use the SHA of the iltero-actions commit you use. Pin every action to the same commit. The
-   `# v0.3.0` comment after each pin is a placeholder too: replace it with the version of the release whose commit you
-   use.
+2. Replace every `0000000000000000000000000000000000000000` with the commit SHA of the iltero-actions release you use.
+   Open the commit linked from the release page and copy its full 40-character ID. Replace each `# v0.3.0` comment
+   with that release's version. Use the same release for every action.
 3. Replace the example values: branches, environments, deploy role and region.
 
 Run `setup` first in every job that uses an Iltero action, except `comment`. `setup` installs the Iltero CLI and its
@@ -42,20 +41,46 @@ the artifacts the action uploads: a whole number of 1 or more. When the input is
 retention setting applies. Any other value stops the step. `preview` keeps its records artifact for 30 days, and its
 comment artifact for 1 day.
 
-## Pre-deploy in a project not linked to Iltero Platform
+## Pre-deploy stage
 
-A project is not linked to Iltero Platform when `.iltero/config.yml` has no `platform` section. In such a project,
-list `pre_deploy` under `stages.out_of_scope` in `.iltero/config.yml`. `deploy` and `record-iac` do not run the
-pre-deploy stage there, because it checks facts that only Iltero Platform holds.
+The pre-deploy stage comes before the apply. Its check reads facts that only Iltero Platform holds, so only a project
+linked to Iltero Platform runs it. A project is not linked when `.iltero/config.yml` has no `platform` section.
 
-Both ask the CLI instead, with `iltero record in-scope`, whether the unit's record from the plan stage requires the
-pre-deploy stage. Before it answers, the CLI verifies the record: it checks that the record and the files it cites
-are unchanged. When the records directory holds no record of the unit, or the CLI cannot answer, the step stops. When
-the record requires the pre-deploy stage, the step fails with "The record of unit '...' requires the pre-deploy stage,
-which only a project linked to the server can run. List pre_deploy under stages.out_of_scope in
-.iltero/config.yml." The job summary reads `required, needs the server`. `deploy` fails before the apply, and
-does not deploy later units. Otherwise the job summary reads `not required`. The job summary's details show the CLI's
+`deploy` always asks the CLI first, with `iltero record in-scope`, whether the unit's record from the plan stage
+requires the stage. `record-iac` asks first only in a project not linked to Iltero Platform. Before it answers, the CLI
+checks that the record is consistent with itself and with the files it cites. The job summary's details show the CLI's
 answer.
+
+- **`deploy` in a linked project.** When the record requires the stage, `deploy` plans the unit again just before the
+  check, against the current state and with the same input variables. It waits one second first when the plan stage's
+  plan finished in the current second. It then runs the pre-deploy check on the saved plan file, the plan it made at the
+  plan stage, and the new plan. `deploy` applies only the saved plan, never the new plan. When Terraform cannot make the
+  new plan, `deploy` stops before that unit's check and apply, and deploys no further unit. The job summary's Pre-deploy
+  cell then reads `Terraform failed`. When the record does not require the stage, `deploy` runs no pre-deploy check, the
+  job summary reads `not required`, and `deploy` goes on to the apply.
+- **`record-iac` in a linked project.** `record-iac` runs the pre-deploy check without asking the CLI first. When the
+  environment's policy leaves the stage out, Iltero Platform says so, and the unit's record agrees, the CLI checks
+  nothing, adds nothing to the record and exits 0. After a check that passes, `record-iac` therefore asks the CLI
+  whether the unit's record requires the stage. When it does not, the job summary reads `not required` instead of
+  `passed`. The `plan`, `saved-plan` and `replan` inputs are optional at this stage. `saved-plan` names the saved plan
+  file the job will apply, and `plan` names the plan rendered from it with `terraform show -json`. The CLI refuses a
+  file or plan other than the one the plan stage checked. `replan` names a new plan that the job makes just before the
+  check, with `terraform plan -out=FILE` and `terraform show -json FILE`. The job never applies it. A job that applies a
+  plan made in an earlier job must give all three. `examples/iac/governed-own-terraform.yml` shows how.
+- **A project not linked to Iltero Platform.** Neither action runs the check. The CLI leaves the stage out of the
+  record's scope there by itself. The job summary reads `not required`, and `deploy` goes on to the apply. `record-iac`
+  stops when its step gives the `plan`, `saved-plan` or `replan` input at this stage.
+
+The new plan shows whether the change Terraform would make has changed since the plan stage. When Iltero Platform says a
+later job applies the plan, or cannot tell which job does, the CLI compares the new plan with the checked plan by the
+resources each one acts on, and records only the result. In a run that plans and applies in one job, the CLI reads the
+new plan and sets it aside. The CLI never keeps or uploads the new plan. It refuses a new plan that is not newer than
+the checked plan, or that was made after the pre-deploy stage started. Terraform dates a plan to the second, so the new
+plan must start at least one second after the checked plan finished.
+
+The step stops when the records directory holds no record of the unit, or when the CLI cannot answer. When the CLI
+cannot answer, the job summary reads `record does not verify` or `record unreadable`. In both cases, `deploy` does not
+apply that unit or any later unit.
 
 ## Unit settings
 
@@ -110,6 +135,16 @@ In a job that runs Terraform itself, give `record-iac` the input `state-unreadab
 reads `Result: failed without the state file.`
 `examples/iac/governed-own-terraform.yml` shows how.
 
+## Re-running a failed governed Terraform run
+
+In a governed run, `deploy` runs `pre_deploy`, the apply and `post_deploy` in one job. A job that runs Terraform
+itself must do the same, because Iltero Platform accepts the `post_deploy` record only from the job that ran
+`pre_deploy`. `pre_deploy` may run in a different job from `plan`.
+
+When a governed run fails, re-run every job of the workflow run. When the plan ran in an earlier job, a re-run of only
+the job that applies joins the same run if that job failed before its `post_deploy` step started. Once its
+`post_deploy` step has started, Iltero Platform refuses a re-run of that job alone.
+
 ## Post-verify readings of a Terraform unit
 
 The post-verify stage checks that a unit's deployed resources still match what the apply left. A difference is called
@@ -130,11 +165,14 @@ only to finish the checks the plan stage left until after the apply. A unit that
 others. The step then fails.
 
 In a job that runs Terraform itself, give `record-iac` the same state file at `post_verify` as at `post_deploy`, with
-the input `state`.
+the input `state`. In a linked project, as at the pre-deploy stage, `record-iac` runs the post-verify check and then
+asks the CLI whether the unit's record requires the stage. When it does not, the CLI has checked nothing, and the
+job summary reads `not required`.
 
-The readings can hold secret values, because Terraform does not mark every secret as sensitive. `deploy` does not
-upload them. Do not keep them: the record holds only a fingerprint of each reading (its SHA-256 digest). The
-`readings-directory` output names their directory, as `<unit>/first.json` and `<unit>/second.json`.
+The readings can hold secret values, because Terraform does not mark every secret as sensitive. `deploy` does not upload
+them. Do not keep them. The record keeps no copy of them. In a governed run it keeps a fingerprint of each; in a project
+not linked to Iltero Platform, it keeps none. The `readings-directory` output names their directory, as
+`<unit>/first.json` and `<unit>/second.json`.
 
 ## Image deployment
 
@@ -169,7 +207,10 @@ assertion that reads either is always undecided at `pre_deploy`. `post_deploy` a
 - **`post_verify`** checks that every pod of the workload runs the deployed image. The job reads the workload, its
   pods, a Deployment's ReplicaSets, and the workload again, in that order, with `kubectl get --raw`. It passes the
   files as `workload-before-pods-listing`, `pods`, `pod-owners` and `workload-after-pods-listing`, with the unique ID
-  (uid) that Kubernetes gives the cluster's `kube-system` namespace as `cluster-id`.
+  (uid) that Kubernetes gives the cluster's `kube-system` namespace as `cluster-id`. In a project linked to Iltero
+  Platform, when the check passes, `record-image` asks the CLI whether the unit's record requires the stage. When it
+  does not, the CLI has checked nothing, and the job summary reads `not required`. When the CLI cannot answer, the job
+  summary reads `record does not verify` or `record unreadable`, and the step fails.
 
 Each stage after `pre_deploy` reads the record from `records-directory`. When a later stage runs in a different job
 from `pre_deploy`, that job downloads the records artifact of the earlier job and passes its directory as
@@ -203,6 +244,10 @@ The readings of the workload can hold secret values, such as a container's envir
   | `kms:GenerateDataKey` | The bucket's Key Management Service (KMS) key, restricted with the `kms:ViaService` condition to S3 in the bucket's region |
 
   The role, the bucket and its key must be in the same AWS account. A store to a bucket in another account fails.
+- **Network access to `github.com`, `pypi.org` and `files.pythonhosted.org`** in a `deploy` job, or a `record-iac`
+  job at the `plan` stage, in a project linked to Iltero Platform. The step downloads Trivy and Checkov, the scanners
+  the Iltero CLI pins, in every job. Behind a proxy, set `HTTPS_PROXY`. When the proxy presents its own certificate,
+  also set `SSL_CERT_FILE` or `SSL_CERT_DIR`.
 
 `preview` needs only `contents: read`. With `registry-host` set, it also needs `id-token: write`, because
 `terraform init` downloads private modules with the job's GitHub identity token. The project must then be linked to

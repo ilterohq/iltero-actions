@@ -364,10 +364,10 @@ STUB
   [ -n "$(ls "${network_reports}")" ]
 }
 
-@test "a unit name that breaks the unit-name rule is refused before anything is written" {
+@test "a unit name that cannot name a directory is refused before anything is written" {
   UNIT="../network" run "${VERIFY}" run "${OUT}"
   [ "${status}" -eq 1 ]
-  [[ "${output}" == *"The unit name '../network' is not valid. A unit name is 1 to 64 lowercase letters, digits, '_' or '-', and does not start with '-'."* ]]
+  [[ "${output}" == *"The unit name '../network' cannot name a directory or a file. Use only letters, digits, '.', '_' and '-', and not '.' or '..' alone."* ]]
   ! grep -q "^bundles-path=" "${GITHUB_OUTPUT}" || false
   ! grep -q "units list" "${STUB_LOG}" || false
 }

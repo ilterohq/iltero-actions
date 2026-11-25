@@ -249,8 +249,8 @@ tool_deploy_init() {
 }
 
 # Writes the variables files arguments of the unit in DIR for ENVIRONMENT to
-# WORK/variable-args, one per line, so the deploy's readings use the same
-# variables.
+# WORK/variable-args, one per line, so the deploy's second plan and readings
+# use the same variables.
 terraform_write_variable_args() {
   local work="$1"
   local dir="$2"
@@ -274,15 +274,7 @@ tool_deploy_plan() {
   local dir="$2"
   local environment="$3"
   terraform_write_variable_args "${work}" "${dir}" "${environment}" || return 1
-  local variable_args=()
-  mapfile -t variable_args < "${work}/variable-args" || return 1
-  (
-    cd "${dir}" || exit 1
-    terraform_run "${work}" -- plan -input=false -no-color -lock-timeout="${TERRAFORM_LOCK_TIMEOUT_MINUTES}m" \
-      -out="${work}/${TOOL_SAVED_PLAN_FILE}" \
-      ${variable_args[@]+"${variable_args[@]}"} \
-      && terraform_run "${work}" -- show -json "${work}/${TOOL_SAVED_PLAN_FILE}" > "${work}/plan.json"
-  )
+  terraform_plan_to_json "${work}" "${dir}" "${work}/${TOOL_SAVED_PLAN_FILE}" "${work}/plan.json"
 }
 
 # Applies the saved plan of the unit in DIR, and writes Terraform's JSON log
@@ -339,6 +331,28 @@ tool_read_state() {
   )
 }
 
+# Plans the unit in DIR into FILE, as JSON, with its saved plan's input
+# variables and the Terraform options OPTIONS: saved as SAVED in the unit's
+# work folder WORK, then shown. A plan Terraform did not finish is not kept.
+terraform_plan_to_json() {
+  local work="$1"
+  local dir="$2"
+  local saved="$3"
+  local file="$4"
+  shift 4
+  local status=0
+  local variable_args=()
+  mapfile -t variable_args < "${work}/variable-args" || return 1
+  (
+    cd "${dir}" || exit 1
+    terraform_run "${work}" -- plan -input=false -no-color "$@" \
+      -lock-timeout="${TERRAFORM_LOCK_TIMEOUT_MINUTES}m" -out="${saved}" ${variable_args[@]+"${variable_args[@]}"} \
+      && terraform_run "${work}" -- show -json "${saved}" > "${file}"
+  ) || status=$?
+  [[ "${status}" -eq 0 ]] || rm -f "${file}"
+  return "${status}"
+}
+
 # Takes a reading of the deployed resources of the unit in DIR into FILE, as
 # JSON: a refresh-only plan, saved in the unit's work folder WORK and never
 # applied. Applying it would write what it read into the state, so drift would
@@ -347,16 +361,16 @@ tool_take_reading() {
   local work="$1"
   local dir="$2"
   local file="$3"
-  local saved status=0
-  saved="${work}/reading-$(basename "${file%.json}").tfplan"
-  local variable_args=()
-  mapfile -t variable_args < "${work}/variable-args" || return 1
-  (
-    cd "${dir}" || exit 1
-    terraform_run "${work}" -- plan -input=false -no-color -refresh-only \
-      -lock-timeout="${TERRAFORM_LOCK_TIMEOUT_MINUTES}m" -out="${saved}" ${variable_args[@]+"${variable_args[@]}"} \
-      && terraform_run "${work}" -- show -json "${saved}" > "${file}"
-  ) || status=$?
-  [[ "${status}" -eq 0 ]] || rm -f "${file}"
-  return "${status}"
+  terraform_plan_to_json "${work}" "${dir}" "${work}/reading-$(basename "${file%.json}").tfplan" "${file}" -refresh-only
+}
+
+# Plans the change of the unit in DIR again, against the current state, with
+# the input variables of its saved plan, and writes the new plan to FILE, as
+# JSON. The new plan is saved in the unit's work folder WORK apart from the
+# saved plan, and is never applied: only the saved plan is.
+tool_replan() {
+  local work="$1"
+  local dir="$2"
+  local file="$3"
+  terraform_plan_to_json "${work}" "${dir}" "${work}/replan.tfplan" "${file}"
 }

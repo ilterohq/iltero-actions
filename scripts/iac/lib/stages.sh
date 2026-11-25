@@ -10,30 +10,6 @@ check_stage() {
   check_change_stage iac "$@"
 }
 
-# The exit codes of `iltero record in-scope`: the stage is in the record's
-# scope, or out of it. Every other code is an error.
-readonly IN_SCOPE_STATUS=0
-readonly OUT_OF_SCOPE_STATUS=3
-# Prints "true" when STAGE is in the scope of the record of UNIT in OUT, and
-# "false" when it is not, as the CLI answers. Keeps the CLI's answer in
-# WORK/in-scope-STAGE.txt, and shows it on stderr with workflow commands
-# paused, so only "true" or "false" is printed on stdout. Exits with the CLI's
-# own code on any other answer.
-record_requires_stage() {
-  local work="$1"
-  local out="$2"
-  local unit="$3"
-  local stage="$4"
-  local status=0
-  run_cli_logged "${work}/in-scope-${stage}.txt" record in-scope "${out}/units/${unit}" --stage="${stage}" >&2 \
-    || status=$?
-  case "${status}" in
-    "${IN_SCOPE_STATUS}") echo true ;;
-    "${OUT_OF_SCOPE_STATUS}") echo false ;;
-    *) exit_with_error "${status}" "The CLI could not say whether the record of unit '${unit}' requires the ${stage//_/-} stage. See the CLI's output in the log." ;;
-  esac
-}
-
 # Prints the summary words for the post-deploy stage: "passed" or "failed",
 # as check_result prints for the CLI's exit code STATUS, followed by "without
 # the state file" when SHOW_STATUS, the code of the tool's reading of the
@@ -47,26 +23,16 @@ post_deploy_result() {
   echo "${result}"
 }
 
-# Prints the summary cell for a record whose scope the CLI could not give,
-# from the CLI's exit code STATUS.
-record_scope_failure() {
-  local status="$1"
-  if [[ "${status}" -eq "${RECORD_DOES_NOT_VERIFY_STATUS}" ]]; then
-    echo "record does not verify"
-  else
-    echo "record unreadable"
-  fi
-}
-
 # The summary cell for a unit whose record requires the pre-deploy stage in a
 # project not linked to the server, where the stage cannot run.
 readonly PRE_DEPLOY_CANNOT_RUN_RESULT="required, needs the server"
 
 # Prints the summary cell for the pre-deploy stage of UNIT in a project not
-# linked to the server, which cannot run it. Keeps the CLI's answer in WORK.
+# linked to the server. Such a project cannot run the stage. Keeps the CLI's
+# answer in WORK.
 #   - The record in OUT does not require the stage: prints "not required".
 #   - The record requires it: prints PRE_DEPLOY_CANNOT_RUN_RESULT and an
-#     error that says how to leave the stage out, and returns 1.
+#     error, and returns 1.
 #   - OUT holds no record of the unit: prints nothing and returns 1.
 #   - The CLI could not give the record's scope: prints nothing and returns
 #     the CLI's own code.
@@ -83,7 +49,7 @@ local_pre_deploy_result() {
   required="$(record_requires_stage "${work}" "${out}" "${unit}" pre_deploy)" || status=$?
   [[ "${status}" -eq 0 ]] || return "${status}"
   if [[ "${required}" == true ]]; then
-    echo "::error::The record of unit '${unit}' requires the pre-deploy stage, which only a project linked to the server can run. List pre_deploy under stages.out_of_scope in .iltero/config.yml." >&2
+    echo "::error::The record of unit '${unit}' requires the pre-deploy stage, which only a project linked to the server can run." >&2
     echo "${PRE_DEPLOY_CANNOT_RUN_RESULT}"
     return 1
   fi

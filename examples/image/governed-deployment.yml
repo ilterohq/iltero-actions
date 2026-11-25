@@ -36,8 +36,9 @@
 # Each stage sends its record, and each stage after pre_deploy joins the run
 # and continues the record pre_deploy wrote. Each record-image step uploads
 # the records directory, and replaces the same artifact. The close job closes
-# the run when the deploy job succeeded. A run whose deploy failed or was
-# cancelled stays open, so a re-run of the failed job joins it.
+# the run when the deploy job succeeded. When the deploy job stopped before
+# its post_deploy step started, a re-run of it joins the earlier run.
+# Otherwise the re-run opens a new run, and the earlier run ends.
 #
 # Each record-image step sets store-records, so the CLI also keeps the stage's
 # record and every file it cites in the run's artifact store: the Amazon
@@ -60,9 +61,9 @@
 # cluster, replace them with the steps that give kubectl its credentials.
 #
 # Values the owner replaces:
-#   the actions commit (each 0000000000000000000000000000000000000000 is a
-#   placeholder for the 40-character ID of the iltero-actions commit you use,
-#   and each # v0.3.0 comment a placeholder for the version of its release),
+#   the actions release (each 0000000000000000000000000000000000000000 is a
+#   placeholder for the 40-character commit ID of the iltero-actions release
+#   you use, and each # v0.3.0 comment a placeholder for its version),
 #   the application key, the GitHub deployment environment, the deploy role's
 #   Amazon Resource Name (ARN), region and cluster name, the workload's
 #   namespace, name, container and label selector, and ILTERO_API_URL, which
