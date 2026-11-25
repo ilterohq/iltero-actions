@@ -232,3 +232,11 @@ TERRAFORM_CHECKSUMS="${REPO_ROOT}/scripts/iac/tools/terraform/checksums.sha256"
   grep -qx '              exit 1' <<< "${check}"
   grep -q '|| { echo "::error::Could not reach ${CLI_REPOSITORY}."; exit 1; }' <<< "${check}"
 }
+
+@test "each action that takes an operator trust file or a run statement passes it to its script" {
+  local action
+  for action in deploy record-iac record-image verify; do
+    grep -qxF '        OPERATOR_TRUST_FILE: ${{ inputs.operator-trust-file }}' "${REPO_ROOT}/${action}/action.yml"
+  done
+  grep -qxF '        RUN_STATEMENT: ${{ inputs.run-statement }}' "${REPO_ROOT}/verify/action.yml"
+}

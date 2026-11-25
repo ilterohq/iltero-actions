@@ -5,7 +5,7 @@
 # changes and container images. Source this file after common.sh.
 
 # The exit code of `iltero record in-scope` and `iltero record verify` for a
-# record that does not verify: the record, or a file it cites, changed.
+# record that does not verify.
 readonly RECORD_DOES_NOT_VERIFY_STATUS=9
 
 # Runs the CLI with ARGS, using the evaluator that `setup` installed and the
@@ -93,6 +93,36 @@ require_named_file() {
   local input="$1"
   local path_value="$2"
   [[ -f "${path_value}" ]] || die "The ${input} input names no file: '${path_value}'."
+}
+
+# Prints the absolute path of the file that the input INPUT names as
+# PATH_VALUE, relative to the step's directory. Stops unless it is one line,
+# names a file, and the file's folder can be reached.
+absolute_file_path() {
+  local input="$1"
+  local path_value="$2"
+  require_one_line "${input}" "${path_value}"
+  require_named_file "${input}" "${path_value}"
+  # A relative path starts with ./, so cd never reads its first folder as an
+  # option or looks it up in CDPATH.
+  local path="${path_value}"
+  [[ "${path}" == /* ]] || path="./${path}"
+  local dir
+  dir="$(cd -P -- "$(dirname -- "${path}")" > /dev/null && pwd -P)" || die "The ${input} input names a file the action cannot reach: '${path_value}'."
+  echo "${dir}/$(basename -- "${path}")"
+}
+
+# Gives the CLI the operator trust file that the operator-trust-file input
+# names in OPERATOR_TRUST_FILE: the file that lists the signing keys of a
+# self-hosted Iltero server. The CLI reads it only when it checks something
+# that server signed. The input is the only source of the setting, so the
+# action clears one the job set some other way. Stops unless the input is
+# empty or names a file.
+set_operator_trust_file() {
+  unset ILTERO_OPERATOR_TRUST_FILE
+  [[ -n "${OPERATOR_TRUST_FILE:-}" ]] || return 0
+  ILTERO_OPERATOR_TRUST_FILE="$(absolute_file_path operator-trust-file "${OPERATOR_TRUST_FILE}")" || exit 1
+  export ILTERO_OPERATOR_TRUST_FILE
 }
 
 # The CLI options for the scan-reports input, which add_scan_report_options

@@ -365,6 +365,7 @@ cmd_run() {
   local environment="$1"
   local linked report
   require_environment_name "${environment}"
+  set_operator_trust_file
   report="$(report_enabled)"
   linked="$(project_linked)"
   require_project_permissions "${linked}"

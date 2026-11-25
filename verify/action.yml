@@ -49,6 +49,28 @@ inputs:
     required: false
     default: ""
 
+  operator-trust-file:
+    description: >-
+      The path of an operator trust file, which lists the signing keys of a self-hosted Iltero Platform. A relative
+      path is relative to project-directory. The action gives the file to the CLI, which reads it only when it
+      checks something that server signed, such as a run statement or the assertion bundle a record kept. When the
+      CLI refuses the file, the step fails. The step stops before it runs the CLI when the path names no file or
+      holds a control character. When the input is empty, the action gives the CLI no operator trust file, even
+      one the job set some other way. Leave it empty for the hosted Iltero Platform.
+    required: false
+    default: ""
+
+  run-statement:
+    description: >-
+      The path of a run statement: the document the server signs when a tracked run ends, which lists the records it
+      accepted and refused. A relative path is relative to project-directory. The action passes it to the CLI's check
+      and report of each unit's record. The record does not verify, and the step fails, when the statement lists it as
+      refused or does not match it, for example a statement of another run. A file that is not a run statement also
+      fails the step. The step stops before it runs the CLI when the path names no file or holds a
+      control character. When the input is empty, the action passes no run statement.
+    required: false
+    default: ""
+
 outputs:
   artifact-name:
     description: The name of the artifact that holds the record bundles.
@@ -77,6 +99,8 @@ runs:
         UNIT: ${{ inputs.unit }}
         WRITE_REPORT: ${{ inputs.write-report }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        OPERATOR_TRUST_FILE: ${{ inputs.operator-trust-file }}
+        RUN_STATEMENT: ${{ inputs.run-statement }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/verify.sh" run "${RECORDS_DIRECTORY}"'
 
     - name: Upload the record bundles

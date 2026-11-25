@@ -198,6 +198,7 @@ cmd_run() {
   STAGE="$1"
   check_stage_input "${STAGE}"
   require_environment_name "${ENVIRONMENT:-}"
+  set_operator_trust_file
   require_true_or_false state-unreadable "${STATE_UNREADABLE:-}"
   [[ "${STATE_UNREADABLE}" == false || "${STAGE}" == post_deploy ]] \
     || die "The state-unreadable input applies only to the post_deploy stage."

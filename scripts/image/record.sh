@@ -135,6 +135,7 @@ cmd_run() {
   STAGE="$1"
   check_stage_input "${STAGE}"
   require_stage_inputs
+  set_operator_trust_file
   require_one_line image "${IMAGE:-}"
   require_one_line application "${APPLICATION:-}"
   # A deployment's records directory and artifact are named after its environment.

@@ -1,4 +1,4 @@
-# Reference workflow for a team that builds a container image in a governed
+# Reference workflow for a team that builds a container image in a tracked
 # build run on Iltero Platform. A repository owner copies it into
 # .github/workflows/ and replaces the example values.
 #

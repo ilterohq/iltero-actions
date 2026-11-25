@@ -11,9 +11,9 @@ inputs:
     description: >-
       The stage to record: plan (after terraform plan), pre_deploy (before terraform apply), post_deploy (after
       terraform apply, also when the apply failed) or post_verify (after post_deploy, a check that the deployed
-      resources still match what the apply left). A governed run expects pre_deploy unless the environment's policy
-      leaves it out. A governed run to a production environment always expects it. Record it before post_deploy.
-      Otherwise post_deploy records the apply and then fails. In a governed run, record post_deploy in the job that
+      resources still match what the apply left). A tracked run expects pre_deploy unless the environment's policy
+      leaves it out. A tracked run to a production environment always expects it. Record it before post_deploy.
+      Otherwise post_deploy records the apply and then fails. In a tracked run, record post_deploy in the job that
       recorded pre_deploy. At pre_deploy, record-iac stops when records-directory holds no record of the unit. In a
       project not linked to Iltero Platform, it then asks the CLI whether the unit's record from plan requires the
       stage. When the record does not require it, record-iac checks nothing and reports not required. In a linked
@@ -151,6 +151,17 @@ inputs:
     required: false
     default: ""
 
+  operator-trust-file:
+    description: >-
+      The path of an operator trust file, which lists the signing keys of a self-hosted Iltero Platform. A relative
+      path is relative to project-directory. The action gives the file to the CLI, which reads it only when it
+      checks something that server signed, such as the assertion bundle of a tracked run. When the CLI refuses the
+      file, the step fails. The step stops before it runs the CLI when the path names no file or holds a control
+      character. When the input is empty, the action gives the CLI no operator trust file, even one the job set
+      some other way. Leave it empty for the hosted Iltero Platform.
+    required: false
+    default: ""
+
 outputs:
   records-directory:
     description: The directory that holds the records.
@@ -193,6 +204,7 @@ runs:
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         WRITE_REPORT: ${{ inputs.write-report }}
         STORE_RECORDS: ${{ inputs.store-records }}
+        OPERATOR_TRUST_FILE: ${{ inputs.operator-trust-file }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/record.sh" run "${STAGE}"'
 
     - name: Upload the records

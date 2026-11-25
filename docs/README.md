@@ -66,7 +66,7 @@ answer.
   file the job will apply, and `plan` names the plan rendered from it with `terraform show -json`. The CLI refuses a
   file or plan other than the one the plan stage checked. `replan` names a new plan that the job makes just before the
   check, with `terraform plan -out=FILE` and `terraform show -json FILE`. The job never applies it. A job that applies a
-  plan made in an earlier job must give all three. `examples/iac/governed-own-terraform.yml` shows how.
+  plan made in an earlier job must give all three. `examples/iac/tracked-own-terraform.yml` shows how.
 - **A project not linked to Iltero Platform.** Neither action runs the check. The CLI leaves the stage out of the
   record's scope there by itself. The job summary reads `not required`, and `deploy` goes on to the apply. `record-iac`
   stops when its step gives the `plan`, `saved-plan` or `replan` input at this stage.
@@ -133,15 +133,15 @@ reads `failed without the state file`. Later units are not deployed, and the pos
 In a job that runs Terraform itself, give `record-iac` the input `state-unreadable: true` at `post_deploy`, and leave
 `state` empty. The CLI then records the apply from the apply log alone, and the step fails. The job summary's result
 reads `Result: failed without the state file.`
-`examples/iac/governed-own-terraform.yml` shows how.
+`examples/iac/tracked-own-terraform.yml` shows how.
 
-## Re-running a failed governed Terraform run
+## Re-running a tracked run after a failed job
 
-In a governed run, `deploy` runs `pre_deploy`, the apply and `post_deploy` in one job. A job that runs Terraform
+In a tracked run, `deploy` runs `pre_deploy`, the apply and `post_deploy` in one job. A job that runs Terraform
 itself must do the same, because Iltero Platform accepts the `post_deploy` record only from the job that ran
 `pre_deploy`. `pre_deploy` may run in a different job from `plan`.
 
-When a governed run fails, re-run every job of the workflow run. When the plan ran in an earlier job, a re-run of only
+When a tracked run fails, re-run every job of the workflow run. When the plan ran in an earlier job, a re-run of only
 the job that applies joins the same run if that job failed before its `post_deploy` step started. Once its
 `post_deploy` step has started, Iltero Platform refuses a re-run of that job alone.
 
@@ -149,7 +149,7 @@ the job that applies joins the same run if that job failed before its `post_depl
 
 The post-verify stage checks that a unit's deployed resources still match what the apply left. A difference is called
 drift, such as a setting changed by hand. When every unit deployed, `deploy` runs the stage for each unit whose record
-requires it. At the plan stage, the CLI notes in the record which later stages the change requires. In a governed run,
+requires it. At the plan stage, the CLI notes in the record which later stages the change requires. In a tracked run,
 Iltero Platform's settings decide; otherwise `.iltero/config.yml` does. `deploy` asks the CLI with
 `iltero record in-scope` whether the record requires the post-verify stage, and the job summary's details show the
 CLI's answer. When the CLI cannot answer for a unit, that unit's Post-verify cell reads `record does not verify` or
@@ -170,9 +170,9 @@ asks the CLI whether the unit's record requires the stage. When it does not, the
 job summary reads `not required`.
 
 The readings can hold secret values, because Terraform does not mark every secret as sensitive. `deploy` does not upload
-them. Do not keep them. The record keeps no copy of them. In a governed run it keeps a fingerprint of each; in a project
-not linked to Iltero Platform, it keeps none. The `readings-directory` output names their directory, as
-`<unit>/first.json` and `<unit>/second.json`.
+them. Do not keep them. The record keeps no copy of them. In a tracked run it keeps a fingerprint of each; in a local
+run, it keeps none. The `readings-directory` output names their directory, as `<unit>/first.json` and
+`<unit>/second.json`.
 
 ## Image deployment
 
@@ -182,7 +182,7 @@ not linked to Iltero Platform, it keeps none. The `readings-directory` output na
 Every stage of a deployment takes `environment`. At `post_deploy` and `post_verify`, it must match the environment in
 the record.
 
-In a project linked to Iltero Platform, each stage runs in an image deploy run: a governed run that deploys one
+In a project linked to Iltero Platform, each stage runs in an image deploy run: a tracked run that deploys one
 application's image to one environment. Each stage takes `application`, and Iltero Platform finds or opens the image
 deploy run of the pipeline run for that application and environment. Each stage sends its record. The run's settings
 on Iltero Platform say which stages the record requires: `pre_deploy` and `post_deploy` always, and `post_verify` when
@@ -192,7 +192,7 @@ settings decide, the CLI refuses `fail-on-failed-assertions: false` at every sta
 action closes the run when it is given both `application` and `environment`.
 
 In a project not linked to Iltero Platform, `record-image` records the deployment locally (on the runner) and sends
-nothing to Iltero Platform. A local check reads no approvals and does not know whether each commit was reviewed, so an
+nothing to Iltero Platform. A local run reads no approvals and does not know whether each commit was reviewed, so an
 assertion that reads either is always undecided at `pre_deploy`. `post_deploy` and `post_verify` refuse
 `fail-on-failed-assertions: false`.
 
@@ -219,6 +219,34 @@ from `pre_deploy`, that job downloads the records artifact of the earlier job an
 The readings of the workload can hold secret values, such as a container's environment. Keep them in
 `$RUNNER_TEMP`, and do not upload them. The record keeps only a redacted copy.
 
+## Verify records
+
+`verify` builds each unit's record bundle: a folder that holds the unit's record and every file the record cites. The
+CLI then checks that the record is consistent with itself and with the files it cites. The job summary's Verify cell
+reads `verified`, `does not verify` or `could not verify`. The step fails unless every unit's record is built and
+verified.
+
+A run statement is the document Iltero Platform signs when a tracked run ends. It lists the records Iltero Platform
+accepted and refused. Give its path in the `run-statement` input. `verify` passes it to the CLI's check and report of
+each unit's record, and the CLI checks the record against it. A statement holds when its signature verifies and it
+matches the record.
+
+The CLI reports the record's trust level. It reads Policy-enforced when a statement that holds lists the record as
+accepted: Iltero Platform accepted the record and signed for it. Otherwise it reads Self-attested: only the record's
+writer vouches for it. The record does not verify when the statement lists it as refused, or does not match it, for
+example a statement of another run. The Verify cell then reads `does not verify`, and the step fails. When the input
+is empty, the action passes no run statement.
+
+## Self-hosted Iltero Platform
+
+A self-hosted Iltero Platform signs with its own keys. An operator trust file lists them, in the format that
+`iltero-schemas` defines. Give its path in the `operator-trust-file` input of `deploy`, `record-iac`, `record-image`
+and `verify`. A relative path is relative to `project-directory`. The action gives the file to the CLI, which trusts
+its keys beside Iltero's own. The CLI reads the file only when it checks something that server signed, such as the
+assertion bundle of a tracked run or a run statement. When the CLI refuses the file, the step fails. When the input is
+empty, the action gives the CLI no operator trust file, even one the job sets in `ILTERO_OPERATOR_TRUST_FILE`. A
+project that uses the hosted Iltero Platform needs no operator trust file.
+
 ## What a job needs
 
 - **`permissions: {}`** at the workflow level, and per-job permissions that grant only what the job needs.
@@ -231,6 +259,8 @@ The readings of the workload can hold secret values, such as a container's envir
 - **`ILTERO_API_URL`**, the address of Iltero Platform, in a workflow that calls it. It is the only Iltero setting.
   It must be the same address as `platform.api_url` in `.iltero/config.yml`. Otherwise every CLI command that talks
   to Iltero Platform refuses to run. The job holds no Iltero secret.
+- **An operator trust file the CLI accepts**, in a job that sets `operator-trust-file`. The Iltero CLI's command
+  reference lists the rules, under "Operator trust file".
 - **Cloud credentials** in a job that sets `store-records: true`. The CLI keeps each record in the run's artifact
   store, the bucket that Iltero Platform names for the run, with the job's own credentials. On AWS, set them with
   `aws-actions/configure-aws-credentials` and OpenID Connect (OIDC) before the step. Grant the role only the
@@ -267,8 +297,9 @@ The actions refuse `pull_request_target` and `workflow_run` events. `deploy` and
 On a pull request, `preview` and `record-iac` check each plan locally, and `record-image` checks the image locally,
 also for a project linked to Iltero Platform. `record-image` checks it as advice there: failed or undecided assertions
 do not fail the step.
-A local check never contacts Iltero Platform, and its record is not evidence of the change. It checks the project's
-own assertions. The checks after the merge use the assertions that Iltero Platform sets, so their results can differ.
+A local run never contacts Iltero Platform. Its record is a local record, which is not change-control evidence. It
+checks the project's own assertions. The checks after the merge use the assertions that Iltero Platform sets, so their
+results can differ.
 
 ## Contribute
 

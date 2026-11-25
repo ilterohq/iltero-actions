@@ -27,7 +27,7 @@
 #          record-image step. It also runs when the scan failed the workflow
 #          after it kept the reports, so the record lists the findings. The
 #          CLI records the image on the runner and sends nothing to Iltero.
-#          In a local check, no server verifies the commit the image was
+#          In a local run, no server verifies the commit the image was
 #          built from, so the assertion that reads that commit is undecided:
 #          the CLI has too little information to pass or fail it.
 #          The step sets fail-on-failed-assertions to false, so failed or

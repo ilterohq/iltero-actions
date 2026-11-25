@@ -1255,3 +1255,10 @@ deploy() {
   ! grep -q "^terraform " "${STUB_LOG}" || false
   [ ! -s "${GITHUB_OUTPUT}" ]
 }
+
+@test "an operator-trust-file input that names no file stops the deploy before Terraform or the CLI's check runs" {
+  OPERATOR_TRUST_FILE=missing.json deploy
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The operator-trust-file input names no file: 'missing.json'."* ]]
+  ! grep -qE "^(terraform|iltero iac)" "${STUB_LOG}" || false
+}

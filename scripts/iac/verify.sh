@@ -1,7 +1,8 @@
 #!/bin/bash
 #
 # Builds each unit's record bundle, then checks that the record and the files
-# it cites are unchanged.
+# it cites are unchanged. With RUN_STATEMENT, the CLI also checks each record
+# against the run statement the server signed when the run ended.
 #
 # Usage:
 #   iac/verify.sh check                  Refuse untrusted events; check that setup ran.
@@ -21,8 +22,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/units.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/lib/report.sh"
 
 # Prints the summary word for `iltero record verify`, from its exit code
-# STATUS: "verified", "does not verify" when the bundle changed, and "could
-# not verify" for any other failure.
+# STATUS: "verified", "does not verify" when the CLI exits with
+# RECORD_DOES_NOT_VERIFY_STATUS, and "could not verify" for any other failure.
 verify_result() {
   local status="$1"
   if [[ "${status}" == 0 ]]; then
@@ -49,6 +50,14 @@ cmd_run() {
   [[ "${out}" == /* ]] || out="./${out}"
   [[ -d "${out}" ]] || die "The records directory '${given}' does not exist. Pass the records-directory output of the deploy or record-iac action."
   require_environment_name "${ENVIRONMENT:-}"
+  set_operator_trust_file
+  # The run statement, which the server signs when a run ends, when the step
+  # gives one. The CLI checks each unit's record against it.
+  local statement statement_args=()
+  if [[ -n "${RUN_STATEMENT:-}" ]]; then
+    statement="$(absolute_file_path run-statement "${RUN_STATEMENT}")" || exit 1
+    statement_args=(--statement="${statement}")
+  fi
   local default_artifact="iltero-record-bundles-${ENVIRONMENT}"
   # Each environment and stack has its own work folder, and with UNIT each
   # unit has its own, so their reports stay apart. The action empties the
@@ -122,7 +131,8 @@ cmd_run() {
         [[ "${first_status}" -ne 0 ]] || first_status=1
       else
         status=0
-        run_cli_logged "${work}/verify.txt" record verify "${bundles[0]}" || status=$?
+        run_cli_logged "${work}/verify.txt" record verify "${bundles[0]}" ${statement_args[@]+"${statement_args[@]}"} \
+          || status=$?
         [[ "${status}" -eq 0 || "${first_status}" -ne 0 ]] || first_status="${status}"
         verify="$(verify_result "${status}")"
         verify_ran=true
@@ -141,7 +151,7 @@ cmd_run() {
     done
     if [[ "${report}" == true && "${verify_ran}" == true ]]; then
       write_report "${name}" "${bundles[0]}" "${reports}" "${details}" "${work}/report.txt" \
-        || [[ "${first_status}" -ne 0 ]] || first_status=1
+        ${statement_args[@]+"${statement_args[@]}"} || [[ "${first_status}" -ne 0 ]] || first_status=1
     fi
   done < "${units}"
 
