@@ -673,7 +673,7 @@ run_post_verify() {
   local input
   grep -qF "image/record.sh\" check \"\${STAGE}\"" "${REPO_ROOT}/record-image/action.yml"
   grep -qF "image/record.sh\" run \"\${STAGE}\"" "${REPO_ROOT}/record-image/action.yml"
-  for input in STAGE IMAGE APPLICATION ENVIRONMENT UNIT BUILD_METADATA IMAGE_INDEX ATTESTATION TEST_REPORTS SCAN_REPORTS CLUSTER_ID WORKLOAD_BEFORE_PODS_LISTING PODS POD_OWNERS WORKLOAD_AFTER_PODS_LISTING RECORDS_DIRECTORY ARTIFACT_NAME STORE_RECORDS FAIL_ON_FAILED_ASSERTIONS; do
+  for input in STAGE IMAGE APPLICATION ENVIRONMENT UNIT BUILD_METADATA IMAGE_INDEX ATTESTATION TEST_REPORTS SCAN_REPORTS CLUSTER_ID WORKLOAD_BEFORE_PODS_LISTING PODS POD_OWNERS WORKLOAD_AFTER_PODS_LISTING RECORDS_DIRECTORY ARTIFACT_NAME STORE_RECORDS FAIL_ON_FAILED_ASSERTIONS OPERATOR_TRUST_FILE; do
     grep -qE "^        ${input}: \\$\\{\\{ inputs\\.[a-z-]+ \\}\\}$" "${REPO_ROOT}/record-image/action.yml"
   done
   for input in stage environment cluster-id workload-before-pods-listing pods pod-owners workload-after-pods-listing fail-on-failed-assertions; do
@@ -703,4 +703,11 @@ run_post_verify() {
   [ "${status}" -eq 0 ]
   grep -qx "records-directory=${RUNNER_TEMP}/iltero-image-records/$(stack_folder_name)" "${GITHUB_OUTPUT}"
   [ "$(stack_folder_name)" != "${STACK_FOLDER}" ]
+}
+
+@test "an operator-trust-file input that names no file stops the step before the CLI checks the stage" {
+  OPERATOR_TRUST_FILE=missing.json run "${RECORD}" run plan
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The operator-trust-file input names no file: 'missing.json'."* ]]
+  ! check_call || false
 }

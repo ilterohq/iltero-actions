@@ -16,22 +16,26 @@ report_enabled() {
 # Has the CLI write a report of the record or record bundle at TARGET, as an
 # HTML page and as Markdown, into REPORT_DIR/NAME. Appends the Markdown to
 # DETAILS as a collapsed section, or a pointer to the artifact when it would
-# make DETAILS too long for the job summary. The report exits with the record's
-# verification code: a code other than 0 is only a warning. Returns 1 when the
-# CLI did not write both files, so the caller fails the job.
+# make DETAILS too long for the job summary. ARGS are passed on to the CLI's
+# report. The report exits with the record's verification code: a code other
+# than 0 is only a warning. Returns 1 when the CLI did not write both files, so
+# the caller fails the job.
 write_report() {
   local name="$1"
   local target="$2"
   local report_dir="$3"
   local details="$4"
   local log="$5"
+  shift 5
+  local args=("$@")
   local dir="${report_dir}/${name}" cli status=0 format
   cli="$(cli_path)"
   rm -rf "${dir}"
   mkdir -p "${dir}"
   : > "${log}"
   for format in html markdown; do
-    "${cli}" record report "${target}" --format="${format}" --out="${dir}" >> "${log}" 2>&1 || status=$?
+    "${cli}" record report "${target}" --format="${format}" --out="${dir}" ${args[@]+"${args[@]}"} >> "${log}" 2>&1 \
+      || status=$?
   done
   print_untrusted "${log}"
   [[ "${status}" -eq 0 ]] || echo "::warning::The CLI reported a problem while it wrote the report of unit '${name}'. See its output in the log."

@@ -22,16 +22,21 @@ Pin each action to the commit SHA of a release, as [`docs/README.md`](docs/READM
 - A **record bundle** is a folder that holds a unit's record and every file the record cites.
 - A **pipeline run** is one run of a continuous integration (CI) pipeline; on GitHub, a workflow run.
 - A project is **linked to Iltero Platform** when its `.iltero/config.yml` has a `platform` section. A project not
-  linked to Iltero Platform records locally (on the runner) and sends nothing to Iltero Platform.
+  linked to Iltero Platform runs only [local runs](#tracked-runs): it records on the runner and sends nothing to
+  Iltero Platform.
 
-## Governed runs
+## Tracked runs
 
-In a project linked to Iltero Platform, every stage of a change is checked in a governed run, so all its stages use
-the same settings. Iltero Platform opens the run when the CLI checks the first stage, and each later stage joins it.
-Iltero Platform sets the run's settings: the assertions that must pass, whether a failed assertion blocks the change,
-and whether the environment is production. The `close` action closes the run.
+A tracked run is a run Iltero Platform opens and holds to fixed settings. Its record is a tracked record. Any other run
+is a local run: the CLI opens it on its own, and Iltero Platform does not record it. Its record is a local record. Only
+a tracked record counts as change-control evidence.
 
-| Governed run | What it covers | Opened by |
+In a project linked to Iltero Platform, each stage of a change runs in a tracked run, so all its stages use the same
+settings. Iltero Platform opens the run when the CLI checks the first stage, and each later stage joins it. Iltero
+Platform sets the run's settings: the assertions that must pass, whether a failed assertion blocks the change, and
+whether the environment is production. The `close` action closes the run. A check on a pull request is a local run.
+
+| Tracked run | What it covers | Opened by |
 | --- | --- | --- |
 | Change run | One stack in one environment | The `plan` stage of `deploy` or `record-iac` |
 | Build run | One application's container image build, in no environment | The `plan` stage of `record-image` |
@@ -44,10 +49,10 @@ and whether the environment is production. The `close` action closes the run.
 | Action | Purpose |
 | --- | --- |
 | `setup` | Install the Iltero CLI and its evaluator, at pinned, checksum-verified versions |
-| `deploy` | Install the IaC tool, then plan, check and apply each unit of a stack: in a governed run when the project is linked to Iltero Platform, locally (on the runner) when it is not. After the apply, check that the deployed resources still match what the apply left, for each unit whose plan-stage record says the check is required |
+| `deploy` | Install the IaC tool, then plan, check and apply each unit of a stack: in a tracked run when the project is linked to Iltero Platform, locally (on the runner) when it is not. After the apply, check that the deployed resources still match what the apply left, for each unit whose plan-stage record says the check is required |
 | `record-iac` | Record one stage of one unit's Terraform change in a job that runs Terraform itself: after plan, before apply, after apply, or a check of the deployed resources after the apply |
 | `record-image` | Record one stage of a container image's change. The `plan` stage records the image a build pushed, in the same pipeline run as the build. The deployment stages record the image before and after its deployment to an environment, and check the workload's pods after the rollout |
-| `close` | Close the governed run of this pipeline run on Iltero Platform: the change run of a stack and environment, the build run of an application, or the image deploy run of an application and environment |
+| `close` | Close the tracked run of this pipeline run on Iltero Platform: the change run of a stack and environment, the build run of an application, or the image deploy run of an application and environment |
 | `verify` | Build the record bundle of each unit, or of one named unit, and check that the record is consistent with itself and with the files it cites |
 | `preview` | Install the IaC tool, then plan and check each unit on a pull request, locally and with no cloud credential or Iltero secret, and write the pull request comment |
 | `comment` | Post the preview's comment on the pull request, and update it on each push |

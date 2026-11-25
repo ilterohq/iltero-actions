@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `setup` action. It installs the Iltero command-line tool (CLI) and its evaluator at pinned versions.
 - `deploy` action. It plans, checks and applies each unit of a stack, and records each deployment. It records in a
-  governed run on Iltero Platform when the project is linked to it, and on the runner when it is not. It applies only
+  tracked run on Iltero Platform when the project is linked to it, and on the runner when it is not. It applies only
   the saved plan that was checked. In a linked project, `deploy` runs the pre-deploy check before the apply. It plans
   each unit again just before that check, and still applies only the saved plan. It checks after the apply that the
   deployed resources still match. It runs these two checks only when the unit's record requires them.
@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `record-image` action. It records the build of a container image and each stage of its deployment.
 - `verify` action. It builds each unit's record bundle and checks that the record is consistent with itself and with
   the files it cites.
-- `close` action. It closes the governed run of a pipeline run.
+- `close` action. It closes the tracked run of a pipeline run.
 - Reference workflows in `examples/` for infrastructure and container images, for projects linked to Iltero Platform
   and for projects that are not.
 - Several projects in one repository, each in its own folder, chosen with the `project-directory` input.
@@ -48,7 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the action uploads.
 - `retention-days` input on `deploy`, `record-iac`, `record-image` and `verify`, which sets how long GitHub keeps the
   artifacts the action uploads.
-- Terraform runs with a scrubbed environment, also in the governed reference workflow that runs Terraform itself.
+- `operator-trust-file` input on `deploy`, `record-iac`, `record-image` and `verify`, which gives the Iltero CLI the
+  signing keys of a self-hosted Iltero Platform.
+- `run-statement` input on `verify`, which has the CLI check each record against the run statement Iltero Platform
+  signed when the run ended.
+- Terraform runs with a scrubbed environment, also in the reference workflow that runs Terraform itself in a tracked
+  run.
 - The actions need no Iltero secret. The Iltero CLI signs in with the job's GitHub identity token, so a job that talks
   to Iltero Platform needs `id-token: write`.
 - Every action refuses `pull_request_target` and `workflow_run` events. `deploy` and `close` also refuse

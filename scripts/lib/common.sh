@@ -197,7 +197,7 @@ check_stage_for_event() {
 readonly DEPLOY_EVENTS=(push workflow_dispatch schedule)
 
 # Stops unless the job runs on one of DEPLOY_EVENTS. A pull request may only
-# run a local preview, never a governed run.
+# run a local preview, never a tracked run.
 require_deploy_event() {
   ! is_pull_request_event \
     || die "This action does not run on pull request events. Use the preview action instead."

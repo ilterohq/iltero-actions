@@ -1,5 +1,5 @@
 # Reference workflow for a team that deploys a container image to Kubernetes
-# in a governed image deploy run on Iltero Platform: a governed run that
+# in a tracked image deploy run on Iltero Platform: a tracked run that
 # deploys one application's image to one environment. The project is linked
 # to Iltero Platform: its .iltero/config.yml has a platform section. A
 # repository owner copies the workflow into .github/workflows/ and replaces
@@ -7,7 +7,7 @@
 #
 # A person starts the workflow with the image to deploy, by its digest. Its
 # build must already be recorded and sent to Iltero Platform, as
-# image/governed-build.yml does: the pre_deploy check fails when Iltero Platform
+# image/tracked-build.yml does: the pre_deploy check fails when Iltero Platform
 # accepted no build of the image for the environment.
 #
 # The deploy job runs in the production deployment environment of GitHub,

@@ -28,7 +28,7 @@ setup() {
   # MARKS/no-markdown-<unit>, it writes only the HTML page.
   cat > "${TOOLS}/venv/bin/iltero" << 'STUB'
 #!/bin/bash
-echo "iltero $* ILTERO_OPA_PATH=${ILTERO_OPA_PATH}" >> "${STUB_LOG}"
+echo "iltero $* ILTERO_OPA_PATH=${ILTERO_OPA_PATH} OPERATOR=${ILTERO_OPERATOR_TRUST_FILE-none}" >> "${STUB_LOG}"
 if [[ "$1 $2" == "units list" ]]; then
   [[ ! -e "${UNITS_JSON:-}" ]] || { cat "${UNITS_JSON}"; exit 0; }
   echo '[{"name": "network", "working_directory": "units/network"}, {"name": "compute", "working_directory": "units/compute"}]'
@@ -398,4 +398,41 @@ STUB
   [ "${status}" -eq 0 ]
   [ "$(output_value report-directory)" = "${RUNNER_TEMP}/iltero-verify/production/${second}/reports" ]
   [ -n "$(ls "${first}")" ]
+}
+
+@test "the run statement the step names is passed, as an absolute path, to each unit's verify and report" {
+  echo '{}' > statement.json
+  RUN_STATEMENT=statement.json run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 0 ]
+  local unit
+  for unit in network compute; do
+    grep -q "^iltero record verify ${OUT}/units/${unit}/car-0001/ --statement=${STACK}/statement.json " "${STUB_LOG}"
+    [ "$(grep -c "^iltero record report ${OUT}/units/${unit}/car-0001/ --format=[a-z]* --out=[^ ]* --statement=${STACK}/statement.json " "${STUB_LOG}")" -eq 2 ]
+  done
+}
+
+@test "without a run-statement input, verify passes no statement" {
+  run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 0 ]
+  ! grep -q -- "--statement" "${STUB_LOG}" || false
+}
+
+@test "a run-statement input that names no file is refused before any record is built" {
+  RUN_STATEMENT=missing.json run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The run-statement input names no file: 'missing.json'."* ]]
+  ! grep -q "^iltero record" "${STUB_LOG}" || false
+}
+
+@test "the operator trust file the step names reaches every CLI call, and no operator trust file reaches the CLI without the input" {
+  echo '{}' > operator.json
+  OPERATOR_TRUST_FILE=operator.json run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 0 ]
+  [ "$(grep -c "^iltero record" "${STUB_LOG}")" -gt 0 ]
+  [ "$(grep -c "^iltero record" "${STUB_LOG}")" -eq "$(grep -c "^iltero record.* OPERATOR=${STACK}/operator.json$" "${STUB_LOG}")" ]
+  : > "${STUB_LOG}"
+  ILTERO_OPERATOR_TRUST_FILE=/elsewhere.json run "${VERIFY}" run "${OUT}"
+  [ "${status}" -eq 0 ]
+  [ "$(grep -c "^iltero record" "${STUB_LOG}")" -gt 0 ]
+  [ "$(grep -c "^iltero record" "${STUB_LOG}")" -eq "$(grep -c "^iltero record.* OPERATOR=none$" "${STUB_LOG}")" ]
 }

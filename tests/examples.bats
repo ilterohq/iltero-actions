@@ -48,15 +48,15 @@ examples() {
 }
 
 @test "the reference workflows exist" {
-  [ -f "${REPO_ROOT}/examples/iac/governed-deploy.yml" ]
+  [ -f "${REPO_ROOT}/examples/iac/tracked-deploy.yml" ]
   [ -f "${REPO_ROOT}/examples/iac/preview.yml" ]
   [ -f "${REPO_ROOT}/examples/iac/deploy.yml" ]
-  [ -f "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" ]
+  [ -f "${REPO_ROOT}/examples/iac/tracked-own-terraform.yml" ]
   [ -f "${REPO_ROOT}/examples/iac/own-terraform.yml" ]
   [ -f "${REPO_ROOT}/examples/image/build.yml" ]
-  [ -f "${REPO_ROOT}/examples/image/governed-build.yml" ]
+  [ -f "${REPO_ROOT}/examples/image/tracked-build.yml" ]
   [ -f "${REPO_ROOT}/examples/image/deployment.yml" ]
-  [ -f "${REPO_ROOT}/examples/image/governed-deployment.yml" ]
+  [ -f "${REPO_ROOT}/examples/image/tracked-deployment.yml" ]
 }
 
 @test "every Iltero action an example uses exists" {
@@ -133,7 +133,7 @@ run_step() {
 
 @test "the deploy workflows grant only contents: read and id-token: write" {
   local file
-  for file in iac/deploy.yml iac/governed-deploy.yml iac/governed-own-terraform.yml iac/own-terraform.yml image/deployment.yml image/governed-deployment.yml; do
+  for file in iac/deploy.yml iac/tracked-deploy.yml iac/tracked-own-terraform.yml iac/own-terraform.yml image/deployment.yml image/tracked-deployment.yml; do
     run grep -E '^      [a-z-]+: (read|write)( #.*)?$' "${REPO_ROOT}/examples/${file}"
     [ "${status}" -eq 0 ]
     ! grep -E '^      [a-z-]+: (read|write)( #.*)?$' "${REPO_ROOT}/examples/${file}" | grep -vE '^      (contents: read|id-token: write)( #.*)?$' || false
@@ -148,13 +148,13 @@ run_step() {
   grep -q 'iltero-actions/verify@' "${REPO_ROOT}/examples/iac/deploy.yml"
 }
 
-@test "the governed workflows never open a run or pass a run between jobs" {
+@test "the tracked workflows never open a run or pass a run between jobs" {
   local file
-  for file in iac/governed-deploy.yml iac/governed-own-terraform.yml image/governed-build.yml image/governed-deployment.yml; do
+  for file in iac/tracked-deploy.yml iac/tracked-own-terraform.yml image/tracked-build.yml image/tracked-deployment.yml; do
     ! grep -qE 'iltero-actions/open@|run-id|run-settings-digest' "${REPO_ROOT}/examples/${file}" || false
   done
-  # The other governed examples have no job outputs.
-  for file in iac/governed-deploy.yml iac/governed-own-terraform.yml image/governed-deployment.yml; do
+  # The other tracked examples have no job outputs.
+  for file in iac/tracked-deploy.yml iac/tracked-own-terraform.yml image/tracked-deployment.yml; do
     ! grep -qE '^    outputs:' "${REPO_ROOT}/examples/${file}" || false
   done
 }
@@ -167,16 +167,16 @@ job_environment() {
   ' "$1" | sort -u
 }
 
-@test "each close job of the governed workflows closes its deploy job's environment" {
-  local governed_deploy="${REPO_ROOT}/examples/iac/governed-deploy.yml" own_terraform="${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
-  [ "$(job_environment "${governed_deploy}" close-staging)" = "$(job_environment "${governed_deploy}" deploy-staging)" ]
-  [ "$(job_environment "${governed_deploy}" close-production)" = "$(job_environment "${governed_deploy}" deploy-production)" ]
+@test "each close job of the tracked workflows closes its deploy job's environment" {
+  local tracked_deploy="${REPO_ROOT}/examples/iac/tracked-deploy.yml" own_terraform="${REPO_ROOT}/examples/iac/tracked-own-terraform.yml"
+  [ "$(job_environment "${tracked_deploy}" close-staging)" = "$(job_environment "${tracked_deploy}" deploy-staging)" ]
+  [ "$(job_environment "${tracked_deploy}" close-production)" = "$(job_environment "${tracked_deploy}" deploy-production)" ]
   [ "$(job_environment "${own_terraform}" close)" = "$(job_environment "${own_terraform}" deploy)" ]
-  [ "$(job_environment "${governed_deploy}" close-staging)" = staging ]
+  [ "$(job_environment "${tracked_deploy}" close-staging)" = staging ]
   [ "$(job_environment "${own_terraform}" close)" = production ]
-  local governed_image="${REPO_ROOT}/examples/image/governed-deployment.yml"
-  [ "$(job_environment "${governed_image}" close)" = "$(job_environment "${governed_image}" deploy)" ]
-  [ "$(job_environment "${governed_image}" close)" = production ]
+  local tracked_image="${REPO_ROOT}/examples/image/tracked-deployment.yml"
+  [ "$(job_environment "${tracked_image}" close)" = "$(job_environment "${tracked_image}" deploy)" ]
+  [ "$(job_environment "${tracked_image}" close)" = production ]
 }
 
 # Prints the permission lines of one job of a workflow.
@@ -213,11 +213,11 @@ close_jobs() {
   ' "$1"
 }
 
-@test "the governed workflows close each run only after its deploy job succeeded" {
-  [ "$(close_jobs "${REPO_ROOT}/examples/iac/governed-deploy.yml" '^close-')" = "$(printf '%s\n' \
+@test "the tracked workflows close each run only after its deploy job succeeded" {
+  [ "$(close_jobs "${REPO_ROOT}/examples/iac/tracked-deploy.yml" '^close-')" = "$(printf '%s\n' \
     'close-staging deploy-staging -' 'close-production deploy-production -')" ]
   local file
-  for file in examples/iac/governed-own-terraform.yml examples/image/governed-deployment.yml; do
+  for file in examples/iac/tracked-own-terraform.yml examples/image/tracked-deployment.yml; do
     [ "$(close_jobs "${REPO_ROOT}/${file}" '^close$')" = "close deploy -" ]
   done
 }
@@ -244,9 +244,9 @@ job_time_limits() {
   done
 }
 
-# The two own-Terraform examples: with no account, and in a governed run.
+# The two own-Terraform examples: with no account, and in a tracked run.
 own_terraform_examples() {
-  echo "${REPO_ROOT}/examples/iac/own-terraform.yml" "${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
+  echo "${REPO_ROOT}/examples/iac/own-terraform.yml" "${REPO_ROOT}/examples/iac/tracked-own-terraform.yml"
 }
 
 # Prints the stage of each record-iac step of the example FILE, in order.
@@ -254,12 +254,12 @@ record_iac_events() {
   awk '/uses: ilterohq\/iltero-actions\/record-iac@/ { inside = 1; next } inside && /^          stage: / { print $2; inside = 0 }' "$1"
 }
 
-@test "the governed own-Terraform example records plan, pre_deploy, post_deploy and post_verify, in that order, as a governed run that expects pre_deploy needs" {
-  [ "$(record_iac_events "${REPO_ROOT}/examples/iac/governed-own-terraform.yml" | tr '\n' ' ')" = "plan pre_deploy post_deploy post_verify " ]
+@test "the tracked own-Terraform example records plan, pre_deploy, post_deploy and post_verify, in that order, as a tracked run that expects pre_deploy needs" {
+  [ "$(record_iac_events "${REPO_ROOT}/examples/iac/tracked-own-terraform.yml" | tr '\n' ' ')" = "plan pre_deploy post_deploy post_verify " ]
 }
 
-@test "the governed own-Terraform example plans again into its own file between the plan and pre_deploy stages, gives that plan to pre_deploy, and applies only the saved plan" {
-  local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml" plan_stage replan pre_deploy apply
+@test "the tracked own-Terraform example plans again into its own file between the plan and pre_deploy stages, gives that plan to pre_deploy, and applies only the saved plan" {
+  local example="${REPO_ROOT}/examples/iac/tracked-own-terraform.yml" plan_stage replan pre_deploy apply
   run step_named "${example}" "Plan again"
   [[ "${output}" == *'scrubbed terraform plan -input=false -out="${RUNNER_TEMP}/network-replan.tfplan"'* ]]
   [[ "${output}" == *'scrubbed terraform show -json "${RUNNER_TEMP}/network-replan.tfplan" > "${RUNNER_TEMP}/network-replan.json"'* ]]
@@ -334,9 +334,9 @@ header_text() {
   done
 }
 
-# The two image deployment examples: with no account, and in a governed run.
+# The two image deployment examples: with no account, and in a tracked run.
 deployment_examples() {
-  echo "${REPO_ROOT}/examples/image/deployment.yml" "${REPO_ROOT}/examples/image/governed-deployment.yml"
+  echo "${REPO_ROOT}/examples/image/deployment.yml" "${REPO_ROOT}/examples/image/tracked-deployment.yml"
 }
 
 @test "every deployment stage of the image examples names the environment" {
@@ -364,8 +364,8 @@ deployment_examples() {
   done
 }
 
-@test "the governed own-Terraform example keeps every stage's record in the run's artifact store, after the cloud credentials are set" {
-  local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
+@test "the tracked own-Terraform example keeps every stage's record in the run's artifact store, after the cloud credentials are set" {
+  local example="${REPO_ROOT}/examples/iac/tracked-own-terraform.yml"
   [ "$(grep -c '^          store-records: true$' "${example}")" -eq "$(grep -c 'iltero-actions/record-iac@' "${example}")" ]
   [ "$(grep -n -m1 'configure-aws-credentials@' "${example}" | cut -d: -f1)" -lt "$(grep -n -m1 'store-records: true' "${example}" | cut -d: -f1)" ]
 }
@@ -404,11 +404,11 @@ deployment_examples() {
   done
 }
 
-# --- image/build and image/governed-build -----------------------------------
+# --- image/build and image/tracked-build -------------------------------------
 
-# Prints both image build examples: the one with no account and the governed one.
+# Prints both image build examples: the one with no account and the tracked one.
 build_examples() {
-  echo "${REPO_ROOT}/examples/image/build.yml" "${REPO_ROOT}/examples/image/governed-build.yml"
+  echo "${REPO_ROOT}/examples/image/build.yml" "${REPO_ROOT}/examples/image/tracked-build.yml"
 }
 
 # Prints the output names of one job of a workflow, separated by spaces.
@@ -430,7 +430,7 @@ job_outputs() {
 
 @test "only the image build example with no account has a scan job output, which says whether the report was kept" {
   [ "$(job_outputs "${REPO_ROOT}/examples/image/build.yml" scan)" = "report-kept: " ]
-  [ -z "$(job_outputs "${REPO_ROOT}/examples/image/governed-build.yml" scan)" ]
+  [ -z "$(job_outputs "${REPO_ROOT}/examples/image/tracked-build.yml" scan)" ]
   [ -z "$(job_outputs "${REPO_ROOT}/examples/image/build.yml" record)" ]
 }
 
@@ -448,12 +448,12 @@ job_outputs() {
   done
 }
 
-@test "the governed image build example's record job may only read the repository and get its identity token" {
-  [ "$(job_permissions "${REPO_ROOT}/examples/image/governed-build.yml" record)" = "$(printf '%s\n' 'contents: read' 'id-token: write')" ]
+@test "the tracked image build example's record job may only read the repository and get its identity token" {
+  [ "$(job_permissions "${REPO_ROOT}/examples/image/tracked-build.yml" record)" = "$(printf '%s\n' 'contents: read' 'id-token: write')" ]
 }
 
-@test "the governed image build example keeps the image's record in the build run's artifact store, after the cloud credentials are set" {
-  local example="${REPO_ROOT}/examples/image/governed-build.yml"
+@test "the tracked image build example keeps the image's record in the build run's artifact store, after the cloud credentials are set" {
+  local example="${REPO_ROOT}/examples/image/tracked-build.yml"
   [ "$(grep -c '^          store-records: true$' "${example}")" -eq 1 ]
   [ "$(job_actions "${example}" record | grep -v '^actions/' | tr '\n' ' ')" = "ilterohq/iltero-actions/setup aws-actions/configure-aws-credentials ilterohq/iltero-actions/record-image ilterohq/iltero-actions/close " ]
 }
@@ -682,8 +682,8 @@ indexed_image() {
   done
 }
 
-@test "the governed image build example records the image after the build and scan, then closes the build run of that application" {
-  local example="${REPO_ROOT}/examples/image/governed-build.yml"
+@test "the tracked image build example records the image after the build and scan, then closes the build run of that application" {
+  local example="${REPO_ROOT}/examples/image/tracked-build.yml"
   grep -qE '^    needs: \[build, scan\]$' "${example}"
   [ "$(job_actions "${example}" record | grep '^ilterohq/' | tr '\n' ' ')" = "ilterohq/iltero-actions/setup ilterohq/iltero-actions/record-image ilterohq/iltero-actions/close " ]
   [ "$(grep -cE '^          application: \$\{\{ env\.APPLICATION \}\}$' "${example}")" -eq 2 ]
@@ -727,13 +727,13 @@ indexed_image() {
   done
 }
 
-@test "the image build example with no account checks the build as advice, since a local check cannot confirm its commit" {
+@test "the image build example with no account checks the build as advice, since a local run cannot confirm its commit" {
   grep -A7 'iltero-actions/record-image@' "${REPO_ROOT}/examples/image/build.yml" | grep -qx '          fail-on-failed-assertions: false'
   [ "$(grep -c '^          fail-on-failed-assertions: false$' "${REPO_ROOT}/examples/image/build.yml")" -eq 1 ]
 }
 
-@test "the governed image build example never checks as advice, since the run decides" {
-  ! grep -q 'fail-on-failed-assertions:' "${REPO_ROOT}/examples/image/governed-build.yml" || false
+@test "the tracked image build example never checks as advice, since the run decides" {
+  ! grep -q 'fail-on-failed-assertions:' "${REPO_ROOT}/examples/image/tracked-build.yml" || false
 }
 
 @test "each image build example gives the build the job's token only in a private repository" {
@@ -745,8 +745,8 @@ indexed_image() {
   done
 }
 
-@test "the governed image build example scans each architecture once and never stops on findings, since Iltero Platform decides" {
-  local example="${REPO_ROOT}/examples/image/governed-build.yml"
+@test "the tracked image build example scans each architecture once and never stops on findings, since Iltero Platform decides" {
+  local example="${REPO_ROOT}/examples/image/tracked-build.yml"
   [ "$(grep -c 'trivy image ' "${example}")" -eq 1 ]
   ! grep -qE 'FAIL_ON_SCAN_SEVERITIES|--exit-code' "${example}" || false
 }
@@ -874,44 +874,44 @@ deployment_order() {
   done
 }
 
-# --- image/governed-deployment -----------------------------------------------
+# --- image/tracked-deployment ------------------------------------------------
 
-@test "the governed deployment example waits for the rollout once the image went out, also after a failed post_deploy" {
+@test "the tracked deployment example waits for the rollout once the image went out, also after a failed post_deploy" {
   awk '/^      - id: rollout$/ { inside = 1; next } inside && /^      - / { exit } inside { print }' \
-    "${REPO_ROOT}/examples/image/governed-deployment.yml" | grep -qxF "        if: \${{ !cancelled() && steps.deploy.outcome == 'success' }}"
+    "${REPO_ROOT}/examples/image/tracked-deployment.yml" | grep -qxF "        if: \${{ !cancelled() && steps.deploy.outcome == 'success' }}"
 }
 
-@test "the governed deployment example checks the pods after a failed rollout too" {
-  local example="${REPO_ROOT}/examples/image/governed-deployment.yml"
+@test "the tracked deployment example checks the pods after a failed rollout too" {
+  local example="${REPO_ROOT}/examples/image/tracked-deployment.yml"
   grep -qF "if: \${{ !cancelled() && steps.rollout.outcome != 'skipped' }}" "${example}"
   grep -B1 'iltero-actions/record-image@' "${example}" | grep -qF "if: \${{ !cancelled() && steps.read.outcome == 'success' }}"
 }
 
-@test "the governed deployment example keeps every stage's record in the run's artifact store, after the cloud credentials are set" {
-  local example="${REPO_ROOT}/examples/image/governed-deployment.yml"
+@test "the tracked deployment example keeps every stage's record in the run's artifact store, after the cloud credentials are set" {
+  local example="${REPO_ROOT}/examples/image/tracked-deployment.yml"
   [ "$(grep -c '^          store-records: true$' "${example}")" -eq 3 ]
   [ "$(grep -n 'configure-aws-credentials@' "${example}" | cut -d: -f1)" -lt "$(grep -n 'stage: pre_deploy' "${example}" | cut -d: -f1)" ]
 }
 
-@test "the governed deployment example names the application at every deployment stage" {
-  local example="${REPO_ROOT}/examples/image/governed-deployment.yml"
+@test "the tracked deployment example names the application at every deployment stage" {
+  local example="${REPO_ROOT}/examples/image/tracked-deployment.yml"
   [ "$(grep -A3 -E '^          stage: (pre_deploy|post_deploy|post_verify)$' "${example}" | grep -c '^          application: \${{ env.APPLICATION }}$')" -eq 3 ]
 }
 
-@test "the governed deployment example deploys in the GitHub deployment environment of the environment it records" {
-  local example="${REPO_ROOT}/examples/image/governed-deployment.yml"
+@test "the tracked deployment example deploys in the GitHub deployment environment of the environment it records" {
+  local example="${REPO_ROOT}/examples/image/tracked-deployment.yml"
   [ "$(awk '/^  deploy:$/ { inside = 1; next } /^  [a-z-]+:$/ { inside = 0 } inside && /^    environment: / { print $2 }' "${example}")" \
     = "$(job_environment "${example}" deploy)" ]
   [ "$(job_environment "${example}" deploy)" = production ]
 }
 
-@test "the governed deployment example never checks as advice, since the run decides" {
-  ! grep -q 'fail-on-failed-assertions:' "${REPO_ROOT}/examples/image/governed-deployment.yml" || false
+@test "the tracked deployment example never checks as advice, since the run decides" {
+  ! grep -q 'fail-on-failed-assertions:' "${REPO_ROOT}/examples/image/tracked-deployment.yml" || false
 }
 
-@test "the governed deployment example closes the image deploy run of its application and environment" {
+@test "the tracked deployment example closes the image deploy run of its application and environment" {
   local close
-  close="$(grep -A3 'iltero-actions/close@' "${REPO_ROOT}/examples/image/governed-deployment.yml")"
+  close="$(grep -A3 'iltero-actions/close@' "${REPO_ROOT}/examples/image/tracked-deployment.yml")"
   grep -qxF '          application: ${{ env.APPLICATION }}' <<< "${close}"
   grep -qx '          environment: production' <<< "${close}"
 }
@@ -933,8 +933,8 @@ steps_defining_scrubbed() {
     END { if (runs) print (defines ? "yes" : "no") }' "$1"
 }
 
-@test "the governed own-Terraform example runs every Terraform command with a scrubbed environment" {
-  local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
+@test "the tracked own-Terraform example runs every Terraform command with a scrubbed environment" {
+  local example="${REPO_ROOT}/examples/iac/tracked-own-terraform.yml"
   # Every command line that runs terraform, leaving out comment lines and the
   # setup step's settings, runs it once, through scrubbed.
   grep -qE "^ +scrubbed terraform " "${example}"
@@ -957,9 +957,9 @@ first_scrubbed_definition() {
     inside && /^\)$/ { exit }' "$1"
 }
 
-@test "the governed own-Terraform example's scrubbed function gives Terraform only its list and the TF_VAR_ variables" {
+@test "the tracked own-Terraform example's scrubbed function gives Terraform only its list and the TF_VAR_ variables" {
   local definition
-  definition="$(first_scrubbed_definition "${REPO_ROOT}/examples/iac/governed-own-terraform.yml")"
+  definition="$(first_scrubbed_definition "${REPO_ROOT}/examples/iac/tracked-own-terraform.yml")"
   run env -i PATH="${PATH}" HOME="${HOME}" TF_DATA_DIR=/data TF_VAR_region=eu AWS_ACCESS_KEY_ID=key \
     GITHUB_TOKEN=token ACTIONS_ID_TOKEN_REQUEST_TOKEN=token RUNNER_TEMP=/temp 'A-B=1' $'MULTI_LINE=a\nb' \
     bash --noprofile --norc -eo pipefail -c "${definition}"$'\n''scrubbed env | cut -d= -f1 | sort'
@@ -967,9 +967,9 @@ first_scrubbed_definition() {
   [ "$(tr '\n' ' ' <<< "${output}")" = "AWS_ACCESS_KEY_ID HOME PATH TF_DATA_DIR TF_VAR_region " ]
 }
 
-@test "the governed own-Terraform example's scrubbed function passes the command's exit code, and stops when the environment cannot be read" {
+@test "the tracked own-Terraform example's scrubbed function passes the command's exit code, and stops when the environment cannot be read" {
   local definition
-  definition="$(first_scrubbed_definition "${REPO_ROOT}/examples/iac/governed-own-terraform.yml")"
+  definition="$(first_scrubbed_definition "${REPO_ROOT}/examples/iac/tracked-own-terraform.yml")"
   run bash --noprofile --norc -eo pipefail -c "${definition}"$'\n''scrubbed sh -c "exit 7"'
   [ "${status}" -eq 7 ]
   # A stand-in for env that cannot list the environment.
@@ -989,7 +989,7 @@ first_scrubbed_definition() {
 
 @test "the image deployment examples deploy only an image named by its digest, checked before any record" {
   local example file check record
-  for example in deployment governed-deployment; do
+  for example in deployment tracked-deployment; do
     file="${REPO_ROOT}/examples/image/${example}.yml"
     check="$(grep -n "name: Check that the image is named by its digest" "${file}" | cut -d: -f1)"
     record="$(grep -n "stage: pre_deploy" "${file}" | cut -d: -f1)"
@@ -1003,7 +1003,7 @@ first_scrubbed_definition() {
   local file="${REPO_ROOT}/examples/image/deployment.yml" pattern digest
   pattern="$(sed -n 's/.*\[\[ "\${IMAGE}" =~ \(.*\) \]\] \\$/\1/p' "${file}" | head -n 1)"
   [ -n "${pattern}" ]
-  grep -qF "=~ ${pattern} ]]" "${REPO_ROOT}/examples/image/governed-deployment.yml"
+  grep -qF "=~ ${pattern} ]]" "${REPO_ROOT}/examples/image/tracked-deployment.yml"
   digest="$(printf 'a%.0s' {1..64})"
   [[ "registry.example.com/acme/api@sha256:${digest}" =~ ${pattern} ]]
   [[ "registry.example.com:5000/acme/api@sha256:${digest}" =~ ${pattern} ]]
@@ -1068,9 +1068,9 @@ step_named() {
   [ "$(grep -c 'scan-reports:' "${example}")" -eq 1 ]
 }
 
-# In a governed run, the CLI refuses scanner reports: the run's settings on the server decide which checks run.
-@test "the governed own-Terraform example runs no scanner and gives record-iac no scan reports" {
-  local example="${REPO_ROOT}/examples/iac/governed-own-terraform.yml"
+# In a tracked run, the CLI refuses scanner reports: the run's settings on the server decide which checks run.
+@test "the tracked own-Terraform example runs no scanner and gives record-iac no scan reports" {
+  local example="${REPO_ROOT}/examples/iac/tracked-own-terraform.yml"
   ! grep -qiE 'scan-reports|checkov|trivy' "${example}" || false
 }
 

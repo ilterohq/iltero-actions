@@ -1,5 +1,5 @@
 name: Iltero Deploy
-description: Plan, check and apply each unit of a stack, in a governed run on Iltero Platform or locally on the runner.
+description: Plan, check and apply each unit of a stack, in a tracked run on Iltero Platform or locally on the runner.
 author: Iltero
 
 branding:
@@ -64,6 +64,17 @@ inputs:
     required: false
     default: ""
 
+  operator-trust-file:
+    description: >-
+      The path of an operator trust file, which lists the signing keys of a self-hosted Iltero Platform. A relative
+      path is relative to project-directory. The action gives the file to the CLI, which reads it only when it
+      checks something that server signed, such as the assertion bundle of a tracked run. When the CLI refuses the
+      file, the step fails. The step stops before it runs the CLI when the path names no file or holds a control
+      character. When the input is empty, the action gives the CLI no operator trust file, even one the job set
+      some other way. Leave it empty for the hosted Iltero Platform.
+    required: false
+    default: ""
+
 outputs:
   tool-version:
     description: The version of the IaC tool installed.
@@ -84,8 +95,8 @@ outputs:
     description: >-
       The directory that holds the two readings of the deployed resources for each unit whose record requires the
       post-verify stage, as <unit>/first.json and <unit>/second.json. The readings can hold secret values. The action
-      does not upload them. Do not keep them. The record keeps no copy of them. In a governed run it keeps a
-      fingerprint of each; in a project not linked to Iltero Platform, it keeps none.
+      does not upload them. Do not keep them. The record keeps no copy of them. In a tracked run it keeps a
+      fingerprint of each; in a local run, it keeps none.
     value: ${{ steps.deploy.outputs.readings-directory }}
 
 runs:
@@ -118,6 +129,7 @@ runs:
         REGISTRY_HOST: ${{ inputs.registry-host }}
         WRITE_REPORT: ${{ inputs.write-report }}
         STORE_RECORDS: ${{ inputs.store-records }}
+        OPERATOR_TRUST_FILE: ${{ inputs.operator-trust-file }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/iac/deploy.sh" run "${ENVIRONMENT}"'
 

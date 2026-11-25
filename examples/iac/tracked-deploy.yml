@@ -1,7 +1,7 @@
 # Reference workflow for a stack linked to Iltero Platform. A repository owner
 # copies it into .github/workflows/ and replaces the example values.
 #
-# A push to an environment's branch deploys that environment in a governed
+# A push to an environment's branch deploys that environment in a tracked
 # run: the deploy job plans, checks, applies and records each unit in order.
 # For each unit whose record requires the post-verify stage, it then checks
 # that the deployed resources still match what the apply left. The plan

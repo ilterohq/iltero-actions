@@ -640,7 +640,7 @@ stage_call() {
   ! grep -q "iac check" "${STUB_LOG}" || false
 }
 
-@test "on a pull request, plan runs as a local check, never uploaded, even for a linked project" {
+@test "on a pull request, plan runs as a local run, never uploaded, even for a linked project" {
   unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
   GITHUB_EVENT_NAME=pull_request run "${RECORD}" run plan
   [ "${status}" -eq 0 ]
@@ -689,7 +689,7 @@ stage_call() {
   ! grep -q "iac check" "${STUB_LOG}" || false
 }
 
-@test "outside a pull request, plan runs on the server, never as a local check" {
+@test "outside a pull request, plan runs on the server, never as a local run" {
   run "${RECORD}" run plan
   [ "${status}" -eq 0 ]
   ! grep -q -- "--local" "${STUB_LOG}" || false
@@ -935,4 +935,11 @@ stage_call() {
   run "${RECORD}" run plan
   [ "${status}" -eq 1 ]
   ! grep -q "scanners install" "${STUB_LOG}" || false
+}
+
+@test "an operator-trust-file input that names no file stops the step before the CLI checks the stage" {
+  OPERATOR_TRUST_FILE=missing.json run "${RECORD}" run plan
+  [ "${status}" -eq 1 ]
+  [[ "${output}" == *"The operator-trust-file input names no file: 'missing.json'."* ]]
+  ! grep -q "^iltero iac check" "${STUB_LOG}" || false
 }

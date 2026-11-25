@@ -162,6 +162,17 @@ inputs:
     required: false
     default: ""
 
+  operator-trust-file:
+    description: >-
+      The path of an operator trust file, which lists the signing keys of a self-hosted Iltero Platform. A relative
+      path is relative to project-directory. The action gives the file to the CLI, which reads it only when it
+      checks something that server signed, such as the assertion bundle of a tracked run. When the CLI refuses the
+      file, the step fails. The step stops before it runs the CLI when the path names no file or holds a control
+      character. When the input is empty, the action gives the CLI no operator trust file, even one the job set
+      some other way. Leave it empty for the hosted Iltero Platform.
+    required: false
+    default: ""
+
 outputs:
   records-directory:
     description: The directory that holds the records.
@@ -204,6 +215,7 @@ runs:
         RECORDS_DIRECTORY: ${{ inputs.records-directory }}
         ARTIFACT_NAME: ${{ inputs.artifact-name }}
         STORE_RECORDS: ${{ inputs.store-records }}
+        OPERATOR_TRUST_FILE: ${{ inputs.operator-trust-file }}
         FAIL_ON_FAILED_ASSERTIONS: ${{ inputs.fail-on-failed-assertions }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/image/record.sh" run "${STAGE}"'
 

@@ -1,6 +1,6 @@
 name: Iltero Close Run
 description: >-
-  Close the governed run of this pipeline run: the change run of a stack and environment, the build run of an
+  Close the tracked run of this pipeline run: the change run of a stack and environment, the build run of an
   application, or the image deploy run of an application and environment. The CLI then reports, for each unit, the
   assertions that never got an accepted result and the documents, such as a stage's record, that Iltero Platform never
   accepted.

@@ -1,4 +1,4 @@
-# Reference workflow for a team that runs Terraform itself, in a governed run
+# Reference workflow for a team that runs Terraform itself, in a tracked run
 # on Iltero Platform. A repository owner copies it into .github/workflows/
 # and replaces the example values.
 #
@@ -7,7 +7,7 @@
 #   plan         after terraform plan, from the saved plan;
 #   pre_deploy   before terraform apply, after the job plans again: stops
 #                the job when a blocking check fails, before anything is
-#                applied. Required when the governed run expects it, which
+#                applied. Required when the tracked run expects it, which
 #                a run to production always does;
 #   post_deploy  after terraform apply, also when the apply failed;
 #   post_verify  after post_deploy: checks that the deployed resources

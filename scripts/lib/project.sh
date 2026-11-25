@@ -27,7 +27,7 @@ print("true" if linked else "false")
 
 # Sets SERVER_OPTIONS to the CLI options that send a stage's record to the
 # server when LINKED is true and, when STORE_RECORDS is true, keep the record
-# and its files in the run's artifact store. A pull request's local check uses
+# and its files in the run's artifact store. A pull request's local run uses
 # neither. The CLI refuses --store in a project that is not linked. Stops when
 # STORE_RECORDS is not true or false.
 set_server_options() {
